@@ -4,7 +4,7 @@ An Obsidian vault template that is also a Google **Open Knowledge Format** bundl
 
 For managers, project/product managers and engineers: same structure, three lanes.
 
-```
+```bash
 uv run kit.py doctor                                   # what is installed, what is missing
 uv run kit.py init --target ~/Notes/vault --actor human:you
 bun install -g @tobilu/qmd && qmd collection add ~/Notes/vault --name vault && qmd embed
@@ -23,7 +23,7 @@ uv run --with 'mcp<2' kit.py test                      # prove it
 |---|---|
 | `vault/` | The template vault (and sample): OKF-conformant frontmatter, 13 templates, 3 Bases with 15 views, example notes, conventions, AI workflows, `99-system/ontology.yml`, `context.jsonld` |
 | `kitproviders.py` | Swappable slots — `search` (qmd · naive), `llm` (any OpenAI-compatible endpoint), `embed`, `graph`; chosen per vault in `.kit/config.yml` |
-| `kit.py` · `kitlib.py` | Cross-platform CLI: `doctor`, `init`, `validate` (OKF + links + ontology), `index`, `log`, `mcp-config`, `llm smoke|ask [--graph]`, `graph build|export|query|neighbors|path|pack`, `reconcile`, `todos`, `minutes`, `proposals`, `test` |
+| `kit.py` · `kitlib.py` | Cross-platform CLI: `doctor`, `init`, `validate` (OKF + links + ontology), `index`, `log`, `mcp-config`, `llm smoke\|ask [--graph]`, `graph build\|export\|query\|neighbors\|path\|pack`, `reconcile`, `todos`, `minutes`, `proposals`, `test` |
 | `kitgraph.py` · `kitrecon.py` | The vault as a graph (ontology, derived facts, exports, SQLite) · reconciliation (hubs, todos, minutes) |
 | `mcp/obsidian_bridge.py` · `mcp/bridge_policy.py` | MCP server exposing the vault to a local model — read/write tools plus `graph_context`, `graph_neighbors`, `graph_path`, `graph_query`, `vault_todos`, `file_meeting_minutes`; policy layer: read-only, allow/deny lists, confidential hiding, limits, propose mode, audit, bearer token |
 | `scripts/` | `install-macos.sh`, `install-windows.ps1`, `install-wsl.sh` |

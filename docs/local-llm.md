@@ -7,7 +7,7 @@ The goal is one model that runs on any laptop (2B class, ~1.6 GB quantised), rea
 | App | Best for | Endpoint | MCP in chat | Notes |
 |---|---|---|---|---|
 | **LM Studio** (default in this kit) | polished chat, model discovery, `lms` CLI, headless `llmster` | OpenAI + Anthropic compatible on `:1234` | yes, `mcp.json` (Cursor notation) | proprietary app, free for personal and work use |
-| **Unsloth Desktop** | open-source, also fine-tunes, self-healing tool calls, sandboxed code exec | OpenAI compatible | yes | beta since Aug 2026; Tauri app; `unsloth start claude|codex` connects agents |
+| **Unsloth Desktop** | open-source, also fine-tunes, self-healing tool calls, sandboxed code exec | OpenAI compatible | yes | beta since Aug 2026; Tauri app; `unsloth start claude\|codex` connects agents |
 | **Ollama** | servers, homelabs, k3s | OpenAI compatible on `:11434` | no chat UI worth the name | import any GGUF with a `Modelfile` |
 | **llama.cpp** `llama-server` | minimal, scriptable | OpenAI compatible | no | `llama-server -hf openbmb/MiniCPM5-2B-GGUF` |
 
@@ -17,23 +17,29 @@ Everything below works with any of them; the kit reads `KIT_LLM_BASE_URL` (defau
 
 1. **Install** — [platform pages](platforms/macos.md) (`brew install --cask lm-studio`, `winget install ElementLabs.LMStudio`, AppImage on Linux). Launch it once so `lms` gets registered.
 2. **Get the model**
+
    ```bash
    lms get openbmb/MiniCPM5-2B-GGUF          # choose Q4_K_M (≈1.6 GB); Q8_0 if you have RAM to spare
    lms ls                                     # confirm
    ```
+
    Any GGUF or MLX repo works the same way (`lms get <user>/<repo>[@quant]`, or paste a Hugging Face URL). Alternatives are compared in [models.md](models.md).
 3. **Load and chat** — pick the model in the chat window. In the model settings, set context length to 8–16k (128k is supported, but a 2B model on CPU gets slow past 16k). Leave the **thinking toggle** off unless you want reasoning: MiniCPM5-2B spends its chain of thought out of the same token budget as the answer, so with thinking on a small budget returns nothing at all ([models.md](models.md)). The kit budgets for it — `KIT_LLM_REASONING_TOKENS`, 512 by default — but the toggle is the cheaper fix when the answer does not need reasoning.
 4. **Start the server**
+
    ```bash
    lms server start --port 1234              # or Developer tab → Start server
    curl http://localhost:1234/v1/models
    uv run kit.py llm smoke
    ```
+
    Endpoints: `POST /v1/chat/completions`, `/v1/embeddings`, `/v1/responses`, `GET /v1/models` (OpenAI); `POST /v1/messages` (Anthropic-compatible); `POST /api/v1/chat` (LM Studio's REST API, which can call MCP servers server-side when *Allow calling servers from mcp.json* is enabled in Server Settings). Models load on first request (JIT); the first call is slow.
 5. **Give the chat window tools**
+
    ```bash
    uv run kit.py mcp-config --client lmstudio --write     # writes ~/.lmstudio/mcp.json (backup kept)
    ```
+
    Restart LM Studio → open a chat → *Program* tab in the right sidebar → toggle **qmd** and **obsidian-vault** on. LM Studio shows a confirmation dialog per tool call; choose *always allow* for `query`, `get`, `obsidian_search`, `obsidian_read_note`, and keep asking for writes. The bridge adds its own guard rails (confidential notes hidden, people/system folders read-only, size and rate limits; `--propose` for a human-applied queue) — [security.md](security.md). Paste the system prompt from [`config/lmstudio/system-prompt.md`](../config/lmstudio/system-prompt.md) (`Cmd/Ctrl+Shift+E` opens the system-prompt editor).
 6. **Prompts that work with a 2B model** — retrieval-grounded, one task at a time, explicit output shape:
    > Use the qmd query tool to find notes about the search relaunch. Then answer in five bullets: what is due, what is at risk, who owns what. Cite note paths.
@@ -46,9 +52,11 @@ Everything below works with any of them; the kit reads `KIT_LLM_BASE_URL` (defau
 
    > Here is the recap of today's sync: … File it as "Search relaunch sync" for today with Alex and Sam, then show me the actions you extracted.
 7. **Use the same tools from scripts**
+
    ```bash
    uv run kit.py llm ask "what is blocking the pilot" --collection vault   # qmd → model, with citations
    ```
+
 8. **Headless / remote** — `llmster` is LM Studio's engine as a standalone daemon for macOS, Windows and Linux (`lms daemon up`, `lms server start`); the desktop app can also run its server on login without a window. For a homelab, Ollama on k3s with the OpenAI-compatible API is the boring, reliable choice; point `KIT_LLM_BASE_URL` at it.
 
 ## Unsloth Desktop workflow

@@ -28,7 +28,7 @@ uv run kit.py llm ask "what is blocking the search relaunch pilot" --vault ./vau
 
 Expected shape:
 
-```
+```text
 Latency on the CPU tier: p95 is 1.6 s against a 0.8 s target; the go/no-go on 2026-09-18 is conditional
 on a benchmark under 1.0 s [1][3]. The DE/EN embedding model is also undecided (due 2026-09-17) [2].
 

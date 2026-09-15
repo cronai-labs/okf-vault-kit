@@ -16,7 +16,7 @@ The vault is a directory of Markdown files with YAML frontmatter. Obsidian rende
 
 ## Folders
 
-```
+```text
 00-home/       home · dashboard · inbox · priorities · open-actions · bases/*.base
 01-journal/    daily/YYYY/MM/ · weekly/ · quarterly/
 02-meetings/   YYYY-MM-DD-topic.md

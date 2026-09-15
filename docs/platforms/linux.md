@@ -20,6 +20,7 @@ uv run kit.py init --target ~/notes/vault --actor human:you
 ```
 
 Notes:
+
 - GPU: qmd auto-detects CUDA/Vulkan; force with `QMD_LLAMA_GPU=cuda|vulkan|false`. LM Studio and Ollama pick up NVIDIA drivers automatically; AMD via ROCm/Vulkan.
 - Flatpak Obsidian runs in a sandbox: the CLI registration and the MCP bridge's `cli` backend may not see it; use the AppImage/deb, or the bridge's `fs` backend.
 - Servers/homelab: run Ollama or `llmster` as a systemd service, `qmd mcp --http --daemon --host 0.0.0.0` behind your own auth (the endpoints are unauthenticated), and point the kit at them with `KIT_LLM_BASE_URL`.

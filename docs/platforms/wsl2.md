@@ -60,6 +60,7 @@ constraint of this lane. Two ways round it:
 uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765 --token new
 qmd mcp --http --port 8181
 ```
+
 ```bash
 # then print the config for the Windows-side client — no --write here
 uv run kit.py mcp-config --qmd-http --bridge-http --bridge-token <token> --vault ~/Notes/vault

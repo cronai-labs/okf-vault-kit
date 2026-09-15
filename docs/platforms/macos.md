@@ -16,6 +16,7 @@ Afterwards:
 3. `uv run kit.py doctor`.
 
 Notes:
+
 - Metal acceleration is automatic for qmd (`QMD_LLAMA_GPU=metal`) and LM Studio; prefer MLX builds of chat models when offered.
 - No system Python needed: uv downloads a managed CPython on first run if none is suitable (`uv python install 3.12` to do it explicitly).
 - `~/.bun/bin` must be on `PATH` for `qmd`; the script appends it to `~/.zshrc`.

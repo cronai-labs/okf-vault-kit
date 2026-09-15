@@ -8,7 +8,6 @@
 | Validate, index, log, wire up MCP, talk to the model | **`kit.py`** | no |
 | Fast grep / find / JSON in shell pipelines | ripgrep, fd, jq (optional) | no |
 
-
 ## Swapping a tool out
 
 Nothing here is load-bearing by name. The pieces that touch the outside world sit in slots, and
@@ -41,7 +40,6 @@ The `llm` slot has one provider because it does not need more: LM Studio, llama.
 run. Adding a provider means adding a class to `kitproviders.py` and registering it; it does not
 mean touching `kit.py`.
 
-
 ## qmd — Query Markup Documents
 
 Tobi Lütke's on-device search engine for Markdown (MIT). BM25 full-text search (SQLite FTS5) + vector search + LLM re-ranking, all local via node-llama-cpp and GGUF models. It ships an MCP server, which is what makes a small local model useful on a large vault.
@@ -56,7 +54,7 @@ qmd doctor                            # runtime, sqlite-vec, GPU probe
 
 `npm install -g @tobilu/qmd` (Node ≥ 22) remains a valid alternative. Windows works natively either way (see [platforms/windows.md](platforms/windows.md) for the CUDA note). There is no Homebrew formula for qmd itself; a Rust port, `rqmd`, exists for people who prefer a compiled binary — check its README for current feature parity before relying on it.
 
-**The commands you will actually use**
+### The commands you will actually use
 
 ```bash
 qmd collection add ~/Notes/vault --name vault --mask "**/*.md"

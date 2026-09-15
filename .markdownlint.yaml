@@ -21,3 +21,8 @@ MD025:
 # The template vault is written for Obsidian, whose links, callouts and Bases
 # embeds are not CommonMark. Linting sample notes as prose documents reports the
 # format working as intended.
+# Consecutive blockquotes separated by a blank line are how this repository writes
+# a *list of example prompts*: each one is a separate thing you would type, not a
+# continuation of the one above. MD028 reads the gap as an accident; here it is
+# the separator.
+MD028: false

@@ -12,6 +12,7 @@ certificate`, a download that hangs at 0%, or `winget` working while `curl | iex
 ```bash
 echo "$HTTPS_PROXY $https_proxy $NO_PROXY"     # macOS / Linux / WSL
 ```
+
 ```powershell
 [System.Net.WebRequest]::DefaultWebProxy.GetProxy("https://example.com")   # Windows
 netsh winhttp show proxy
