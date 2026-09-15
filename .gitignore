@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.qmd/
+vault/.obsidian/workspace.json
+vault/.obsidian/workspace-mobile.json
+vault/.obsidian/cache
+*.bak
+dist/
+build/
+.venv/
+*.egg-info/
+# generated graph artifacts; the kit writes them into whatever vault it is pointed at,
+# which is the tracked template vault/ when no --vault or KIT_VAULT is given.
+.kit/

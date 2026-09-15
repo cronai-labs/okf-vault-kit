@@ -1,0 +1,126 @@
+# OKF Vault Kit — vault ontology: the schema the notes follow, the edge semantics, and the mapping of
+# other people's property names onto ours. Read by `kit.py validate --ontology`, `kit.py graph`,
+# `kit.py reconcile` and the MCP bridge. Plain YAML; edit freely. Unknown types and properties are
+# tolerated everywhere (OKF rule) — this file only makes expectations explicit.
+version: 1
+base_iri: "urn:okf-vault-kit:"        # prefix for IRIs in RDF/JSON-LD exports; context.jsonld maps terms to public vocabularies
+context_file: context.jsonld          # JSON-LD context at the vault root
+
+# Property types: text | list | date | datetime | enum(values) | ref(range, many, soft) | actor_event | source
+# `soft: true` on a ref means a free-text value (e.g. owner: me) is acceptable without a note behind it.
+classes:
+  node:
+    props:
+      title: text
+      description: text
+      tags: list
+      sensitivity: { type: enum, values: [personal, internal, confidential] }
+      generated: actor_event
+      verified: { type: actor_event, many: true }
+      aliases: list
+  system:    { extends: node }
+  resource:  { extends: node }
+  daily:     { extends: node, props: { date: { type: date, required: true } } }
+  weekly:    { extends: daily }
+  quarterly: { extends: daily }
+  retro:
+    extends: node
+    props:
+      date: date
+      project: { type: ref, range: project }
+      people:  { type: ref, range: person, many: true }
+  meeting:
+    extends: node
+    props:
+      date: { type: date, required: true }
+      meeting_type: { type: enum, values: [project, leadership, 1-1, review, external] }
+      project: { type: ref, range: [project, area] }
+      people:  { type: ref, range: person, many: true }
+      state: text
+  project:
+    extends: node
+    props:
+      state: text
+      health: { type: enum, values: [green, yellow, red] }
+      owner:  { type: ref, range: person, required: true }
+      area:   { type: ref, range: area }
+      people: { type: ref, range: person, many: true }
+      milestone: text
+      due: date
+  decision:
+    extends: node
+    props:
+      date:  { type: date, required: true }
+      state: text
+      project: { type: ref, range: [project, area] }
+      owner:   { type: ref, range: person }
+      people:  { type: ref, range: person, many: true }
+      supersedes: { type: ref, range: decision }
+  person:
+    extends: node
+    props:
+      role: text
+      team: { type: ref, range: team, soft: true }
+      next_1_1: date
+  team:
+    extends: node
+    props:
+      people: { type: ref, range: person, many: true }
+      area:   { type: ref, range: area }
+  area:
+    extends: node
+    props:
+      owner: { type: ref, range: person, soft: true }
+      state: text
+  knowledge:
+    extends: node
+    props:
+      status: { type: enum, values: [draft, stable, deprecated] }
+      stale_after: datetime
+      sources: { type: source, many: true }
+  concept: { extends: knowledge }
+  runbook: { extends: knowledge }
+  spec:
+    extends: knowledge
+    props:
+      project: { type: ref, range: [project, area] }
+      owner:   { type: ref, range: person }
+
+# Edge semantics. Every `ref` property becomes an edge named after the property; body links become `links_to`;
+# frontmatter `sources` become `has_source`, `[^id]` footnotes become `cites`; provenance becomes generated_by / verified_by.
+edges:
+  owner:        { inverse: owns }
+  people:       { inverse: involved_in }
+  project:      { inverse: has_item }
+  area:         { inverse: has_item }
+  team:         { inverse: has_member }
+  supersedes:   { inverse: superseded_by, transitive: true }
+  links_to:     { inverse: linked_from }
+  has_source:   { inverse: source_of }
+  cites:        { inverse: cited_by }
+  generated_by: { inverse: generated }
+  verified_by:  { inverse: verified }
+
+# Ontology mapping: property names other vaults or tools use → the canonical name here.
+property_aliases:
+  summary: description
+  tag: tags
+  attendees: people
+  assignee: owner
+  responsible: owner
+  due_date: due
+  deadline: due
+  stale-after: stale_after
+# `status` carries no aliases on purpose: it is the OKF lifecycle field, and `kit.py validate` rejects
+# any value outside draft/stable/deprecated before the graph layer could normalise one.
+value_aliases:
+  health: { amber: yellow, ok: green, at-risk: red, at_risk: red }
+
+# Derived facts and integrity rules (implemented in kitgraph.py; toggle here)
+rules:
+  trust_tier: true          # unverified | machine-confirmed | human-reviewed, from `verified`
+  stale: true               # stale_after < now
+  at_risk: true             # knowledge that links to stale/deprecated knowledge; projects whose specs/decisions are at risk
+  superseded: true          # decision with an incoming `supersedes` edge should carry state: superseded
+  decision_needs_context: true   # a decision without project or area is flagged
+  unused_source: true       # a declared source never cited with [^id]

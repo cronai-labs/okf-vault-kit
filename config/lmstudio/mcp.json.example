@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "qmd": {
+      "command": "qmd",
+      "args": ["mcp"]
+    },
+    "obsidian-vault": {
+      "command": "uv",
+      "args": ["run", "/ABSOLUTE/PATH/okf-vault-kit/mcp/obsidian_bridge.py", "--backend", "fs", "--vault", "/ABSOLUTE/PATH/Notes/vault"]
+    }
+  }
+}

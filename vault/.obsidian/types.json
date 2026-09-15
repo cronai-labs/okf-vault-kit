@@ -1,0 +1,23 @@
+{
+  "types": {
+    "date": "date",
+    "due": "date",
+    "next_1_1": "date",
+    "tags": "tags",
+    "people": "multitext",
+    "description": "text",
+    "state": "text",
+    "status": "text",
+    "health": "text",
+    "sensitivity": "text",
+    "owner": "text",
+    "project": "text",
+    "area": "text",
+    "meeting_type": "text",
+    "milestone": "text",
+    "stale_after": "text",
+    "generated": "text",
+    "verified": "text",
+    "sources": "text"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "items": [
+    {
+      "type": "file",
+      "ctime": 0,
+      "path": "00-home/home.md",
+      "title": "Home"
+    },
+    {
+      "type": "file",
+      "ctime": 0,
+      "path": "00-home/dashboard.md",
+      "title": "Dashboard"
+    },
+    {
+      "type": "file",
+      "ctime": 0,
+      "path": "00-home/inbox.md",
+      "title": "Inbox"
+    },
+    {
+      "type": "file",
+      "ctime": 0,
+      "path": "00-home/open-actions.md",
+      "title": "Open Actions"
+    },
+    {
+      "type": "file",
+      "ctime": 0,
+      "path": "00-home/priorities.md",
+      "title": "Priorities"
+    },
+    {
+      "type": "file",
+      "ctime": 0,
+      "path": "99-system/conventions.md",
+      "title": "Conventions"
+    },
+    {
+      "type": "file",
+      "ctime": 0,
+      "path": "99-system/ai-workflows.md",
+      "title": "AI Workflows"
+    }
+  ]
+}

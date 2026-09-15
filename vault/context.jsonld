@@ -1,0 +1,40 @@
+{
+  "@context": {
+    "@vocab": "urn:okf-vault-kit:",
+    "dcterms": "http://purl.org/dc/terms/",
+    "schema": "https://schema.org/",
+    "prov": "http://www.w3.org/ns/prov#",
+    "skos": "http://www.w3.org/2004/02/skos/core#",
+    "xsd": "http://www.w3.org/2001/XMLSchema#",
+
+    "title": "dcterms:title",
+    "description": "dcterms:description",
+    "tags": "dcterms:subject",
+    "date": { "@id": "dcterms:date", "@type": "xsd:date" },
+    "due": { "@id": "schema:endDate", "@type": "xsd:date" },
+    "stale_after": { "@id": "dcterms:valid", "@type": "xsd:dateTime" },
+    "generated_at": { "@id": "prov:generatedAtTime", "@type": "xsd:dateTime" },
+    "generated_by": { "@id": "prov:wasAttributedTo", "@type": "@id" },
+    "verified_by": { "@id": "prov:wasInfluencedBy", "@type": "@id" },
+    "verified_at": { "@id": "prov:atTime", "@type": "xsd:dateTime" },
+    "has_source": { "@id": "prov:wasDerivedFrom", "@type": "@id" },
+    "cites": { "@id": "schema:citation", "@type": "@id" },
+    "links_to": { "@id": "dcterms:references", "@type": "@id" },
+    "owner": { "@id": "schema:accountablePerson", "@type": "@id" },
+    "people": { "@id": "schema:participant", "@type": "@id" },
+    "project": { "@id": "schema:isPartOf", "@type": "@id" },
+    "area": { "@id": "schema:isPartOf", "@type": "@id" },
+    "team": { "@id": "schema:memberOf", "@type": "@id" },
+    "supersedes": { "@id": "dcterms:replaces", "@type": "@id" },
+    "role": "schema:jobTitle",
+
+    "Person": "schema:Person",
+    "Team": "schema:Organization",
+    "Project": "schema:Project",
+    "Meeting": "schema:Event",
+    "Concept": "skos:Concept",
+    "Resource": "schema:CreativeWork",
+    "Actor": "prov:Agent",
+    "Source": "prov:Entity"
+  }
+}

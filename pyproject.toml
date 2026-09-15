@@ -1,0 +1,26 @@
+[project]
+name = "okf-vault-kit"
+dynamic = ["version"]
+description = "OKF-conformant Obsidian vault template with qmd, Obsidian CLI and local-LLM (MCP) tooling"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = ["pyyaml>=6.0"]
+
+[tool.setuptools]
+# flat layout on purpose: every module is importable from the repo root, and kit.py / the bridge
+# carry PEP 723 headers so they run standalone with `uv run`. Listed explicitly because setuptools
+# cannot guess a flat layout with several top-level modules.
+py-modules = ["kit", "kitlib", "kitgraph", "kitrecon", "kitproviders"]
+
+[tool.setuptools.dynamic]
+# Read at build time for the metadata only: a flat layout has no package directory to install the
+# file into, so an installed wheel has no VERSION next to the modules. kitlib falls back to this
+# metadata, which is why `import kitlib` works from a wheel as well as from a checkout.
+version = { file = "VERSION" }
+
+[project.optional-dependencies]
+mcp = ["mcp>=1.2,<2"]  # v1 API: 2.x renamed FastMCP to MCPServer, see issue #13
+test = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

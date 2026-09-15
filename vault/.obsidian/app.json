@@ -1,0 +1,12 @@
+{
+  "attachmentFolderPath": "08-resources/attachments",
+  "alwaysUpdateLinks": true,
+  "useMarkdownLinks": true,
+  "newLinkFormat": "relative",
+  "newFileLocation": "current",
+  "showFrontmatter": true,
+  "spellcheck": true,
+  "userIgnoreFilters": [
+    "09-archive/"
+  ]
+}

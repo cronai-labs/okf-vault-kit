@@ -1,0 +1,53 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - file.inFolder("01-journal")
+properties:
+  file.name:
+    displayName: Note
+  date:
+    displayName: Date
+  description:
+    displayName: Description
+  file.mtime:
+    displayName: Updated
+views:
+  - type: table
+    name: Recent Dailies
+    filters:
+      and:
+        - file.inFolder("01-journal/daily")
+    order:
+      - file.name
+      - description
+      - file.mtime
+    sort:
+      - property: file.name
+        direction: DESC
+    limit: 14
+  - type: table
+    name: Weekly Reviews
+    filters:
+      and:
+        - file.inFolder("01-journal/weekly")
+    order:
+      - file.name
+      - date
+      - description
+    sort:
+      - property: date
+        direction: DESC
+    limit: 26
+  - type: table
+    name: Quarterly Reviews
+    filters:
+      and:
+        - file.inFolder("01-journal/quarterly")
+    order:
+      - file.name
+      - date
+      - description
+    sort:
+      - property: date
+        direction: DESC
+    limit: 12

@@ -1,0 +1,16 @@
+# The kit has almost no dependency surface on purpose: PyYAML, and the MCP SDK for the bridge.
+# What does move is the CI actions, which are the part nobody remembers to bump.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    commit-message: { prefix: "ci" }     # ci: never triggers a release
+  - package-ecosystem: pip
+    directory: /
+    schedule: { interval: weekly }
+    commit-message: { prefix: "build" }
+    # mcp is pinned to <2 deliberately (issue #13); do not let a bot walk it forward
+    ignore:
+      - dependency-name: mcp
+        versions: [">=2"]

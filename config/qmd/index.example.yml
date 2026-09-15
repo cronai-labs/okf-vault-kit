@@ -1,0 +1,30 @@
+# ~/.config/qmd/index.yml — starter for the OKF Vault Kit (copy, then edit paths)
+# qmd reads/writes this file itself via `qmd collection …` and `qmd context …`; hand edits are fine.
+
+global_context: "Personal working knowledge of a manager/PM/engineer: journal, meetings, projects, people, decisions, evergreen knowledge. Files carry OKF frontmatter (type, description, state, status, stale_after)."
+
+# Clickable result paths in a TTY. Obsidian URI works too: "obsidian://open?path={path}"
+editor_uri: "vscode://file{path}:{line}:{col}"
+
+# Uncomment to switch embeddings for German/multilingual notes (re-run `qmd embed -f` afterwards):
+# models:
+#   embed: "hf:Qwen/Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf"
+
+collections:
+  vault:
+    path: /Users/me/Notes/vault          # absolute path to YOUR vault (Windows: C:/Users/me/Notes/vault)
+    pattern: "**/*.md"
+    ignore:
+      - ".obsidian/**"
+      - "09-archive/**"
+      - "90-templates/**"
+      - "**/_*/**"                     # `_`-prefixed folders are tool-private; the kit never reads them either
+    includeByDefault: true
+    context:
+      "/": "Working vault (OKF bundle)"
+      "/01-journal": "Daily, weekly and quarterly journal — raw material, chronological"
+      "/02-meetings": "Meeting notes: outcomes, decisions, actions"
+      "/03-projects": "Project notes with health, milestone, update log; projects.md = one-liners"
+      "/05-people": "People notes (confidential): role, working style, 1:1 log"
+      "/06-decisions": "Decision records (ADR): context, options, decision, consequences; decision-log.md = register"
+      "/07-knowledge": "Evergreen concepts, specs, runbooks with verified/stale_after/sources"

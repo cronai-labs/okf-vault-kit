@@ -1,0 +1,56 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - or:
+        - 'type == "person"'
+        - 'type == "team"'
+    - not:
+        - file.inFolder("90-templates")
+    - not:
+        - file.inFolder("09-archive")
+properties:
+  file.name:
+    displayName: Person / Team
+  type:
+    displayName: Type
+  role:
+    displayName: Role
+  team:
+    displayName: Team
+  next_1_1:
+    displayName: Next 1:1
+  people:
+    displayName: Members
+  description:
+    displayName: Description
+views:
+  - type: table
+    name: People
+    filters:
+      and:
+        - 'type == "person"'
+    order:
+      - file.name
+      - role
+      - team
+      - next_1_1
+      - description
+    sort:
+      - property: next_1_1
+        direction: ASC
+      - property: file.name
+        direction: ASC
+    limit: 100
+  - type: table
+    name: Teams
+    filters:
+      and:
+        - 'type == "team"'
+    order:
+      - file.name
+      - people
+      - description
+    sort:
+      - property: file.name
+        direction: ASC
+    limit: 50

@@ -1,0 +1,116 @@
+name: ci
+on: [push, pull_request, workflow_dispatch]
+
+jobs:
+  offline:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: make check PY=${{ matrix.python }}
+
+  qmd-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.12" }
+      - uses: oven-sh/setup-bun@v2
+      # Fetching qmd depends on a registry we do not control, so only that step is advisory.
+      # Once qmd is installed, a failing end-to-end test is a real failure and fails the job.
+      - id: qmd
+        continue-on-error: true
+        run: |
+          bun install -g @tobilu/qmd
+          qmd doctor
+      - if: steps.qmd.outcome == 'success'
+        run: make test-qmd PY=3.12
+      - if: steps.qmd.outcome != 'success'
+        run: echo "qmd could not be installed; the end-to-end lane did not run"
+
+  # Conventional Commits are enforced on the PR title, because that is what a squash merge
+  # writes as the subject — and the subject is what decides whether users get a release at all.
+  # GitHub appends " (#123)" to it, so the pattern has to tolerate that suffix.
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: the pull request title is a conventional commit
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+'
+          if printf '%s' "$TITLE" | grep -qE "$pattern"; then
+            echo "ok: $TITLE"
+          else
+            echo "PR title is not a conventional commit: $TITLE"
+            echo "expected e.g. 'fix(bridge): stop the policy layer failing open'"
+            exit 1
+          fi
+      - if: github.event_name != 'pull_request'
+        run: echo "not a pull request; the title policy applies at the PR"
+
+  security:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, security-events: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }      # gitleaks scans history, not just the tip
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.12" }
+      - name: secrets, over the whole history
+        run: |
+          v=8.28.0
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_linux_x64.tar.gz" \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks detect --redact --no-banner --exit-code 1
+      - name: python SAST
+        run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp -ll
+      - uses: github/codeql-action/init@v3
+        with: { languages: python }
+      - uses: github/codeql-action/analyze@v3
+
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { python-version: "3.11" }
+      # A synthetic tag: what is under test is that the packaging guards pass and that the
+      # archive unpacks, not whether this commit deserves a release.
+      - run: git tag --force "v$(cat VERSION)"
+      - run: make release
+      - name: the archive unpacks under the expected prefix
+        run: |
+          v=$(cat VERSION)
+          unzip -q "dist/okf-vault-kit-$v.zip" -d unpacked
+          test -f "unpacked/okf-vault-kit-$v/kit.py"
+          test -f "unpacked/okf-vault-kit-$v/VERSION"
+          test -f "unpacked/okf-vault-kit-$v/vault/index.md"
+          test ! -d "unpacked/okf-vault-kit-$v/.github"
+          cd dist && shasum -a 256 -c "okf-vault-kit-$v.zip.sha256"
+
+  # One required check for the ruleset to point at. A matrix job cannot be required directly:
+  # its check names embed the OS and Python version, so adding a row would silently stop being
+  # enforced.
+  #
+  # The invariant: every other job in this workflow is listed in `needs`, and this job fails
+  # unless all of them report success. A job missing from `needs` is a job nobody enforces — add
+  # it here when you add it above. Advisory behaviour belongs on a step (`continue-on-error` on
+  # that step), never on a whole job, which would hide it from this check.
+  ci-required:
+    needs: [offline, qmd-e2e, policy, security, release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          results='${{ toJSON(needs) }}'
+          echo "$results" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$results" | jq -r 'to_entries[] | select(.value.result != "success") | .key')
+          if [ -n "$bad" ]; then echo "not green: $(echo "$bad" | tr '\n' ' ')"; exit 1; fi

@@ -1,0 +1,219 @@
+filters:
+  and:
+    - 'file.ext == "md"'
+    - not:
+        - file.inFolder("90-templates")
+    - not:
+        - file.inFolder("99-system")
+    - not:
+        - file.inFolder("09-archive")
+properties:
+  file.name:
+    displayName: Note
+  type:
+    displayName: Type
+  date:
+    displayName: Date
+  state:
+    displayName: State
+  status:
+    displayName: Lifecycle
+  health:
+    displayName: Health
+  owner:
+    displayName: Owner
+  milestone:
+    displayName: Milestone
+  due:
+    displayName: Due
+  meeting_type:
+    displayName: Kind
+  project:
+    displayName: Project
+  people:
+    displayName: People
+  description:
+    displayName: Description
+  stale_after:
+    displayName: Stale after
+  file.mtime:
+    displayName: Updated
+views:
+  - type: table
+    name: Projects
+    filters:
+      and:
+        - 'type == "project"'
+    order:
+      - file.name
+      - health
+      - state
+      - owner
+      - milestone
+      - due
+      - description
+    sort:
+      - property: due
+        direction: ASC
+      - property: file.name
+        direction: ASC
+    limit: 50
+  - type: table
+    name: Attention
+    filters:
+      and:
+        - 'type == "project"'
+        - or:
+            - 'health == "red"'
+            - 'health == "yellow"'
+            - 'state == "waiting"'
+            - 'state == "on-hold"'
+    order:
+      - file.name
+      - health
+      - state
+      - owner
+      - milestone
+      - due
+      - description
+    sort:
+      - property: health
+        direction: ASC
+      - property: due
+        direction: ASC
+    limit: 50
+  - type: table
+    name: Open Decisions
+    filters:
+      and:
+        - 'type == "decision"'
+        - 'state == "open"'
+    order:
+      - file.name
+      - date
+      - project
+      - owner
+      - description
+    sort:
+      - property: date
+        direction: ASC
+    limit: 50
+  - type: table
+    name: Decisions
+    filters:
+      and:
+        - 'type == "decision"'
+    order:
+      - file.name
+      - date
+      - state
+      - project
+      - owner
+      - description
+    sort:
+      - property: date
+        direction: DESC
+    limit: 100
+  - type: table
+    name: Recent Meetings
+    filters:
+      and:
+        - 'type == "meeting"'
+    order:
+      - file.name
+      - date
+      - meeting_type
+      - project
+      - people
+      - description
+    sort:
+      - property: date
+        direction: DESC
+    limit: 15
+  - type: table
+    name: Waiting
+    filters:
+      and:
+        - 'state == "waiting"'
+    order:
+      - file.name
+      - type
+      - date
+      - people
+      - description
+    sort:
+      - property: date
+        direction: ASC
+    limit: 50
+  - type: table
+    name: Reviews
+    filters:
+      and:
+        - or:
+            - 'type == "weekly"'
+            - 'type == "quarterly"'
+            - 'type == "retro"'
+    order:
+      - file.name
+      - type
+      - date
+      - description
+    sort:
+      - property: date
+        direction: DESC
+    limit: 30
+  - type: table
+    name: Knowledge
+    filters:
+      and:
+        - or:
+            - 'type == "concept"'
+            - 'type == "runbook"'
+            - 'type == "spec"'
+    order:
+      - file.name
+      - type
+      - status
+      - stale_after
+      - description
+    sort:
+      - property: file.mtime
+        direction: DESC
+    limit: 100
+  - type: table
+    name: Needs Review
+    filters:
+      and:
+        - or:
+            - 'status == "draft"'
+            - and:
+                - stale_after.isTruthy()
+                - 'date(stale_after) < today()'
+    order:
+      - file.name
+      - type
+      - status
+      - stale_after
+      - description
+    sort:
+      - property: stale_after
+        direction: ASC
+    limit: 50
+  - type: table
+    name: Recently Touched
+    filters:
+      and:
+        - type.isTruthy()
+        - not:
+            - file.inFolder("00-home")
+        - not:
+            - file.inFolder("01-journal")
+    order:
+      - file.name
+      - type
+      - file.mtime
+      - description
+    sort:
+      - property: file.mtime
+        direction: DESC
+    limit: 12

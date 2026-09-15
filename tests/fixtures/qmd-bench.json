@@ -1,0 +1,12 @@
+{
+  "description": "OKF Vault Kit — retrieval sanity benchmark on the template vault",
+  "version": 1,
+  "collection": "kit-e2e",
+  "queries": [
+    {"id": "concept-exact", "query": "reciprocal rank fusion", "type": "exact", "expected_files": ["07-knowledge/hybrid-search.md"], "expected_in_top_k": 3},
+    {"id": "decision-semantic", "query": "why did we not choose a hosted vector database", "type": "semantic", "expected_files": ["06-decisions/2026-09-08-adopt-qmd-for-local-search.md"], "expected_in_top_k": 3},
+    {"id": "runbook-topical", "query": "search results look stale after importing notes", "type": "topical", "expected_files": ["07-knowledge/reindex-qmd.md"], "expected_in_top_k": 3},
+    {"id": "project-alias", "query": "docs portal pilot latency risk", "type": "alias", "expected_files": ["03-projects/search-relaunch.md"], "expected_in_top_k": 3},
+    {"id": "person-cross", "query": "who owns the retrieval stack and the eval set", "type": "cross-domain", "expected_files": ["05-people/alex-example.md"], "expected_in_top_k": 3}
+  ]
+}

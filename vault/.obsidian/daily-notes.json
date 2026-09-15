@@ -1,0 +1,5 @@
+{
+  "format": "[daily]/YYYY/MM/YYYY-MM-DD",
+  "folder": "01-journal",
+  "template": "90-templates/daily.md"
+}
