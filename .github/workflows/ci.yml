@@ -10,7 +10,7 @@ jobs:
         python: ["3.11", "3.12"]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "${{ matrix.python }}" }
       - run: make check PY=${{ matrix.python }}
@@ -18,7 +18,7 @@ jobs:
   qmd-e2e:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.12" }
       - uses: oven-sh/setup-bun@v2
@@ -60,7 +60,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: { contents: read, security-events: write }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }      # gitleaks scans history, not just the tip
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.12" }
@@ -79,7 +79,7 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
         with: { python-version: "3.11" }
       # A synthetic tag: what is under test is that the packaging guards pass and that the
