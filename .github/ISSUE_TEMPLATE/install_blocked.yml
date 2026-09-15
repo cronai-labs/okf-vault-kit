@@ -1,0 +1,39 @@
+name: It would not install
+description: A managed machine, a proxy or a blocked registry stopped you
+labels: [install]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This is the report we want most. Where a corporate machine stops the kit
+        is the thing we cannot discover ourselves, and "I gave up here" is a
+        complete and useful bug report.
+  - type: textarea
+    id: where
+    attributes:
+      label: Which step, and what did it say
+      description: >
+        The command, and the error or the hang. If something hung, roughly how
+        long before you stopped waiting?
+    validations: { required: true }
+  - type: dropdown
+    id: blocked
+    attributes:
+      label: What appears to be blocked
+      multiple: true
+      options:
+        - astral.sh (the uv installer)
+        - the npm registry / Bun (qmd)
+        - Hugging Face (model downloads)
+        - PyPI
+        - GitHub releases
+        - I could not tell
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: What the machine allows
+      options:
+        - label: I can install software myself
+        - label: I can run `sudo` / elevate
+        - label: There is a proxy I know the address of
+        - label: There is a company CA certificate

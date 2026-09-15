@@ -7,9 +7,11 @@ For managers, project/product managers and engineers: same structure, three lane
 ```bash
 uv run kit.py doctor                                   # what is installed, what is missing
 uv run kit.py init --target ~/Notes/vault --actor human:you
+export KIT_VAULT=~/Notes/vault                         # so the commands below mean YOUR vault
+
 bun install -g @tobilu/qmd && qmd collection add ~/Notes/vault --name vault && qmd embed
 lms get openbmb/MiniCPM5-2B-GGUF && lms server start   # or Unsloth Desktop / Ollama
-uv run kit.py mcp-config --client lmstudio --write     # chat window gets qmd + vault tools
+uv run kit.py mcp-config --client lmstudio --write     # the chat window gets the tools
 uv run kit.py llm ask "what is blocking the pilot" --graph   # search + graph facts → model, with citations
 uv run kit.py graph build && uv run kit.py reconcile   # the vault as a graph; hubs vs notes
 uv run --with 'mcp<2' kit.py test                      # prove it

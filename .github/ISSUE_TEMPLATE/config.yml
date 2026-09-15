@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Alpha feedback that is not a bug
+    url: https://github.com/cronai-labs/okf-vault-kit/blob/main/FEEDBACK.md
+    about: >
+      Did you keep using it? Was the local model worth the disk space? That is
+      worth more to us than a bug report, and FEEDBACK.md says where to send it.
