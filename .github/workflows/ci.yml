@@ -72,9 +72,9 @@ jobs:
           gitleaks detect --redact --no-banner --exit-code 1
       - name: python SAST
         run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp -ll
-      - uses: github/codeql-action/init@v3
+      - uses: github/codeql-action/init@v4
         with: { languages: python }
-      - uses: github/codeql-action/analyze@v3
+      - uses: github/codeql-action/analyze@v4
 
   release:
     runs-on: ubuntu-latest
