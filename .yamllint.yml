@@ -1,0 +1,28 @@
+extends: default
+rules:
+  # GitHub Actions expressions are written `${{ x }}` — with the spaces. The
+  # braces rule calls every one of them an error, which would be 14 findings
+  # that cannot be fixed without breaking the workflows.
+  braces:
+    forbid: false
+    min-spaces-inside: 0
+    max-spaces-inside: 1
+  # The workflows and configs here are commented heavily; an 80-column limit
+  # would turn explanation into noise.
+  line-length: disable
+  # `on:` in a workflow is a key, not the boolean true.
+  truthy:
+    check-keys: false
+  comments:
+    min-spaces-from-content: 1
+  document-start: disable
+  # The vault's ontology and Bases files are data, often with long single-line
+  # descriptions that carry meaning; wrapping them would change the content.
+  empty-lines:
+    max: 2
+  # The ontology is column-aligned by hand so the class table reads as a table:
+  # `system:    { extends: node }`. It also has to stay byte-identical to
+  # vault/99-system/ontology.yml, which a test asserts -- so reformatting one
+  # copy to satisfy a spacing rule would break that instead.
+  colons:
+    max-spaces-after: -1

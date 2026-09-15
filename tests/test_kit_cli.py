@@ -511,11 +511,14 @@ class DoctorReport(unittest.TestCase):
         self.assertIn(":1234", text)
 
     def test_report_reduces_a_model_path_with_spaces_to_its_basename(self):
-        """`LM Studio` is the vendor's own default folder, so a space in the path is the common case."""
+        """A space in a model path is the common case -- `LM Studio` is the vendor's own default
+        folder. The token this asserts on must not be one the report can produce for another
+        reason: `LM Studio` also appears in the `lms` install hint, which is printed only when lms
+        is absent, so it passes on a developer laptop and fails on every CI runner."""
         user = getpass.getuser()
-        text = report_for([f"/Users/{user.capitalize()}/LM Studio/models/qwen2.5-7b.gguf",
+        text = report_for([f"/Users/{user.capitalize()}/Vendor Suite/models/qwen2.5-7b.gguf",
                            f"C:\\Users\\{user.capitalize()}\\Corp Models\\secret.gguf"])
-        for secret in ("LM Studio", "Corp Models", "C:\\", "/Users/"):
+        for secret in ("Vendor Suite", "Corp Models", "C:\\", "/Users/"):
             self.assertNotIn(secret, text, f"leaked: {secret}")
         self.assertNotIn(user.lower(), text.lower())
         self.assertIn("qwen2.5-7b.gguf", text, "the model still has to be identifiable")

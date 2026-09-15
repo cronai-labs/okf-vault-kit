@@ -1,0 +1,23 @@
+# Prose here runs past 80 characters deliberately — it is written to be read,
+# not to fit a column.
+MD013: false
+# Table column alignment is cosmetic, and most of the tables in this repository
+# are hand-aligned around content of very different widths.
+MD060: false
+# Every release section in a changelog has its own "Fixed"/"Added".
+MD024:
+  siblings_only: true
+# The generated changelog emits bare release-comparison URLs.
+MD034: false
+# A pull request template opens with the first section heading, not a title —
+# GitHub renders the template into a body that never has one.
+MD041: false
+# markdownlint counts the YAML front matter's `title:` as the document's first
+# H1, so a decision record — which carries `title:` in OKF front matter AND an
+# `#` heading in the body — reads as two. Point it at a pattern that matches
+# nothing so only real headings count.
+MD025:
+  front_matter_title: ""
+# The template vault is written for Obsidian, whose links, callouts and Bases
+# embeds are not CommonMark. Linting sample notes as prose documents reports the
+# format working as intended.

@@ -49,6 +49,12 @@ release: check ## build the distributable zip and its checksum
 	@cd $(DIST) && shasum -a 256 okf-vault-kit-$(VERSION).zip > okf-vault-kit-$(VERSION).zip.sha256
 	@echo && ls -l $(DIST) && cat $(DIST)/okf-vault-kit-$(VERSION).zip.sha256
 
+changelog: ## regenerate CHANGELOG.md from the commit history
+	uvx git-cliff --config cliff.toml --output CHANGELOG.md
+
+next-version: ## what the next tag would be, from the commits since the last one
+	@uvx git-cliff --config cliff.toml --bumped-version
+
 clean: ## remove everything the tooling generates
 	rm -rf $(DIST) build .venv **/__pycache__ .kit vault/.kit
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +

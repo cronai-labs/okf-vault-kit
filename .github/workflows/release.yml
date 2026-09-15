@@ -1,0 +1,98 @@
+name: release
+
+# The release path. Releases are cut by pushing a tag that matches VERSION:
+#
+#   make changelog                       # git-cliff regenerates CHANGELOG.md
+#   git commit -am "chore(release): 0.5.0"
+#   git tag v0.5.0 && git push origin main v0.5.0
+#
+# `make release` refuses unless the tree is clean and HEAD carries exactly that
+# tag, so the archive can never be built from a different tree than the one the
+# gate ran on. This workflow re-checks the same thing rather than trusting it:
+# the tag is what users download by, and a mismatch ships the wrong bytes under
+# the right name.
+#
+# It never creates, moves or deletes tags, and never clobbers an existing asset.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+-*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0          # git-cliff reads the whole history
+
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        with: { python-version: "3.11" }
+
+      - name: The tag must match VERSION
+        env:
+          REF: ${{ github.ref_name }}
+        run: |
+          want="v$(cat VERSION)"
+          if [ "$REF" != "$want" ]; then
+            echo "::error::tag '$REF' does not match VERSION ('$want')."
+            echo "Update VERSION and CHANGELOG.md, commit, then re-tag."
+            exit 1
+          fi
+          echo "tag $REF matches VERSION"
+
+      - name: The commit must be on main
+        # A release is only ever a commit main already carries. Without this a
+        # tag pushed from a branch would publish code that was never reviewed.
+        run: |
+          git fetch --quiet origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not reachable from origin/main"
+            exit 1
+          fi
+          echo "commit is on main"
+
+      - name: Gate
+        run: make check
+
+      - name: Build the archive
+        run: make release
+
+      - name: Release notes from the commit history
+        # One line per change, generated from conventional commits -- not the
+        # squashed PR bodies, which would make notes measured in kilobytes.
+        run: uvx git-cliff --config cliff.toml --latest --strip all > NOTES.md
+
+      - name: Publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ github.ref_name }}
+        run: |
+          v="$(cat VERSION)"
+          prerelease=""
+          case "$v" in *-*) prerelease="--prerelease";; esac
+          gh release create "$REF" \
+            --title "$REF" \
+            --notes-file NOTES.md \
+            $prerelease \
+            "dist/okf-vault-kit-$v.zip" \
+            "dist/okf-vault-kit-$v.zip.sha256"
+
+      - name: Verify what was published
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REF: ${{ github.ref_name }}
+        run: |
+          v="$(cat VERSION)"
+          mkdir -p verify && cd verify
+          gh release download "$REF" --pattern '*.zip' --pattern '*.sha256'
+          shasum -a 256 -c "okf-vault-kit-$v.zip.sha256"
+          unzip -q "okf-vault-kit-$v.zip"
+          test -f "okf-vault-kit-$v/kit.py"
+          echo "published archive verified"

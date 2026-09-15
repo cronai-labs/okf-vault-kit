@@ -22,6 +22,7 @@ for f in ripgrep fd jq; do formula "$f"; done
 echo "== qmd via bun (global bin: ~/.bun/bin)"
 export PATH="$HOME/.bun/bin:$PATH"
 have qmd || bun install -g @tobilu/qmd
+# shellcheck disable=SC2016  # the line is written literally; $HOME expands when zsh reads it, not now
 grep -q '.bun/bin' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/.bun/bin:$PATH"' >> "$HOME/.zshrc"
 
 echo "== apps: Obsidian, LM Studio"

@@ -1,0 +1,90 @@
+# git-cliff configuration
+#
+# Drives two things from the same conventional-commit history:
+#   git cliff --bumped-version      -> the next semver, used by `make release`
+#   git cliff --output CHANGELOG.md -> the changelog
+#
+# Only user-visible types reach the notes and the bump. A README typo must not
+# cut a release, which is also why the PR-title policy in ci.yml matters: the
+# squash subject is what lands here.
+#
+# The type -> section mapping below mirrors the bump semantics documented in
+# commitlint.config.cjs. If you add a type there, add it here too.
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to OKF Vault Kit are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+"""
+
+body = """
+{% if version -%}
+## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else -%}
+## [Unreleased]
+{% endif %}
+{%- for group, commits in commits | group_by(attribute="group") %}
+### {{ group | striptags | trim | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+
+footer = """
+"""
+
+trim = true
+
+[git]
+conventional_commits = true
+# Commits that are not conventional (the pre-commitlint history, and merge
+# commits) are dropped rather than dumped into an "Other" bucket.
+filter_unconventional = true
+filter_commits = true
+split_commits = false
+protect_breaking_commits = true
+
+# Tags carry a leading v, and prereleases are part of the scheme while the kit
+# is in alpha: v0.4.0-alpha.2.
+tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+"
+topo_order = false
+sort_commits = "oldest"
+
+commit_preprocessors = [
+  # Strip the trailing Claude Code session/co-author trailers from subjects.
+  { pattern = '\\s+\\(#([0-9]+)\\)$', replace = " ([#${1}](https://github.com/cronai-labs/okf-vault-kit/issues/${1}))" },
+]
+
+commit_parsers = [
+  # The <!-- n --> prefixes only order the sections (group_by sorts
+  # alphabetically); striptags removes them in the template.
+  { message = "^feat", group = "<!-- 0 -->Features" },
+  { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
+  { message = "^perf", group = "<!-- 2 -->Performance" },
+  { message = "^revert", group = "<!-- 3 -->Reverts" },
+  # Everything below is real work but not release-note material.
+  { message = "^docs", skip = true },
+  { message = "^style", skip = true },
+  { message = "^refactor", skip = true },
+  { message = "^test", skip = true },
+  { message = "^build", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^chore", skip = true },
+]
+
+[bump]
+# The public history starts at the version VERSION already carries; the private
+# history that preceded it is archived, not replayed.
+initial_tag = "v0.4.0-alpha.2"
+
+# Pre-1.0: a feat takes 0.4.x -> 0.5.0, and a breaking change does the same
+# rather than jumping to 1.0.0. The kit is an alpha; 1.0 should be a decision,
+# not an accident of a `!` in a commit subject.
+features_always_bump_minor = true
+breaking_always_bump_major = false
