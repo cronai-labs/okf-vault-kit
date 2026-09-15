@@ -1,0 +1,42 @@
+name: Bug report
+description: A command did something other than what it says it does
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The fastest useful thing you can attach is a test-kit report. One command,
+        and it carries no note content, no vault paths and no username:
+
+        ```
+        ./testkit/run.sh --quick        # macOS, Linux, WSL2
+        .\testkit\run.ps1 --quick       # Windows
+        ```
+  - type: textarea
+    id: report
+    attributes:
+      label: Test-kit report
+      description: Paste `testkit-report.md`, or `uv run kit.py doctor --report doctor.txt` if the kit will not start.
+      render: text
+    validations: { required: false }
+  - type: textarea
+    id: what
+    attributes:
+      label: What you ran, what you expected, what happened
+      description: The exact command. A traceback is worth more than a description of one.
+    validations: { required: true }
+  - type: dropdown
+    id: lane
+    attributes:
+      label: Which lane
+      options:
+        - macOS
+        - Windows (native)
+        - Windows (WSL2)
+        - Linux
+    validations: { required: true }
+  - type: checkboxes
+    id: managed
+    attributes:
+      label: Machine
+      options:
+        - label: This is a managed/work machine (proxy, no admin rights, or a company CA)

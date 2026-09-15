@@ -22,6 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 """
 
+# One line per change: subject, scope, and a short SHA that links to the commit.
+#
+# `commit.message` is the SUBJECT. It must never become `commit.body`: the working
+# model sets squash_merge_commit_message=PR_BODY, so every squash commit on main
+# carries the whole pull request description. schriftsatz rendered bodies once and
+# its v0.2.0 notes came to 14,014 bytes across 27 entries; the same range is 1,160
+# bytes and 6 entries this way.
+#
+# The detail is not lost, it is one click away: GitHub auto-links the `(#NN)` that
+# squash-merging appends to the subject, and the SHA links to the commit whose body
+# carries the full reasoning.
+#
+# The repository URL is a literal, not `{{ remote.link }}`. Configuring
+# [remote.github] makes git-cliff call the GitHub API for metadata, which needs
+# network, a token and a writable cache -- it panics in a release container without
+# them. A release must not depend on an API call it does not need.
 body = """
 {% if version -%}
 ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
@@ -31,7 +47,7 @@ body = """
 {%- for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}
-- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }}\
+- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/cronai-labs/okf-vault-kit/commit/{{ commit.id }}))\
 {% endfor %}
 {% endfor %}
 """

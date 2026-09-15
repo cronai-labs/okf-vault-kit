@@ -1,12 +1,18 @@
-# Knowledge graph roadmap — semantics, ontology and inference without a platform
+# The vault as a knowledge graph — semantics, ontology and inference without a platform
 
-**Status (0.2.0):** Levels 1–3 below are implemented (`99-system/ontology.yml`, `context.jsonld`, `kit.py validate --ontology`, `kit.py graph build|export|query|neighbors|path|pack`, derived facts and integrity rules); Level 4 is implemented as MCP tools and `kit.py llm ask --graph`; the engines section stays optional. The reconciliation layer built on top is described in [reconciliation.md](reconciliation.md).
+**All four levels below ship.** They are written as levels because that is how the capability
+layers — each one produces plain files the next reads, and you can stop at any of them — not
+because the later ones are planned. Level 1 is `99-system/ontology.yml` and `context.jsonld`;
+Level 2 is `kit.py graph build` and its four exports; Level 3 is the derived facts and integrity
+findings in `kit.py validate`; Level 4 is the four `graph_*` MCP tools and `kit.py llm ask
+--graph`. The engines section is genuinely optional, and the short list of open work is at the
+end. The reconciliation layer built on top is [reconciliation.md](reconciliation.md).
 
 The vault is already a graph: typed nodes (every note has a `type`), typed edges in frontmatter (`owner`, `project`, `area`, `people`, `sources`, `verified.by`), untyped edges in markdown links. Moving it into knowledge-engineering territory means making that graph explicit, giving the types and edges public meaning, and running a handful of rules over it — in four steps, each of which produces plain files any tool can read. A database enters only when a query needs one.
 
 Dependency stance for every step: Python standard library + PyYAML (already required). RDF is written by hand (N-Triples is one line per fact), SQLite is built into Python, JSON-LD is JSON. No rdflib, owlready, networkx or graph server until a concrete question cannot be answered without them.
 
-## Level 0 — what exists today
+## Level 0 — the graph a vault already is
 
 | Graph concept | In the vault |
 |---|---|
@@ -19,7 +25,7 @@ Dependency stance for every step: Python standard library + PyYAML (already requ
 
 `kit.py validate` already checks the OKF layer; nothing checks that `owner` points at a `person` note. That is the first gap.
 
-## Level 1 — vocabulary: an ontology file and a JSON-LD context (days, no code beyond the validator)
+## Level 1 — vocabulary: an ontology file and a JSON-LD context
 
 One file in the vault, `99-system/ontology.yml`, declares the classes (note types), their properties with **range** and **cardinality**, and the edge names — the schema the vault has been following informally:
 
@@ -49,7 +55,7 @@ OKF v0.2 is already a provenance vocabulary in disguise; the context just makes 
 
 Deliverable: `kit.py validate --ontology` reports range and cardinality violations ("`owner` of search-relaunch.md must be a person note", "decision without a project") alongside the OKF checks.
 
-## Level 2 — extraction: the graph as files and as SQLite (a day)
+## Level 2 — extraction: the graph as files and as SQLite
 
 `kit.py graph` walks the vault once and writes deterministic artifacts:
 
@@ -59,7 +65,7 @@ Deliverable: `kit.py validate --ontology` reports range and cardinality violatio
 
 Recursive CTEs make SQLite a perfectly good graph database at vault scale (thousands of notes): "every note that depends, transitively, on concept X", "decisions that touch project P through any edge", "people connected to more than three at-risk projects". `kit.py graph query "<sql>"` exposes it; `kit.py graph neighbors <note> --depth 2` is the shortcut.
 
-## Level 3 — semantics: a dozen rules, not OWL (an afternoon)
+## Level 3 — semantics: a dozen rules, not OWL
 
 The rules live next to the schema in `ontology.yml` and run as SQL or Python passes after extraction:
 
@@ -72,7 +78,33 @@ Findings go into the validate report and, optionally, into `log.md`. This is the
 
 ## Level 4 — serving it to the model (GraphRAG-lite)
 
-The bridge gains three tools: `graph_neighbors(note, depth, edge_types)`, `graph_path(a, b)`, `graph_query(sql)`. The 2B model then gets structured facts ("search-relaunch: owner → alex-example; decisions → adopt-qmd; cites → hybrid-search (stale after 2027-03-01)") instead of retrieving prose and guessing. The generated OKF `index.md` becomes a rendered view of the graph; per-cluster context packs (one markdown file per project with its neighbourhood) are cheap to emit and are exactly what small models digest best.
+This is the level that changes what a small model can do, and it is the reason the three below it
+are worth the effort.
+
+The bridge registers four graph tools — `graph_context(note)`, `graph_neighbors(note, depth,
+edge_types)`, `graph_path(a, b)` and `graph_query(sql)` — and `kit.py llm ask --graph` assembles
+the same facts into the prompt. Instead of retrieving prose and guessing at relationships, the
+model is handed them. A context pack, which is literally what it receives:
+
+```text
+# Search relaunch (example)
+- type: project        - state: active       - health: yellow      - due: 2026-09-18
+- at_risk (derived): False    - stale (derived): False    - trust_tier (derived): unverified
+
+## Relations
+- area: Platform engineering (04-areas/platform-engineering.md) [area, state=active]
+- has_item: Adopt qmd for local search (06-decisions/…) [decision, state=decided];
+            Search relaunch — pilot spec (07-knowledge/…) [spec, status=draft]
+- links_to: Hybrid search (07-knowledge/hybrid-search.md) [concept, status=stable]
+```
+
+Every relation arrives typed and with the other note's own state attached, so "who owns this and
+what is at risk" is a lookup rather than an inference. That matters most exactly where a 2B model
+is weakest: owners, dates, states and the difference between a decided decision and a draft spec.
+
+`kit.py graph pack <note>` prints a pack; `kit.py llm ask --graph --dry-run` prints the whole
+prompt, facts included, without calling the model. The generated OKF `index.md` is a rendered view
+of the same graph.
 
 ## When to bring in an engine
 
@@ -108,7 +140,7 @@ Resolution order for a reference: markdown link path → wikilink stem → exact
 1. ~~`ontology.yml` + `--ontology` validation~~ done.
 2. ~~`kit.py graph` with JSON + N-Triples + JSON-LD + SQLite~~ done, tested on the sample vault.
 3. ~~Rules and derived facts, surfaced in validate~~ done (a dozen, toggled in `ontology.yml`).
-4. ~~Bridge tools and context packs~~ done; still open: measure with the qmd bench whether grounded answers improve.
+4. ~~Bridge tools and context packs~~ done — four tools plus `llm ask --graph`. Still open: measure with the qmd bench whether grounded answers actually improve, rather than assuming they do.
 5. `context.jsonld` exists; open: a SPARQL smoke test through Oxigraph over `graph.nt` — the point where the vault is a first-class linked-data artifact.
 6. Open: entity resolution across vaults (two people's vaults naming the same project), and a `graph diff` between two builds for change review.
 

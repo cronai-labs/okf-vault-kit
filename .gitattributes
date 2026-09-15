@@ -1,0 +1,21 @@
+# Git for Windows installs with core.autocrlf=true, so a Windows-side clone rewrites
+# these to CRLF on checkout. docs/platforms/wsl2.md tells testers to keep the clone on
+# the Windows side and run it from WSL, where a CRLF shebang fails as
+# `bad interpreter: /usr/bin/env bash^M` -- breaking the lane we recommend before the
+# tester runs anything of ours.
+
+* text=auto
+
+# Executed by a POSIX shell, wherever the checkout lives.
+*.sh text eol=lf
+
+# Python writes and re-reads vault files with newline="\n"; keeping the sources LF means
+# a Windows checkout cannot produce a diff that is only line endings.
+*.py text eol=lf
+
+# PowerShell is fine with either; CRLF is what a Windows editor expects.
+*.ps1 text eol=crlf
+
+# Vault content is Markdown the kit writes with explicit LF. Obsidian reads both.
+*.md text eol=lf
+*.base text eol=lf
