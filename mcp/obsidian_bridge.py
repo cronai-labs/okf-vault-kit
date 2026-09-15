@@ -147,9 +147,22 @@ class FsBackend:
                 continue
         return out
 
+    def _text(self, path: Path) -> str:
+        """The note's text, or a BridgeError naming it.
+
+        A note the kit cannot decode is not one to read out, and not one to append UTF-8 to or
+        rewrite the frontmatter of — that would leave a second encoding inside the same file.
+        The model gets the bridge's own error instead of a UnicodeDecodeError traceback.
+        """
+        text = kitlib.read_text(path)
+        if text is None:
+            rel = path.relative_to(self.vault).as_posix() if self.vault in path.parents else path.name
+            raise BridgeError(f"{rel} is not valid UTF-8, so no tool can read it — ask the user to re-save it as UTF-8")
+        return text
+
     # -- read side
     def read_note(self, file: str) -> str:
-        return self._resolve(file).read_text(encoding="utf-8")
+        return self._text(self._resolve(file))
 
     def list_files(self, folder: str = "") -> list[str]:
         base = self.vault / folder if folder else self.vault
@@ -185,9 +198,8 @@ class FsBackend:
         for p in kitlib.iter_markdown(self.vault):
             if p == target:
                 continue
-            try:
-                text = p.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
+            text = kitlib.read_text(p)
+            if text is None:
                 continue                      # unreadable note: skip it, do not fail the whole call
             if f"[[{stem}" in text or rel in text or f"{stem}.md" in text:
                 out.append(p.relative_to(self.vault).as_posix())
@@ -202,7 +214,7 @@ class FsBackend:
         body = content
         if template:
             tpl = self._resolve_template(template)
-            body = _render_template(tpl.read_text(encoding="utf-8"), path.stem) + ("\n" + content if content else "")
+            body = _render_template(self._text(tpl), path.stem) + ("\n" + content if content else "")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body if body.endswith("\n") else body + "\n", encoding="utf-8", newline="\n")
         self._graph_cache = None
@@ -210,8 +222,9 @@ class FsBackend:
 
     def append_note(self, file: str, content: str) -> str:
         path = self._resolve(file)
-        with path.open("a", encoding="utf-8") as fh:
-            fh.write(("" if path.read_text(encoding="utf-8").endswith("\n") else "\n") + content.rstrip("\n") + "\n")
+        text = self._text(path)
+        with path.open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write(("" if text.endswith("\n") else "\n") + content.rstrip("\n") + "\n")
         return path.relative_to(self.vault).as_posix()
 
     def daily_append(self, content: str, day: dt.date | None = None) -> str:
@@ -221,16 +234,35 @@ class FsBackend:
             cfg = kitlib.obsidian_config(self.vault, "daily-notes.json")
             tpl = self.vault / cfg.get("template", "90-templates/daily.md")
             path.parent.mkdir(parents=True, exist_ok=True)
-            text = _render_template(tpl.read_text(encoding="utf-8"), day.isoformat(), day) if tpl.exists() else f"# {day.isoformat()}\n"
+            tpl_text = kitlib.read_text(tpl) if tpl.exists() else None
+            text = _render_template(tpl_text, day.isoformat(), day) if tpl_text is not None else f"# {day.isoformat()}\n"
             path.write_text(text, encoding="utf-8", newline="\n")
             kitlib.set_frontmatter(path, {"description": f"Daily note for {day.isoformat()} (created by the vault bridge)."})
         return self.append_note(path.relative_to(self.vault).as_posix(), content)
 
     def set_property(self, file: str, name: str, value: Any) -> str:
         path = self._resolve(file)
+        self._text(path)                      # set_frontmatter rewrites the whole note; it has to read it first
         kitlib.set_frontmatter(path, {name: _coerce(value)})
         self._graph_cache = None
         return path.relative_to(self.vault).as_posix()
+
+    # -- what no reader can see
+    _skipped_cache: tuple[tuple[int, float], list[str]] | None = None
+
+    def skipped_files(self) -> list[str]:
+        """Vault files every reader skips because they are not valid UTF-8.
+
+        Cached against the note set (how many, and the newest mtime): naming them costs a read of
+        every note, and the read tools ask on each call.
+        """
+        stamps = [p.stat().st_mtime for p in kitlib.iter_markdown(self.vault)]
+        sig = (len(stamps), max(stamps, default=0.0))
+        if self._skipped_cache and self._skipped_cache[0] == sig:
+            return self._skipped_cache[1]
+        out = kitlib.undecodable(self.vault)
+        self._skipped_cache = (sig, out)
+        return out
 
     # -- graph side (rebuilt when any note changes)
     _graph_cache: tuple[float, "kitgraph.Graph"] | None = None
@@ -282,8 +314,12 @@ class FsBackend:
         except FileExistsError as exc:
             raise BridgeError(str(exc)) from exc
         self._graph_cache = None
+        # also_written names what the vault actually took: the log entry is skipped when log.md
+        # cannot be decoded, and a result that claims it anyway is the lie this tool used to tell.
+        also = [] if any(x.startswith("log.md") for x in m.skipped) else ["log.md"]
         return {"path": m.path, "people": m.people, "project": m.project, "unresolved": m.unresolved,
-                "actions": m.actions, "decisions": m.decisions, "outcomes": m.outcomes, "also_written": ["log.md"]}
+                "actions": m.actions, "decisions": m.decisions, "outcomes": m.outcomes,
+                "also_written": also, "skipped": list(m.skipped)}
 
 
 def _one_line(text: str) -> str:
@@ -332,6 +368,7 @@ class CliBackend:
     def graph_query(self, sql, limit=100): return self._need_fs().graph_query(sql, limit)
     def graph_context(self, node, depth=1): return self._need_fs().graph_context(node, depth)
     def todos(self, owner="", overdue_only=False): return self._need_fs().todos(owner, overdue_only)
+    def skipped_files(self): return self._fs.skipped_files() if self._fs else []
     def file_minutes(self, text, title, date="", project="", people="", kind="project", daily=True): return self._need_fs().file_minutes(text, title, date, project, people, kind, daily)
 
     def _resolve(self, file: str, must_exist: bool = True) -> Path:
@@ -420,6 +457,25 @@ def _sdk_hint(exc: ImportError) -> str:
             f"or with uv, which reads the pin from the script header:       uv run {Path(__file__).name} ...")
 
 
+def _announced(backend, payload: str) -> str:
+    """A whole-vault result, plus a line saying how much of the vault it could not see.
+
+    The CLI warns the user in their own terminal; a model has no terminal, so a tool that just
+    listed "everything" has to say when everything was short. Without it the model reads a
+    complete answer and tells the user the note does not exist.
+
+    The count, not the paths: an undecodable note is hidden from the model exactly because we
+    cannot read its frontmatter to see whether it is confidential, and that includes its name.
+    `kit.py validate` names them for the user.
+    """
+    skipped = backend.skipped_files() if hasattr(backend, "skipped_files") else []
+    if not skipped:
+        return payload
+    return (payload + f"\n\nnote: {len(skipped)} file(s) in this vault are not valid UTF-8 and are invisible to "
+            "every tool, so this result is incomplete — tell the user to run `kit.py validate` to see which, "
+            "and to re-save them as UTF-8.")
+
+
 def build_server(backend, host: str = "127.0.0.1", port: int = 8765, read_only: bool = False):
     from mcp.server.fastmcp import FastMCP
 
@@ -431,7 +487,7 @@ def build_server(backend, host: str = "127.0.0.1", port: int = 8765, read_only: 
     @mcp.tool(name="obsidian_search")
     def obsidian_search(query: str, limit: int = 10) -> str:
         """Keyword search across the vault. Returns matching note paths with a short snippet. Use before reading."""
-        return json.dumps(backend.search(query, limit), ensure_ascii=False, indent=1)
+        return _announced(backend, json.dumps(backend.search(query, limit), ensure_ascii=False, indent=1))
 
     @mcp.tool(name="obsidian_read_note")
     def obsidian_read_note(file: str) -> str:
@@ -441,7 +497,7 @@ def build_server(backend, host: str = "127.0.0.1", port: int = 8765, read_only: 
     @mcp.tool(name="obsidian_list_files")
     def obsidian_list_files(folder: str = "") -> str:
         """List markdown files, optionally under a folder prefix such as `03-projects`."""
-        return "\n".join(backend.list_files(folder))
+        return _announced(backend, "\n".join(backend.list_files(folder)))
 
     @mcp.tool(name="obsidian_backlinks")
     def obsidian_backlinks(file: str) -> str:
@@ -472,7 +528,7 @@ def build_server(backend, host: str = "127.0.0.1", port: int = 8765, read_only: 
     @mcp.tool(name="vault_todos")
     def vault_todos(owner: str = "", overdue_only: bool = False) -> str:
         """Every open task in the vault with file, line, owner and due date, plus done/open conflicts across notes. Filter by owner or overdue."""
-        return json.dumps(backend.todos(owner, overdue_only), ensure_ascii=False)
+        return _announced(backend, json.dumps(backend.todos(owner, overdue_only), ensure_ascii=False))
 
     if read_only:
         return mcp

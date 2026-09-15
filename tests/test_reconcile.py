@@ -338,3 +338,52 @@ class MinutesSections(unittest.TestCase):
             self.assertEqual([f.render() for f in g.findings if f.node == m.path], [], "no unresolved reference")
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
+
+
+class UndecodableFiles(unittest.TestCase):
+    """PowerShell 5.1's `Out-File` defaults to UTF-16, and a vault ends up with one such file.
+
+    Reconcile and minutes read three hubs, two templates and log.md outside `kitlib.load_vault`,
+    so each of those reads was its own way to lose the whole command to one file.
+    """
+
+    UTF16 = "---\ntype: project\n---\nnot utf-8\n".encode("utf-16")
+
+    def setUp(self):
+        self.v = temp_vault()
+
+    def tearDown(self):
+        shutil.rmtree(self.v.parent, ignore_errors=True)
+
+    def test_an_unreadable_hub_is_a_finding_and_the_other_passes_still_run(self):
+        (self.v / kitrecon.PROJECT_HUB).write_bytes(self.UTF16)
+        kitlib.set_frontmatter(self.v / "06-decisions/2026-09-08-adopt-qmd-for-local-search.md", {"state": "open"})
+        codes = [(c.code, c.file) for c in kitrecon.reconcile(self.v)]
+        self.assertIn(("hub_unreadable", kitrecon.PROJECT_HUB), codes)
+        self.assertIn(("priorities_missing_open_decision", kitrecon.PRIORITIES), codes,
+                      "the passes after the unreadable hub still run")
+
+    def test_filing_minutes_with_an_unreadable_log_keeps_the_note_and_names_the_skip(self):
+        (self.v / "log.md").write_bytes(self.UTF16)
+        m = kitrecon.file_minutes(self.v, "Decision: ship it.", "Repro sync", dt.date(2026, 9, 15))
+        self.assertTrue((self.v / m.path).exists(), "the note the caller asked for")
+        self.assertEqual((self.v / "log.md").read_bytes(), self.UTF16, "a log we cannot read is not one we rewrite")
+        self.assertTrue(any(s.startswith("log.md") for s in m.skipped), m.skipped)
+
+    def test_an_unreadable_meeting_template_still_files_a_conforming_note(self):
+        (self.v / "90-templates/meeting.md").write_bytes(self.UTF16)
+        m = kitrecon.file_minutes(self.v, "Decision: ship it.", "Repro sync", dt.date(2026, 9, 15))
+        note = kitlib.parse_note(self.v / m.path, self.v)
+        self.assertEqual(note.frontmatter["type"], "meeting")
+        self.assertTrue(any(s.startswith("90-templates/meeting.md") for s in m.skipped), m.skipped)
+
+    def test_an_unreadable_daily_note_is_named_rather_than_appended_to(self):
+        day = dt.date(2026, 9, 15)
+        daily = kitlib.daily_note_path(self.v, day)
+        daily.parent.mkdir(parents=True, exist_ok=True)
+        daily.write_bytes(self.UTF16)
+        m = kitrecon.file_minutes(self.v, "Decision: ship it.", "Repro sync", day, daily=True)
+        self.assertTrue((self.v / m.path).exists())
+        self.assertEqual(daily.read_bytes(), self.UTF16, "UTF-8 appended to a UTF-16 note is a second fault")
+        rel = daily.relative_to(self.v).as_posix()
+        self.assertTrue(any(s.startswith(rel) for s in m.skipped), m.skipped)

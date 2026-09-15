@@ -106,6 +106,23 @@ def split_frontmatter(text: str) -> tuple[str | None, str]:
     return m.group(1), text[m.end():]
 
 
+def read_text(path: Path) -> str | None:
+    """The file's text, or None when the kit cannot read it.
+
+    The rule `load_vault` follows, spelled once for every reader that does not go through it:
+    a file we cannot decode is skipped, never fatal. Returning None instead of raising is the
+    point — each caller has to say what "skipped" means there (no template, no ontology, a log
+    entry that does not get appended), and none of them may leave that decision to a traceback.
+
+    utf-8-sig for the same reason `parse_note` uses it: a byte-order mark is a legacy editor's
+    doing, not a decoding failure.
+    """
+    try:
+        return Path(path).read_text(encoding="utf-8-sig")
+    except (UnicodeDecodeError, OSError):
+        return None
+
+
 def parse_note(path: Path, root: Path) -> Note:
     # utf-8-sig, not utf-8: FM_RE is anchored at the start of the text, so a byte-order mark
     # (PowerShell 5.1, legacy Notepad) would hide the frontmatter of an otherwise valid note.
@@ -339,16 +356,10 @@ def check_links(root: Path) -> Report:
                 rep.errors.append(f"{p.relative_to(root).as_posix()}: cannot be read as UTF-8: {exc}")
     for path in iter_markdown(root):
         rel = path.relative_to(root).as_posix()
-        try:
-            text = _strip_code(path.read_text(encoding="utf-8"))
-        except (UnicodeDecodeError, OSError):
+        raw_text = read_text(path)
+        if raw_text is None:
             continue          # validate_okf already reports it; a second finding would only repeat
-        rep.checked += 1
-        try:
-            # utf-8-sig so a BOM'd note still parses; skip what cannot be decoded at all.
-            text = _strip_code(path.read_text(encoding="utf-8-sig"))
-        except (UnicodeDecodeError, OSError):
-            continue          # validate_okf already reports it; a second finding would only repeat
+        text = _strip_code(raw_text)
         rep.checked += 1
         for m in list(MD_LINK_RE.finditer(text)) + list(MD_IMAGE_RE.finditer(text)):
             target = m.group(1)
@@ -539,8 +550,14 @@ def slugify(text: str, max_len: int = 60) -> str:
     return s[:max_len].rstrip("-") or "note"
 
 
-def append_log(root: Path, message: str, kind: str = "Update", today: datetime.date | None = None) -> Path:
-    """Append an entry to the OKF log.md under today's heading (newest first)."""
+def append_log(root: Path, message: str, kind: str = "Update", today: datetime.date | None = None) -> Path | None:
+    """Append an entry to the OKF log.md under today's heading (newest first).
+
+    Returns None when log.md is there but cannot be decoded, having written nothing. Callers must
+    report that: this is the last step of tools that have already created a note, and raising here
+    left the vault changed while the tool reported failure. Rewriting a log we cannot read is the
+    one thing worse than skipping the entry — it would throw away the user's history.
+    """
     root = Path(root)
     log = root / "log.md"
     today = (today or datetime.date.today()).isoformat()
@@ -548,7 +565,10 @@ def append_log(root: Path, message: str, kind: str = "Update", today: datetime.d
     if not log.exists():
         log.write_text(f"# Vault Update Log\n\n## {today}\n{entry}\n", encoding="utf-8", newline="\n")
         return log
-    lines = log.read_text(encoding="utf-8").splitlines()
+    text = read_text(log)
+    if text is None:
+        return None
+    lines = text.splitlines()
     heading = f"## {today}"
     if heading in lines:
         lines.insert(lines.index(heading) + 1, entry)

@@ -99,6 +99,33 @@ class KitCli(unittest.TestCase):
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
 
+    def test_an_undecodable_file_outside_the_note_set_is_not_fatal_to_any_command(self):
+        """The vault holds four files no `load_vault` ever sees — the ontology, the JSON-LD
+        context, the hubs and the templates — and each was read without a guard."""
+        for rel in ("99-system/ontology.yml", "context.jsonld", "03-projects/projects.md", "90-templates/meeting.md"):
+            v = temp_vault()
+            try:
+                (v / rel).write_bytes("---\ntype: concept\n---\nUTF16\n".encode("utf-16"))
+                for argv in (("validate",), ("graph", "build"), ("reconcile",), ("todos",), ("index",)):
+                    c = run(*argv, "--vault", str(v))
+                    self.assertNotIn("Traceback", c.stderr, f"{argv} crashed on an undecodable {rel}")
+                    self.assertIn(c.returncode, (0, 1, 2), f"{argv} on {rel}: {c.stderr[-400:]}")
+            finally:
+                shutil.rmtree(v.parent, ignore_errors=True)
+
+    def test_logging_into_an_undecodable_log_reports_it_rather_than_crashing(self):
+        v = temp_vault()
+        try:
+            raw = "# Vault Update Log\n".encode("utf-16")
+            (v / "log.md").write_bytes(raw)
+            r = run("log", "a line nobody will read", "--vault", str(v))
+            self.assertNotIn("Traceback", r.stderr)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("log.md is not valid UTF-8", r.stdout)
+            self.assertEqual((v / "log.md").read_bytes(), raw, "nothing written, and the log not rewritten")
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
     def test_an_undecodable_template_does_not_stop_the_graph_build(self):
         """The graph reads 90-templates directly to name the vault owner; one UTF-16 file killed it."""
         v = temp_vault()

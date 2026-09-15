@@ -312,9 +312,8 @@ def cmd_init(args) -> int:
             sys.exit("actor must look like human:<handle>")
         n = skipped = 0
         for p in kitlib.iter_markdown(target):
-            try:
-                text = p.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
+            text = kitlib.read_text(p)
+            if text is None:
                 # `--force` runs over a directory that already has files in it, so one of them can
                 # be UTF-16. Rewriting bytes we cannot decode would corrupt the note; say so and
                 # leave it alone. `kit.py validate` names it again, in full.
@@ -400,7 +399,9 @@ def cmd_validate(args) -> int:
 
 def cmd_log(args) -> int:
     vault = _vault(args.vault)
-    kitlib.append_log(vault, args.message, args.kind)
+    if kitlib.append_log(vault, args.message, args.kind) is None:
+        print("log.md is not valid UTF-8 — nothing was written; re-save it as UTF-8 and log again")
+        return 1
     print(f"logged under {dt.date.today().isoformat()}: * **{args.kind}**: {args.message}")
     return 0
 
@@ -641,6 +642,8 @@ def cmd_todos(args) -> int:
             print(f"  CONFLICT  {grp[0].text}  in " + ", ".join(f"{t.file}:{t.line}{'(done)' if t.done else ''}" for t in grp))
         if rep.synced:
             print(f"  synced {len(rep.synced)} task(s) to done")
+        for skip in rep.skipped:
+            print(f"  skipped: {skip}")
     if args.digest is not None:
         out = kitrecon.write_digest(vault, rep, args.digest or kitrecon.DIGEST)
         print(f"digest written: {out}")
@@ -681,6 +684,8 @@ def cmd_minutes(args) -> int:
     print(f"  {len(m.outcomes)} outcomes, {len(m.decisions)} decisions, {len(m.actions)} actions")
     for a in m.actions:
         print("  " + a)
+    for skip in m.skipped:
+        print(f"  skipped: {skip}")
     return 0
 
 

@@ -238,6 +238,15 @@ class PolicyLayer(unittest.TestCase):
         with self.assertRaises(bp.PolicyError):
             g.read_note("07-knowledge/utf16.md")
 
+    def test_show_confidential_reports_an_undecodable_note_instead_of_raising(self):
+        """Hiding is what caught this file by default; with hiding off nothing else did, and the
+        tool answered with a UnicodeDecodeError traceback."""
+        (self.vault / "07-knowledge/utf16.md").write_bytes("---\ntype: concept\n---\nUTF16\n".encode("utf-16"))
+        g = guarded(self.vault, hide_confidential=False)
+        with self.assertRaises(ob.BridgeError) as caught:
+            g.read_note("07-knowledge/utf16.md")
+        self.assertIn("not valid UTF-8", str(caught.exception))
+
     def test_cli_backend_resolves_short_names_before_hiding(self):
         """The CLI resolves short names against its index; the policy layer has to resolve them too."""
         class StubCli(ob.CliBackend):
