@@ -67,6 +67,31 @@ class Housekeeping(unittest.TestCase):
         self.assertIn(".ruff_cache", make_target("clean"), "`make lint` writes it into the checkout")
 
 
+class NextVersion(unittest.TestCase):
+    """`make next-version` is what a maintainer reads before cutting a release."""
+
+    RECIPE = next(block for block in MAKEFILE.split("\n\n") if block.startswith("next-version:"))
+
+    def test_the_first_release_is_not_reported_as_nothing_to_release(self):
+        """Before any tag exists git-cliff falls back to initial_tag, which equals VERSION.
+
+        Treating that as "nothing releasable landed" told the maintainer the opposite of the truth
+        at the one moment it mattered — ten releasable commits were on main. The recipe has to ask
+        whether a tag exists *before* it compares to VERSION. (#36)
+        """
+        tag_check = self.RECIPE.find("git tag -l")
+        version_compare = self.RECIPE.find('= "$(VERSION)"')
+        self.assertNotEqual(tag_check, -1,
+                            "next-version must distinguish 'no tag yet' from 'nothing to release'")
+        self.assertNotEqual(version_compare, -1, "the nothing-to-release branch is still wanted")
+        self.assertLess(tag_check, version_compare,
+                        "the tag check has to come first, or the first release is misreported")
+
+    def test_both_outcomes_are_still_explained(self):
+        self.assertIn("initial_tag", self.RECIPE)
+        self.assertIn("no releasable changes", self.RECIPE)
+
+
 class ReleaseGuards(unittest.TestCase):
     """`make release` archives HEAD, so it must refuse whenever HEAD is not what was checked."""
 
