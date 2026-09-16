@@ -4,8 +4,10 @@ body:
   - type: markdown
     attributes:
       value: |
-        The fastest useful thing you can attach is a test-kit report. One command,
-        and it carries no note content, no vault paths and no username:
+        The fastest useful thing you can attach is a test-kit report. One command. It
+        carries no note content; paths are reduced to a bare filename, URLs to scheme
+        and port, and tokens carrying your account or machine name are replaced. Have
+        a look before you attach it:
 
         ```
         ./testkit/run.sh --quick        # macOS, Linux, WSL2

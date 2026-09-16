@@ -7,8 +7,9 @@
 Every step is recorded, not asserted: a step that cannot run on this machine is SKIP with a
 reason, never a failure. A tester behind a blocked registry still returns a useful report.
 
-The report carries the same guarantee as `kit.py doctor --report`: no note content, no paths
-from inside a vault, no username. Everything written goes through redact().
+The report carries the same guarantee as `kit.py doctor --report`, because it uses the same
+redactor: no note content, paths reduced to a bare filename, URLs to scheme and port, and
+tokens carrying the account or machine name replaced. Everything written goes through redact().
 
     uv run testkit/testkit.py                 # full run, report next to the kit
     uv run testkit/testkit.py --quick         # skip the model and index legs
@@ -17,8 +18,7 @@ from inside a vault, no username. Everything written goes through redact().
 from __future__ import annotations
 
 import argparse
-import contextlib
-import getpass
+import datetime as dt
 import os
 import platform
 import re
@@ -36,34 +36,19 @@ PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 
 
 # --------------------------------------------------------------------------- redaction
-def _secrets() -> list[str]:
-    """Tokens that must never reach the report, longest first so substrings do not survive."""
-    out = {str(Path.home()), os.environ.get("USERPROFILE", ""), os.environ.get("HOME", "")}
-    with contextlib.suppress(Exception):   # no account name to read is not a reason to fail
-        out.add(getpass.getuser())
-    for var in ("USER", "USERNAME", "LOGNAME"):
-        out.add(os.environ.get(var, ""))
-    return sorted((s for s in out if s and len(s) > 2), key=len, reverse=True)
-
+# The kit's redactor, not a second one. This module used to re-implement it, weakly: it stripped
+# only the first segment after /Users or /home, stopped at the first space on Windows (so
+# "First Last" left "Last" in the report), and ignored any vault outside those roots entirely.
+# kitredact is stdlib-only for exactly this import — see its docstring.
+sys.path.insert(0, str(ROOT))
+import kitredact  # noqa: E402
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
-_URL = re.compile(r"\b([a-z][a-z0-9+.-]*)://(?:[^/\s@]*@)?([^/\s:]+)(:\d+)?", re.I)
-_WINPATH = re.compile(r"[A-Za-z]:\\[^\s\"']+")
-_POSIXPATH = re.compile(r"/(?:Users|home)/[^\s/\"']+")
 
 
 def redact(text: str) -> str:
-    """Strip usernames, home directories, and URL credentials/hosts from a fragment."""
-    if not text:
-        return text
-    out = str(text)
-    # URL userinfo and host go first: a hostname often embeds the username.
-    out = _URL.sub(lambda m: f"{m.group(1)}://<host>{m.group(3) or ''}", out)
-    out = _WINPATH.sub("<path>", out)
-    out = _POSIXPATH.sub("<path>", out)
-    for secret in _secrets():
-        out = re.sub(re.escape(secret), "<redacted>", out, flags=re.I)
-    return out
+    """Reduce paths to a basename, URLs to scheme and port, and drop the owner's name."""
+    return kitredact.scrub(str(text)) if text else text
 
 
 # --------------------------------------------------------------------------- runner
@@ -118,17 +103,41 @@ def step(rep: Report, name: str, cmd: list[str], *, cwd: Path | None = None,
     return rc, out
 
 
+def _kit_version() -> str:
+    """Read VERSION directly: kitlib would pull in PyYAML, which may be why the report exists."""
+    try:
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip() or "(unreadable)"
+    except OSError:
+        return "(unreadable)"
+
+
 def have(tool: str) -> bool:
     return shutil.which(tool) is not None
 
 
+_VERSION_TOKEN = re.compile(r"\b\d+\.\d+(?:\.\d+)?(?:[-+][0-9A-Za-z.\-]+)?\b")
+
+
 def _version_of(tool: str, flag: str) -> str:
-    """First line that looks like a version. Some CLIs answer with an ANSI banner."""
+    """The version token itself, not the line that carried it.
+
+    `lms version` answers with a box-drawing banner, and returning the first LINE containing
+    `\\d+\\.\\d+` shipped the art into the report — and sometimes matched the border rather than
+    the version, so the row said nothing useful about LM Studio at all.
+    """
     out = _ANSI.sub("", run([tool, flag], timeout=30)[1])
     for line in out.splitlines():
         line = line.strip()
-        if re.search(r"\d+\.\d+", line):
-            return line[:60]
+        if not line:
+            continue
+        # A banner line is mostly box-drawing and punctuation; a version line is mostly word
+        # characters. Cheap, and it does not need to know each vendor's art.
+        wordish = sum(c.isalnum() or c in "._-+ " for c in line)
+        if wordish < len(line) * 0.6:
+            continue
+        m = _VERSION_TOKEN.search(line)
+        if m:
+            return m.group(0)[:60]
     return (out.strip().splitlines() or ["(no version output)"])[0][:60]
 
 
@@ -149,7 +158,14 @@ def main() -> int:
     print(f"okf-vault-kit test kit -- scratch at {scratch}\n")
 
     # 1. environment ---------------------------------------------------------
-    env_rows = [("os", f"{platform.system()} {platform.release()} ({platform.machine()})"),
+    # Without these three, every report needs a follow-up question: which build was this, when,
+    # and was it behind a proxy. All three are already known here and were being thrown away.
+    proxies = sorted(v for v in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY")
+                     if os.environ.get(v) or os.environ.get(v.lower()))
+    env_rows = [("kit version", _kit_version()),
+                ("report written", dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")),
+                ("proxy", ", ".join(proxies) if proxies else "none set"),
+                ("os", f"{platform.system()} {platform.release()} ({platform.machine()})"),
                 ("python", platform.python_version())]
     for tool, flag in (("uv", "--version"), ("bun", "--version"), ("qmd", "--version"),
                        ("lms", "version"), ("obsidian", "version"), ("node", "--version")):
@@ -158,8 +174,11 @@ def main() -> int:
 
     # 2. doctor --------------------------------------------------------------
     rc, doctor_out = run([PY, str(ROOT / "kit.py"), "doctor"], cwd=ROOT, timeout=180)
-    rep.add("kit.py doctor", PASS if rc in (0, 1) else FAIL,
-            "" if rc in (0, 1) else f"exit {rc}\n{doctor_out[-1500:]}")
+    # `doctor` returns 1 only when the interpreter is below the supported floor, which the kit
+    # cannot work around. Bucketing it with 0 reported PASS for the one environment problem the
+    # test kit exists to surface.
+    rep.add("kit.py doctor", PASS if rc == 0 else FAIL,
+            "" if rc == 0 else f"exit {rc}\n{doctor_out[-1500:]}")
 
     # 3. the offline suite, on the pinned SDK --------------------------------
     step(rep, "offline test suite (mcp 2.x)",
@@ -254,7 +273,9 @@ def main() -> int:
     c = rep.counts()
     print(f"\n{c[PASS]} passed, {c[FAIL]} failed, {c[SKIP]} skipped")
     print(f"report: {out_path}")
-    print("\nSend that file back. It contains no note content, no vault paths and no username.")
+    print("\nSend that file back. Paths are reduced to a bare filename, URLs to scheme and port, "
+          "and anything carrying your account or machine name is replaced — the same redactor "
+          "`kit.py doctor --report` uses. Read it before sending.")
     return 1 if c[FAIL] else 0
 
 
@@ -286,7 +307,10 @@ def render(rep: Report, env_rows: list[tuple[str, str]]) -> str:
         "# okf-vault-kit test kit report", "",
         (f"{c[PASS]} passed / {c[FAIL]} failed / {c[SKIP]} skipped"
          f"  --  {round(time.time() - rep.started)}s total"), "",
-        "No note content, no vault paths and no username appear below.", "",
+        ("No note content appears below. Paths are reduced to a bare filename, URLs to scheme "
+         "and port, and tokens carrying the account or machine name are replaced. A relative "
+         "path typed by hand (`--vault Client/notes`) is the one case the redactor cannot "
+         "reduce — check for it before sending."), "",
         "## Environment", "", "| | |", "|---|---|",
     ]
     lines += [f"| {k} | {redact(v)} |" for k, v in env_rows]
