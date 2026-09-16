@@ -2,7 +2,7 @@
 # `test-qmd` on the end-to-end lane — so local and CI cannot drift.
 # Tests run on the *minimum* supported Python: 3.13 hid a 3.11-only failure once already.
 PY      ?= 3.11
-MCP     ?= mcp<2
+MCP     ?= mcp>=2,<3
 VERSION := $(shell cat VERSION)
 DIST    ?= dist
 

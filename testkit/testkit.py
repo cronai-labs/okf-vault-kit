@@ -164,8 +164,8 @@ def main() -> int:
             "" if rc in (0, 1) else f"exit {rc}\n{doctor_out[-1500:]}")
 
     # 3. the offline suite, on the pinned SDK --------------------------------
-    step(rep, "offline test suite (mcp<2)",
-         ["uv", "run", "--with", "mcp<2", str(ROOT / "kit.py"), "test"],
+    step(rep, "offline test suite (mcp 2.x)",
+         ["uv", "run", "--with", "mcp>=2,<3", str(ROOT / "kit.py"), "test"],
          cwd=ROOT, timeout=900, skip_if=None if have("uv") else "uv not installed")
 
     # 4. init ----------------------------------------------------------------
@@ -241,7 +241,7 @@ def main() -> int:
     # Run from the scratch directory, not the repo: the repo's own `mcp/` folder would shadow
     # the `mcp` package on sys.path[0]. --no-project keeps uv from building a .venv here.
     step(rep, "MCP stdio session (14 tools)",
-         ["uv", "run", "--no-project", "--with", "mcp<2", "python", "-c", MCP_PROBE,
+         ["uv", "run", "--no-project", "--with", "mcp>=2,<3", "python", "-c", MCP_PROBE,
           str(ROOT), str(vault)],
          cwd=scratch, timeout=300, skip_if=gate or (None if have("uv") else "uv not installed"))
 

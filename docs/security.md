@@ -38,6 +38,7 @@ Remember the parts the layer does not cover: it cannot judge *content*. A model 
 
 - Both tool servers bind `127.0.0.1` by default; the bridge warns when started on another address without a token.
 - Bridge over HTTP: `--token <secret>` (or `KIT_BRIDGE_TOKEN`; `--token new` prints a fresh one). Requests without `Authorization: Bearer <secret>` get 401. Clients: `kit.py mcp-config --bridge-http --bridge-token <secret>` writes the header into `mcp.json`.
+- The bridge's HTTP app is told the address it was started on and answers `421` to a request whose `Host` header names anything else, so a page open in a browser cannot reach a loopback bridge through a name that resolves to `127.0.0.1`. `--host` is what configures it; the bearer token is checked in front of it either way.
 - qmd's HTTP server has no auth: keep it on loopback or put Caddy/nginx with a token in front.
 - LM Studio's server can require an API token (`LM_API_TOKEN` in its settings); `KIT_LLM_API_KEY` passes it. Ollama has none — treat it like qmd.
 - Remote access: SSH tunnel or Tailscale, never a `0.0.0.0` publish on a shared network. Unsloth's Cloudflare *remote access* tunnel is convenient and is a third-party relay in front of your notes — leave it off if data residency matters.

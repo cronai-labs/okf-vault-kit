@@ -105,7 +105,7 @@ NDA-covered, and do not attach those notes to a hosted assistant.
 ## Verifying the above
 
 ```bash
-uv run kit.py doctor                 # what is installed, what is reachable, which providers are active
-uv run --with 'mcp<2' kit.py test    # the test suite, offline
+uv run kit.py doctor                     # what is installed, what is reachable, which providers are active
+uv run --with 'mcp>=2,<3' kit.py test    # the test suite, offline
 grep -rn "urlopen" kit.py kitproviders.py mcp/    # every outbound call; all of them go to KIT_LLM_BASE_URL
 ```

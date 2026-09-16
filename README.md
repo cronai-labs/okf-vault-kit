@@ -14,7 +14,7 @@ lms get openbmb/MiniCPM5-2B-GGUF && lms server start   # or Unsloth Desktop / Ol
 uv run kit.py mcp-config --client lmstudio --write     # the chat window gets the tools
 uv run kit.py llm ask "what is blocking the pilot" --graph   # search + graph facts → model, with citations
 uv run kit.py graph build && uv run kit.py reconcile   # the vault as a graph; hubs vs notes
-uv run --with 'mcp<2' kit.py test                      # prove it
+uv run --with 'mcp>=2,<3' kit.py test                  # prove it
 ```
 
 `uv run` provisions each script's declared dependencies on the fly; plain `python kit.py …` works too once PyYAML is installed.

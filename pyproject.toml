@@ -19,7 +19,7 @@ py-modules = ["kit", "kitlib", "kitgraph", "kitrecon", "kitproviders"]
 version = { file = "VERSION" }
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2,<2"]  # v1 API: 2.x renamed FastMCP to MCPServer, see issue #13
+mcp = ["mcp>=2,<3"]  # the bridge targets the 2.x server API; a new major renames it again
 test = ["pytest>=8"]
 
 [tool.pytest.ini_options]

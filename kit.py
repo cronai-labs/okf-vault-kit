@@ -127,13 +127,13 @@ def cmd_doctor(args) -> int:
     # SDK present on exactly the machines where it is absent.
     try:
         _mcp_version = importlib.metadata.version("mcp")
-        if int(_mcp_version.split(".")[0]) >= 2:
-            rows.append(("mcp (python sdk)", _mcp_version,
-                         "the bridge targets the v1 API — pip install 'mcp<2'"))
-        else:
+        if _mcp_version.split(".")[0] == "2":
             rows.append(("mcp (python sdk)", _mcp_version, "ok"))
+        else:
+            rows.append(("mcp (python sdk)", _mcp_version,
+                         "the bridge targets the 2.x API — pip install 'mcp>=2,<3'"))
     except importlib.metadata.PackageNotFoundError:
-        rows.append(("mcp (python sdk)", "-", "pip install 'mcp<2' — needed only for the Obsidian MCP bridge"))
+        rows.append(("mcp (python sdk)", "-", "pip install 'mcp>=2,<3' — needed only for the Obsidian MCP bridge"))
     base = args.base_url or DEFAULT_BASE_URL
     proxies = kitproviders.proxy_vars()
     if proxies:

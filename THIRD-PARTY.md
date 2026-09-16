@@ -11,7 +11,7 @@ first question from a corporate reviewer is always "what else comes with it".
 | [qmd](https://www.npmjs.com/package/@tobilu/qmd) | MIT | `bun install -g @tobilu/qmd` (or npm) | On-device hybrid search. Optional — the kit falls back to its own search provider when qmd is absent. |
 | [Bun](https://bun.sh) | MIT | Homebrew / winget | Runtime for qmd only. |
 | [uv](https://github.com/astral-sh/uv) | MIT or Apache-2.0 | Homebrew / winget | Runs `kit.py` and the bridge with their declared dependencies. |
-| [MCP Python SDK](https://pypi.org/project/mcp/) | MIT | `uv run` / `pip`, pinned `>=1.2,<2` | Only needed for the MCP bridge. |
+| [MCP Python SDK](https://pypi.org/project/mcp/) | MIT | `uv run` / `pip`, pinned `>=2,<3` | Only needed for the MCP bridge. |
 | [PyYAML](https://pypi.org/project/PyYAML/) | MIT | `uv run` / `pip` | Frontmatter parsing. |
 | [Obsidian](https://obsidian.md) | Proprietary, free for personal use | obsidian.md / winget | **Commercial use needs a paid licence.** Check this before rolling the kit out at work — it is the one component with a per-seat cost. |
 | [LM Studio](https://lmstudio.ai) | Proprietary, free for personal and work use | lmstudio.ai / winget | Optional. Any OpenAI-compatible endpoint works instead: llama.cpp's `llama-server`, Ollama, vLLM. |
