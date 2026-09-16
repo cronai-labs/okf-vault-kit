@@ -88,9 +88,16 @@ class ReleaseNotes(unittest.TestCase):
         already titles the release with the tag, so the body must not carry a heading at all —
         publishing one is the only way for it to be wrong. (#41)
         """
+        bash = shutil.which("bash")
+        if bash is None or sys.platform == "win32":
+            # Same guard as test_the_script_parses below, for the same reason and one more: the
+            # step is `runs-on: ubuntu-latest` and calls `python3`, which a Windows shell does not
+            # have. A bare "bash" is worse still -- Windows resolves it to System32\bash.exe, the
+            # WSL stub, which answers "no installed distributions" in UTF-16.
+            self.skipTest("the release job runs on ubuntu")
         with tempfile.TemporaryDirectory() as tmp:
             shutil.copy(ROOT / "CHANGELOG.md", Path(tmp) / "CHANGELOG.md")
-            r = subprocess.run(["bash", "-c", self._notes_step()], cwd=tmp,
+            r = subprocess.run([bash, "-c", self._notes_step()], cwd=tmp,
                                capture_output=True, text=True, check=False)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             notes = (Path(tmp) / "NOTES.md").read_text(encoding="utf-8")
