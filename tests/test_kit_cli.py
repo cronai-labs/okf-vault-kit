@@ -208,7 +208,7 @@ class KitCli(unittest.TestCase):
             shutil.rmtree(v.parent, ignore_errors=True)
 
     def test_mcp_config_prints_valid_json(self):
-        r = run("mcp-config", "--client", "lmstudio", "--vault", str(VAULT), env=dict(os.environ, KIT_NO_UV="1"))
+        r = run("mcp-config", "--client", "lmstudio", "--vault", str(VAULT), "--with-qmd-mcp", env=dict(os.environ, KIT_NO_UV="1"))
         self.assertEqual(r.returncode, 0, r.stderr)
         cfg = json.loads(r.stdout.split("\n# would be written")[0])
         qmd = cfg["mcpServers"]["qmd"]
@@ -248,7 +248,7 @@ class KitCli(unittest.TestCase):
             cfg_path = tmp / ".lmstudio" / "mcp.json"
             cfg_path.parent.mkdir(parents=True)
             cfg_path.write_text(json.dumps({"mcpServers": {"other": {"url": "http://x"}}}), encoding="utf-8")
-            r = run("mcp-config", "--client", "lmstudio", "--vault", str(v), "--write", "--qmd-http", env=env)
+            r = run("mcp-config", "--client", "lmstudio", "--vault", str(v), "--write", "--with-qmd-mcp", "--qmd-http", env=env)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             data = json.loads(cfg_path.read_text(encoding="utf-8"))
             self.assertIn("other", data["mcpServers"])

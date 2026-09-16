@@ -459,15 +459,28 @@ def cmd_mcp_config(args) -> int:
     bridge = ROOT / "mcp" / "obsidian_bridge.py"
     notes: list[str] = []
     servers: dict = {}
-    if args.qmd_http:
-        servers["qmd"] = {"url": "http://localhost:8181/mcp"}
+    # qmd's own MCP server has no policy layer: it indexes the whole vault, confidential notes
+    # included, and answers `query`/`get` straight from that index. Registering it alongside the
+    # bridge would hand the model a second door into exactly what the bridge hides, and
+    # `qmd collection add` takes no ignore list, so there is no mask that fixes it. The bridge's
+    # own `obsidian_search` serves search and does honour the policy. Opt in knowingly or not at all.
+    if args.with_qmd_mcp:
+        if args.qmd_http:
+            servers["qmd"] = {"url": "http://localhost:8181/mcp"}
+        else:
+            qmd = _qmd()              # resolved path: the client spawns this, and a .cmd shim needs the full name
+            if not qmd:
+                notes.append("# qmd is not on PATH, so its entry says \"qmd\" — an MCP client on Windows cannot spawn "
+                             "that (the installer writes qmd.cmd and CreateProcess only appends .exe). Install qmd and "
+                             "re-run this command, or put the full path to qmd(.cmd) in the entry by hand.")
+            servers["qmd"] = {"command": qmd or "qmd", "args": ["mcp"]}
+        notes.append("# WARNING: the qmd server below is NOT behind this kit's policy layer. It indexes every note, "
+                     "including sensitivity: confidential, and answers from that index — so docs/security.md's "
+                     "confidential-hiding does not hold for the tools it exposes. Drop --with-qmd-mcp to remove it.")
     else:
-        qmd = _qmd()                  # resolved path: the client spawns this, and a .cmd shim needs the full name
-        if not qmd:
-            notes.append("# qmd is not on PATH, so its entry says \"qmd\" — an MCP client on Windows cannot spawn "
-                         "that (the installer writes qmd.cmd and CreateProcess only appends .exe). Install qmd and "
-                         "re-run this command, or put the full path to qmd(.cmd) in the entry by hand.")
-        servers["qmd"] = {"command": qmd or "qmd", "args": ["mcp"]}
+        notes.append("# qmd's MCP server is not registered: it has no policy layer and would expose the confidential "
+                     "notes the bridge hides (docs/security.md). Search still works — the bridge's obsidian_search "
+                     "uses the same qmd index and applies the policy. Pass --with-qmd-mcp to register it anyway.")
     bridge_args = [str(bridge), "--backend", args.backend, "--vault", str(vault)]
     uv = None if (args.no_uv or os.environ.get("KIT_NO_UV")) else _which("uv")
     if uv:
@@ -856,7 +869,13 @@ def _confidential(vault: Path, rel: str) -> bool:
         note = kitlib.parse_note(path, vault)
     except Exception:  # noqa: BLE001 — an unreadable note is not a reason to leak it
         return True
-    return str((note.frontmatter or {}).get("sensitivity", "")).lower() == "confidential"
+    if note.frontmatter is None:
+        # Fail closed, like the bridge: a note whose YAML has any syntax error, or whose block a
+        # BOM hid, would otherwise have its body placed verbatim into the prompt. An unresolvable
+        # path stays False above — the bridge answers False there too, and mirroring it wrongly
+        # would withhold notes that are fine.
+        return bool(note.fm_error) or kitlib.unparsed_frontmatter(note.body)
+    return str(note.frontmatter.get("sensitivity", "")).lower() == "confidential"
 
 
 def _search_hits(vault: Path, question: str, n: int, collection: str | None,
@@ -983,7 +1002,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("mcp-config", help="print or write an mcp.json for qmd + the Obsidian bridge")
     p.add_argument("--client", choices=["lmstudio", "claude-desktop", "cursor"], default="lmstudio"); p.add_argument("--vault")
     p.add_argument("--backend", choices=["fs", "cli"], default="fs", help="bridge backend: fs (direct files, headless) or cli (official Obsidian CLI, app running)")
-    p.add_argument("--vault-name", help="Obsidian vault name for the cli backend"); p.add_argument("--qmd-http", action="store_true", help="use qmd's HTTP MCP transport on :8181 instead of stdio")
+    p.add_argument("--vault-name", help="Obsidian vault name for the cli backend"); p.add_argument("--with-qmd-mcp", action="store_true", help="also register qmd's own MCP server — it has NO policy layer and exposes confidential notes (off by default)")
+    p.add_argument("--qmd-http", action="store_true", help="when registering qmd (--with-qmd-mcp), use its HTTP transport on :8181 instead of stdio")
     p.add_argument("--no-uv", action="store_true", help="launch the bridge with this Python instead of `uv run` (also KIT_NO_UV=1)")
     p.add_argument("--bridge-http", action="store_true", help="point the client at an already running `obsidian_bridge.py --http` instead of spawning it"); p.add_argument("--bridge-port", type=int, default=8765)
     p.add_argument("--bridge-token", help="bearer token the running HTTP bridge expects (sent as an Authorization header)")
