@@ -17,8 +17,8 @@ from inside a vault, no username. Everything written goes through redact().
 from __future__ import annotations
 
 import argparse
+import contextlib
 import getpass
-import json
 import os
 import platform
 import re
@@ -39,10 +39,8 @@ PASS, FAIL, SKIP = "PASS", "FAIL", "SKIP"
 def _secrets() -> list[str]:
     """Tokens that must never reach the report, longest first so substrings do not survive."""
     out = {str(Path.home()), os.environ.get("USERPROFILE", ""), os.environ.get("HOME", "")}
-    try:
+    with contextlib.suppress(Exception):   # no account name to read is not a reason to fail
         out.add(getpass.getuser())
-    except Exception:
-        pass
     for var in ("USER", "USERNAME", "LOGNAME"):
         out.add(os.environ.get(var, ""))
     return sorted((s for s in out if s and len(s) > 2), key=len, reverse=True)
@@ -97,7 +95,7 @@ def run(cmd: list[str], cwd: Path | None = None, timeout: int = 300,
     try:
         p = subprocess.run(cmd, cwd=str(cwd) if cwd else None, capture_output=True,
                            text=True, encoding="utf-8", errors="replace",
-                           timeout=timeout, env=full)
+                           timeout=timeout, env=full, check=False)
         return p.returncode, (p.stdout or "") + (p.stderr or "")
     except FileNotFoundError:
         return 127, f"not found: {cmd[0]}"
@@ -286,8 +284,8 @@ def render(rep: Report, env_rows: list[tuple[str, str]]) -> str:
     c = rep.counts()
     lines = [
         "# okf-vault-kit test kit report", "",
-        f"{c[PASS]} passed / {c[FAIL]} failed / {c[SKIP]} skipped"
-        f"  --  {round(time.time() - rep.started)}s total", "",
+        (f"{c[PASS]} passed / {c[FAIL]} failed / {c[SKIP]} skipped"
+         f"  --  {round(time.time() - rep.started)}s total"), "",
         "No note content, no vault paths and no username appear below.", "",
         "## Environment", "", "| | |", "|---|---|",
     ]

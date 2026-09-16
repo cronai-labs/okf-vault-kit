@@ -4,18 +4,18 @@ import asyncio
 import json
 import os
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
 import unittest
 from pathlib import Path
 
-
 from tests.helpers import ROOT, VAULT, kitlib, temp_vault
 
 sys.path.insert(0, str(ROOT / "mcp"))
-import bridge_policy as bp  # noqa: E402
-import obsidian_bridge as ob  # noqa: E402
+import bridge_policy as bp
+import obsidian_bridge as ob
 
 KIT = [sys.executable, str(ROOT / "kit.py")]
 
@@ -112,14 +112,14 @@ class PolicyLayer(unittest.TestCase):
 
     def test_bridge_flags_selftest(self):
         r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(self.vault),
-                            "--read-only", "--propose", "--allow-write", "02-meetings", "--no-audit", "--selftest"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+                            "--read-only", "--propose", "--allow-write", "02-meetings", "--no-audit", "--selftest"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("policy: read-only; propose; confidential hidden", r.stdout)
 
     def test_cli_backend_without_a_vault_refuses_to_start(self):
         """`confidential hidden` in the banner has to mean the check can run."""
         r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "cli", "--vault-name", "v", "--selftest"],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 1)
         self.assertIn("confidential hiding needs the vault", r.stderr)
 
@@ -215,7 +215,7 @@ class PolicyLayer(unittest.TestCase):
         g = guarded(self.vault)
         before = g.graph_query("select count(*) as n from nodes")["rows"][0][0]
         for sql in ("with x as (select 1) delete from nodes", "with x as (select 1) update nodes set title='x'"):
-            with self.assertRaises(Exception, msg=sql):
+            with self.assertRaises((ValueError, sqlite3.Error), msg=sql):
                 g.graph_query(sql)
         self.assertEqual(g.graph_query("select count(*) as n from nodes")["rows"][0][0], before)
 
@@ -268,15 +268,15 @@ class ProposalsCli(unittest.TestCase):
             g = guarded(v, propose=True)
             pid1 = g.append_note("03-projects/search-relaunch.md", "- applied via proposal").split(":")[1].split(" ")[0]
             pid2 = g.daily_append("- rejected via proposal").split(":")[1].split(" ")[0]
-            r = subprocess.run(KIT + ["proposals", "list", "--vault", str(v)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+            r = subprocess.run(KIT + ["proposals", "list", "--vault", str(v)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
             self.assertIn(pid1, r.stdout); self.assertIn(pid2, r.stdout)
-            r = subprocess.run(KIT + ["proposals", "apply", pid1, "--vault", str(v)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+            r = subprocess.run(KIT + ["proposals", "apply", pid1, "--vault", str(v)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("- applied via proposal", (v / "03-projects/search-relaunch.md").read_text(encoding="utf-8"))
             self.assertIn("Applied proposal", (v / "log.md").read_text(encoding="utf-8"))
-            r = subprocess.run(KIT + ["proposals", "reject", pid2, "--vault", str(v), "--reason", "no"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+            r = subprocess.run(KIT + ["proposals", "reject", pid2, "--vault", str(v), "--reason", "no"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
             self.assertEqual(r.returncode, 0)
-            r = subprocess.run(KIT + ["proposals", "list", "--vault", str(v)], capture_output=True, text=True, encoding="utf-8", errors="replace")
+            r = subprocess.run(KIT + ["proposals", "list", "--vault", str(v)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
             self.assertIn("no pending proposals", r.stdout)
             self.assertTrue(list((v / ".kit/proposals").glob("*.applied.json")) and list((v / ".kit/proposals").glob("*.rejected.json")))
             self.assertEqual(kitlib.validate_okf(v).errors, [])
@@ -333,8 +333,8 @@ class BearerAuth(unittest.TestCase):
         self.assertEqual(calls, ["app"], "wrong token never reaches the app")
 
     def test_mcp_config_with_token(self):
-        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-token", "tok"], capture_output=True, text=True, encoding="utf-8", errors="replace")
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-token", "tok"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         cfg = json.loads(r.stdout.split("\n# would be written")[0])
         self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer tok"})
-        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-flags", "--read-only --propose"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(__import__("os").environ, KIT_NO_UV="1"))
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-flags", "--read-only --propose"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(__import__("os").environ, KIT_NO_UV="1"), check=False)
         self.assertIn("--read-only", json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["obsidian-vault"]["args"])

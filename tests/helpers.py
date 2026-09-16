@@ -17,6 +17,11 @@ sys.path.insert(0, str(ROOT / "mcp"))
 import kitlib  # noqa: E402
 import kitproviders  # noqa: E402
 
+# kitlib is re-exported: every test module imports it from here rather than repeating the sys.path
+# bootstrap above. Listing the surface explicitly is what says so.
+__all__ = ["DOCS", "ROOT", "VAULT", "env_flag", "has_tool", "kitlib", "llm_base_url",
+           "llm_reachable", "temp_vault"]
+
 
 def temp_vault() -> Path:
     """Copy the template vault into a fresh temp dir (caller removes it)."""

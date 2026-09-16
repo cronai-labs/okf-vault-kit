@@ -17,9 +17,10 @@ import os
 import re
 import sys
 import urllib.parse
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 
@@ -368,16 +369,13 @@ def check_links(root: Path) -> Report:
             target = urllib.parse.unquote(target.split("#", 1)[0])
             if not target:
                 continue
-            if target.startswith("/"):
-                resolved = root / target.lstrip("/")
-            else:
-                resolved = (path.parent / target).resolve()
+            resolved = root / target.lstrip("/") if target.startswith("/") else (path.parent / target).resolve()
             if not resolved.exists():
                 rep.errors.append(f"{rel}: broken link -> {target}")
         for m in WIKILINK_RE.finditer(text):
             target = m.group(1).strip()
             stem = Path(target).name.lower()
-            stem = stem[:-3] if stem.endswith(".md") else stem
+            stem = stem.removesuffix(".md")
             if stem not in by_stem and stem not in by_name:
                 rep.errors.append(f"{rel}: broken wikilink [[{target}]]")
         for m in BASE_EMBED_RE.finditer(text):

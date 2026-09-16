@@ -1,16 +1,13 @@
 """Ontology validation, graph build, derived facts, exports, SQLite queries — on the template and on injected faults."""
-import datetime as dt
 import json
 import re
 import shutil
 import sqlite3
 import unittest
-from pathlib import Path
 from unittest import mock
 
-from tests.helpers import ROOT, VAULT, kitlib, temp_vault
-
 import kitgraph
+from tests.helpers import VAULT, kitlib, temp_vault
 
 # the N-Triples IRIREF charset: a space — or anything else the grammar forbids — inside an IRI fails here
 IRIREF = r'<[^<>"{}|^`\\\x00-\x20]*>'
@@ -82,9 +79,9 @@ class Ontology(unittest.TestCase):
         self.assertEqual(r.resolve("[[hybrid-search]]")[0], "07-knowledge/hybrid-search.md")
         self.assertEqual(r.resolve("[[hybrid-search.md]]")[0], "07-knowledge/hybrid-search.md", "an explicit extension resolves, as in Obsidian")
         self.assertEqual(r.resolve("me")[0], kitgraph.SELF_ID)
-        nid, method, cands = r.resolve("Platform engineering", ["team"])
+        nid, _method, _cands = r.resolve("Platform engineering", ["team"])
         self.assertEqual(nid, "05-people/team-platform-engineering.md", "range preference disambiguates team vs area title")
-        nid, method, cands = r.resolve("Alx Exampel", ["person"])
+        nid, _method, cands = r.resolve("Alx Exampel", ["person"])
         self.assertIsNone(nid); self.assertIn("05-people/alex-example.md", cands, "fuzzy suggestion")
 
 
@@ -232,11 +229,11 @@ class Exports(unittest.TestCase):
 
     def test_sqlite_queries(self):
         con = kitgraph.to_sqlite(self.g, ":memory:")
-        cols, rows = kitgraph.query_sqlite(con, "select count(*) from nodes where kind='note'")
+        _cols, rows = kitgraph.query_sqlite(con, "select count(*) from nodes where kind='note'")
         self.assertEqual(rows[0][0], sum(1 for n in self.g.nodes.values() if n.kind == "note"))
-        cols, rows = kitgraph.query_sqlite(con, "select trust_tier from v_trust where id='07-knowledge/hybrid-search.md'")
+        _cols, rows = kitgraph.query_sqlite(con, "select trust_tier from v_trust where id='07-knowledge/hybrid-search.md'")
         self.assertEqual(rows[0][0], "human-reviewed")
-        cols, rows = kitgraph.query_sqlite(con, "with recursive dep(id) as (select '07-knowledge/hybrid-search.md' union select e.src from edges e join dep on e.dst=dep.id where e.pred in ('links_to','cites')) select count(*) from dep")
+        _cols, rows = kitgraph.query_sqlite(con, "with recursive dep(id) as (select '07-knowledge/hybrid-search.md' union select e.src from edges e join dep on e.dst=dep.id where e.pred in ('links_to','cites')) select count(*) from dep")
         self.assertGreater(rows[0][0], 2)
         with self.assertRaises(ValueError):
             kitgraph.query_sqlite(con, "delete from nodes")
@@ -250,9 +247,9 @@ class Exports(unittest.TestCase):
             self.assertTrue(db.exists())
             self.assertEqual(sorted(p.name for p in db.parent.glob("*.tmp")), [])
             before = db.read_bytes()
-            with mock.patch("kitgraph.os.replace", side_effect=PermissionError(13, "in use")):
-                with self.assertRaises(SystemExit) as caught:
-                    kitgraph.to_sqlite(self.g, db)
+            with mock.patch("kitgraph.os.replace", side_effect=PermissionError(13, "in use")), \
+                    self.assertRaises(SystemExit) as caught:
+                kitgraph.to_sqlite(self.g, db)
             self.assertIn("pause syncing", str(caught.exception))
             self.assertEqual(db.read_bytes(), before, "a failed build leaves the old database in place")
             self.assertEqual(sorted(p.name for p in db.parent.glob("*.tmp")), [], "no temporary database is left behind")

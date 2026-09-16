@@ -39,11 +39,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
-import kitlib  # noqa: E402
 import kitgraph  # noqa: E402
-import kitrecon  # noqa: E402
+import kitlib  # noqa: E402
 import kitproviders  # noqa: E402
-
+import kitrecon  # noqa: E402
 
 TEMPLATE_VAULT = ROOT / "vault"
 QMD_MASK = "{*.md,!(_*)/**/*.md}"   # every markdown file except the tool-private `_`-prefixed folders
@@ -81,7 +80,7 @@ def _which(name: str) -> str | None:
 
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", **kw)
+    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, **kw)
 
 
 def _qmd() -> str | None:
@@ -508,7 +507,7 @@ def cmd_mcp_config(args) -> int:
 
 # ---------------------------------------------------------------- graph
 
-def _graph(vault: Path) -> "kitgraph.Graph":
+def _graph(vault: Path) -> kitgraph.Graph:
     return kitgraph.build_graph(vault)
 
 
@@ -557,7 +556,7 @@ def cmd_graph_query(args) -> int:
     except (ValueError, sqlite3.Error) as exc:
         print(f"query error: {exc}"); return 1
     if args.json:
-        print(json.dumps([dict(zip(cols, r)) for r in rows], ensure_ascii=False, indent=1))
+        print(json.dumps([dict(zip(cols, r, strict=True)) for r in rows], ensure_ascii=False, indent=1))
     else:
         print("\t".join(cols))
         for r in rows:
@@ -712,7 +711,8 @@ def _llm_structure(text: str, base: str, model: str) -> dict | None:
 
 def _bridge_modules():
     sys.path.insert(0, str(ROOT / "mcp"))
-    import bridge_policy, obsidian_bridge  # noqa: E401
+    import bridge_policy
+    import obsidian_bridge
     return bridge_policy, obsidian_bridge
 
 

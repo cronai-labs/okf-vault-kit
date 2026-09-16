@@ -21,7 +21,6 @@ import re
 import urllib.parse
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import kitgraph
 import kitlib
@@ -147,7 +146,7 @@ def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None,
     return changes
 
 
-def _log_entry(vault: Path, message: str, kind: str, today: "dt.date | None" = None) -> list[str]:
+def _log_entry(vault: Path, message: str, kind: str, today: dt.date | None = None) -> list[str]:
     """Write the provenance entry, or name log.md as the one thing that did not happen.
 
     Every tool here logs what it wrote as its last step. An undecodable log.md used to raise out
@@ -302,9 +301,9 @@ def _reconcile_priorities(vault: Path, g: kitgraph.Graph) -> list[Change]:
     section = m.group(1) if m else ""
     changes = []
     for nid, n in g.nodes.items():
-        if n.kind == "note" and n.type == "decision" and n.props.get("state") == "open":
-            if Path(nid).name not in section and n.title not in section:
-                changes.append(Change("priorities_missing_open_decision", PRIORITIES, f"open decision {nid} is not listed under '## Open decisions'"))
+        if (n.kind == "note" and n.type == "decision" and n.props.get("state") == "open"
+                and Path(nid).name not in section and n.title not in section):
+            changes.append(Change("priorities_missing_open_decision", PRIORITIES, f"open decision {nid} is not listed under '## Open decisions'"))
     return changes
 
 
@@ -434,7 +433,7 @@ def todo_report(vault: Path, today: dt.date | None = None, horizon_days: int = 7
     for t in tasks:
         if len(t.key) >= 12:
             groups.setdefault(t.key, []).append(t)
-    for key, grp in groups.items():
+    for grp in groups.values():
         files = {t.file for t in grp}
         if len(files) > 1:
             rep.duplicates.append(grp)
@@ -612,12 +611,12 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     found_people, found_projects = detect_entities(text, g)
     if people:
         for p in people:
-            nid, method, cands = resolver.resolve(p, ["person"])
+            nid, _method, _cands = resolver.resolve(p, ["person"])
             (m.people.append(nid) if nid else m.unresolved.append(p))
     else:
         m.people = found_people
     if project:
-        nid, method, cands = resolver.resolve(project, ["project", "area"])
+        nid, _method, _cands = resolver.resolve(project, ["project", "area"])
         if nid:
             m.project = nid
         else:
@@ -687,7 +686,7 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
 
 def _describe(m: Minutes) -> str:
     first = next((s.strip() for s in re.split(r"(?<=[.!?])\s+", m.text.strip()) if len(s.strip()) > 20), "")
-    first = first[:160].rstrip(".") if first else f"Filed from a recap"
+    first = first[:160].rstrip(".") if first else "Filed from a recap"
     return f"{first} ({len(m.actions)} actions, {len(m.decisions)} decisions)."
 
 

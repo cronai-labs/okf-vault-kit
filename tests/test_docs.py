@@ -4,7 +4,6 @@ import subprocess
 import sys
 import unittest
 import urllib.parse
-from pathlib import Path
 
 from tests.helpers import DOCS, ROOT, kitlib
 
@@ -46,7 +45,7 @@ class Docs(unittest.TestCase):
             self.assertIn(f"docs/{doc.name}", readme, f"README should link docs/{doc.name}")
 
     def test_kit_commands_in_docs_exist(self):
-        help_text = subprocess.run([sys.executable, str(ROOT / "kit.py"), "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
+        help_text = subprocess.run([sys.executable, str(ROOT / "kit.py"), "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).stdout
         mentioned = set()
         for doc in self.docs():
             mentioned |= set(re.findall(r"kit\.py (doctor|init|validate|index|mcp-config|llm|log|test|graph|reconcile|todos|minutes|proposals)\b", doc.read_text(encoding="utf-8")))
@@ -137,7 +136,7 @@ class Versioning(unittest.TestCase):
 
     def test_cli_reports_the_version(self):
         r = subprocess.run([sys.executable, str(ROOT / "kit.py"), "--version"],
-                           capture_output=True, text=True, encoding="utf-8", errors="replace")
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn(kitlib.KIT_VERSION, r.stdout)
 
@@ -149,7 +148,7 @@ class Shipping(unittest.TestCase):
 
     def test_no_build_residue_is_tracked(self):
         tracked = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
-                                 encoding="utf-8", errors="replace")
+                                 encoding="utf-8", errors="replace", check=False)
         if tracked.returncode != 0:
             self.skipTest("not a git checkout")
         offenders = [f for f in tracked.stdout.split("\n") if any(bad in f for bad in self.IGNORED)]

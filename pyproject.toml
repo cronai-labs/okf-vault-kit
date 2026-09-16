@@ -24,3 +24,57 @@ test = ["pytest>=8"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The modules are dense on purpose: a guard clause and its consequence share a line. This width is
+# what new code aims at. It is not enforced — see E501 below — so it never turns a reviewed line
+# into a reformatting chore.
+line-length = 120
+# `bridge_policy` lives in mcp/ and is imported by bare name after a sys.path insert. Naming both
+# roots here keeps it sorted with the kit's own modules instead of among third-party packages.
+src = [".", "mcp"]
+# `target-version` is deliberately absent: ruff reads `requires-python` above, so the Python floor
+# stays stated in one place.
+
+[tool.ruff.lint]
+# Preview mode is on for exactly one rule, named in `select`. `explicit-preview-rules` keeps every
+# other preview rule out, so a ruff upgrade cannot enable findings nobody opted into.
+preview = true
+explicit-preview-rules = true
+
+select = [
+    "E4",      # imports at the top of the module — what the `# noqa: E402` on each sys.path bootstrap is for
+    "E7",      # bare `except:`, `== None`, `type(x) == y`, a lambda bound to a name
+    "E9",      # the file has to parse and be readable before any other rule means anything
+    "W",       # trailing whitespace, a missing final newline, an invalid escape inside a regex
+    "F",       # unused imports, shadowed names, names that do not exist
+    "B",       # mutable default arguments, loop variables captured by a closure, duplicate members
+    "BLE",     # `except Exception` — the deliberate ones already carry a `# noqa: BLE001` and a reason
+    "I",       # one import order, so no diff has to argue about it
+    "UP",      # the Python floor is the floor: no typing.Iterable, no quoted annotations
+    "SIM",     # nested ifs and nested with-statements
+    "ISC",     # implicit string concatenation inside a collection — i.e. the comma somebody forgot
+    "RUF",     # ruff's own, including `noqa` directives that no longer suppress anything
+    "FURB",    # slice arithmetic where a str method says what is meant
+    "PLW1510", # `subprocess.run` without an explicit `check=`; this kit is mostly subprocess
+    "PLW1514", # `open`/`read_text`/`write_text` without `encoding=` — the vault is UTF-8 everywhere
+]
+
+ignore = [
+    "E501",    # the code is written wide on purpose; reflowing it is a formatting decision, not a lint fix
+    "E701",    # `if not x: return` on one line is the house style for a guard clause
+    "E702",    # so is `print(msg); return 1` — the message and the exit belong to each other
+    "E741",    # `l` is only ever the comprehension variable over lines; renaming it buys no clarity
+    "RUF001",  # the task regexes match the dashes notes really contain, hyphen and en dash alike
+    "RUF005",  # `self.docs() + [extra]` says what it means; unpacking into a literal does not
+    "RUF012",  # the hits are constant lookup tables on TestCase subclasses; ClassVar there is ceremony
+    "FURB167", # `re.I` and `re.M` are the spellings the stdlib itself uses in already-dense regexes
+    "FURB171", # `x in ("daily",)` is an exclusion list that grows; `!=` would hide that it is a list
+]
+
+# Not selected, though ruff's own default set would enable them here:
+#   DTZ      a daily note is named for the user's local date, so `date.today()` is the correct call
+#   S110     `try/except/pass` duplicates BLE001 on the very same lines
+#   EXE      the scripts are launched through `uv run`; a file mode means nothing on Windows
+#   S        CI runs bandit over the same files, and two SAST tools disagreeing is worse than one
+#   PERF     the loop-to-comprehension rewrites cost more readability here than they buy
