@@ -1,13 +1,41 @@
 name: ci
-on: [push, pull_request, workflow_dispatch]
+
+# `push` is restricted to main. A branch in this repository raises BOTH a push and a
+# pull_request event, so an unrestricted `push` ran every job twice for every commit on
+# every pull request -- measured across eleven commits, each one ran the full matrix,
+# megalinter, security and release twice. Branch work is covered by pull_request; main is
+# covered by push, which is what the release workflow and the required check hang off.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push to the same branch makes the previous run's answer irrelevant. main is exempt:
+# its runs are what `ci-required` and the release path attest to, so they must all complete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   offline:
     strategy:
       fail-fast: false
+      # Floor and ceiling on every OS, the full range on the cheap one.
+      #
+      # 3.11 is the floor `requires-python` promises, and it earns its place: a 3.11-only
+      # failure has hidden behind a newer interpreter here before. 3.14 is what a user
+      # actually gets -- `uv`, Homebrew and python.org all install it by default -- and it
+      # was untested until now, as were 3.13 and the maintainer's own machine.
+      #
+      # 3.10 is out of support this October and below the floor; 3.15 is a release
+      # candidate. Neither belongs here.
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python: ["3.11", "3.12"]
+        python: ["3.11", "3.14"]
+        include:
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: ubuntu-latest, python: "3.13" }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
