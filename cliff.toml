@@ -66,8 +66,8 @@ filter_commits = true
 split_commits = false
 protect_breaking_commits = true
 
-# Tags carry a leading v, and prereleases are part of the scheme while the kit
-# is in alpha: v0.4.0-alpha.2.
+# Tags carry a leading v. The pattern also matches a prerelease suffix, which is
+# kept available even though v0.1.0 does not use one.
 tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+"
 topo_order = false
 sort_commits = "oldest"
@@ -80,6 +80,12 @@ commit_preprocessors = [
 commit_parsers = [
   # The <!-- n --> prefixes only order the sections (group_by sorts
   # alphabetically); striptags removes them in the template.
+  # The commit that seeded this repository. It is the baseline v0.1.0 describes, not a
+  # change within it, and its subject names a version from the archived private history
+  # that no longer exists anywhere public. Listing it as a Feature of 0.1.0 reads as a
+  # release note for a version nobody can find. Matched on its exact subject so nothing
+  # else is caught.
+  { message = "^feat: OKF Vault Kit v0\\.4\\.0-alpha", skip = true },
   { message = "^feat", group = "<!-- 0 -->Features" },
   { message = "^fix", group = "<!-- 1 -->Bug Fixes" },
   { message = "^perf", group = "<!-- 2 -->Performance" },
@@ -95,9 +101,10 @@ commit_parsers = [
 ]
 
 [bump]
-# The public history starts at the version VERSION already carries; the private
-# history that preceded it is archived, not replayed.
-initial_tag = "v0.4.0-alpha.2"
+# The public history starts here. The private history that preceded it is archived,
+# not replayed, so this repository's first tag is its first release.
+# See docs/decisions/public-history-starts-at-0-1-0.md.
+initial_tag = "v0.1.0"
 
 # Pre-1.0: a feat takes 0.4.x -> 0.5.0, and a breaking change does the same
 # rather than jumping to 1.0.0. The kit is an alpha; 1.0 should be a decision,

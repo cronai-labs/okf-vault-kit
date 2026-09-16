@@ -4,7 +4,7 @@ Thank you for trying this. You are among the first people outside CronAI to run 
 will find things we could not. That is the point; nothing here is polished enough to be embarrassing
 about.
 
-**Version:** 0.4.0-alpha.2 · **MIT licensed** · notes stay on your machine
+**Version:** 0.1.0 · **MIT licensed** · notes stay on your machine
 ([why we can say that](docs/it-review.md))
 
 ## What it is
