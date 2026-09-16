@@ -638,6 +638,7 @@ def main(argv=None) -> int:
     pol.add_argument("--allow-write", help="comma-separated folder prefixes that are the only writable ones")
     pol.add_argument("--show-confidential", action="store_true", help="expose notes with sensitivity: confidential (hidden by default)")
     pol.add_argument("--max-write-bytes", type=int, default=20_000); pol.add_argument("--max-writes-per-minute", type=int, default=20)
+    pol.add_argument("--allow-overwrite", action="store_true", help="let the model pass overwrite=true on obsidian_create_note (denied by default: it blanks an existing note)")
     pol.add_argument("--propose", action="store_true", help="writes become proposals in .kit/proposals/ (kit.py proposals apply)")
     pol.add_argument("--audit", help="JSONL audit log path (default <vault>/.kit/bridge-audit.jsonl)"); pol.add_argument("--no-audit", action="store_true")
     args = ap.parse_args(argv)

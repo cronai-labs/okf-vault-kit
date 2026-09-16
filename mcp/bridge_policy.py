@@ -51,6 +51,7 @@ class Policy:
     hide_confidential: bool = True
     max_write_bytes: int = 20_000
     max_writes_per_minute: int = 20
+    allow_overwrite: bool = False              # blanking an existing note is opt-in, like every other loosening
     propose: bool = False
     audit_path: Path | None = None             # None = no audit log
 
@@ -64,6 +65,7 @@ class Policy:
         return Policy(read_only=bool(getattr(args, "read_only", False)), deny_write=deny, allow_write=allow,
                       hide_confidential=not getattr(args, "show_confidential", False),
                       max_write_bytes=int(getattr(args, "max_write_bytes", 20_000)), max_writes_per_minute=int(getattr(args, "max_writes_per_minute", 20)),
+                      allow_overwrite=bool(getattr(args, "allow_overwrite", False)),
                       propose=bool(getattr(args, "propose", False)), audit_path=audit)
 
     def describe(self) -> str:
@@ -71,6 +73,7 @@ class Policy:
                  "propose" if self.propose else "direct writes",
                  "confidential hidden" if self.hide_confidential else "confidential visible",
                  f"deny={','.join(self.deny_write) or '-'}", f"allow={','.join(self.allow_write) or '*'}",
+                 "overwrite allowed" if self.allow_overwrite else "overwrite denied",
                  f"max {self.max_write_bytes} B/write, {self.max_writes_per_minute}/min",
                  f"audit={self.audit_path or 'off'}"]
         return "; ".join(parts)
@@ -112,14 +115,7 @@ def _prefix_hit(rel: str, prefixes: tuple[str, ...]) -> str | None:
     return None
 
 
-def _unparsed_frontmatter(body: str) -> bool:
-    """True when a note kept its `---` block but parse_note handed back no frontmatter.
-
-    A UTF-8 BOM (PowerShell 5.1, legacy Notepad) defeats the `\\A---` match, so the note reads as
-    "no sensitivity set". The block is there; we simply could not read it — which is not the same
-    as "not confidential".
-    """
-    return body.lstrip("\ufeff \t\r\n").startswith("---")
+_unparsed_frontmatter = kitlib.unparsed_frontmatter
 
 
 class Guarded:
@@ -202,7 +198,8 @@ class Guarded:
         rel = _norm_rel(file)
         return _UNRESOLVED if (not rel or _escapes(rel)) else rel + ".md"
 
-    def _check_write(self, tool: str, target: str, payload: str = "", prop: str = "", template: str | None = None) -> None:
+    def _check_write(self, tool: str, target: str, payload: str = "", prop: str = "", template: str | None = None,
+                     overwrite: bool = False) -> None:
         """Every model-controlled input of a write tool, checked against the policy in one place.
 
         `target` is the path the backend resolved to, not the spelling the model sent: the two
@@ -220,6 +217,12 @@ class Guarded:
             raise PolicyError(f"{tool}: writes to `{hit}` are denied by policy (edit it yourself in Obsidian)")
         if self.policy.allow_write and not _prefix_hit(rel, self.policy.allow_write):
             raise PolicyError(f"{tool}: `{rel}` is outside the writable folders {list(self.policy.allow_write)}")
+        if overwrite and not self.policy.allow_overwrite:
+            # `overwrite` is model-supplied. Without this it is the one write argument no policy
+            # check inspects, so a prompt-injected model can blank any writable note at the rate
+            # limit. Deny by default; the flag loosens, like every other control here.
+            raise PolicyError(f"{tool}: overwriting `{rel}` is denied by policy — append instead, "
+                              f"or start the bridge with --allow-overwrite")
         if self._confidential(rel):
             raise PolicyError(f"{tool}: `{rel}` is marked confidential; agents do not change it (policy)")
         if prop and self.policy.hide_confidential and prop.strip().lower() == "sensitivity":
@@ -353,9 +356,9 @@ class Guarded:
 
     # ------------------------------------------------------------ write side
     def _write(self, tool: str, args: dict[str, Any], target: str, payload: str, fn: Callable[[], Any],
-               prop: str = "", template: str | None = None) -> Any:
+               prop: str = "", template: str | None = None, overwrite: bool = False) -> Any:
         def run():
-            self._check_write(tool, target, payload, prop, template)
+            self._check_write(tool, target, payload, prop, template, overwrite)
             self._audit_attempt(tool, args)
             if self.proposals:
                 pid = self.proposals.add(tool, args)
@@ -380,6 +383,7 @@ class Guarded:
         target = self._resolve_rel(name, must_exist=False)
         args = {"name": name if target == _UNRESOLVED else target, "content": content, "template": template or "", "overwrite": overwrite}
         return self._write("create_note", args, target, content, lambda: self.backend.create_note(name, content, template, overwrite),
+                           overwrite=overwrite,
                            template=template)
 
     def append_note(self, file: str, content: str) -> str:

@@ -545,6 +545,17 @@ def set_frontmatter(path: Path, values: dict[str, Any]) -> None:
     path.write_text(f"---\n{fm}\n---\n{body}", encoding="utf-8", newline="\n")
 
 
+def unparsed_frontmatter(body: str) -> bool:
+    """True when a note kept its `---` block but parse_note handed back no frontmatter.
+
+    A UTF-8 BOM (PowerShell 5.1, legacy Notepad) defeats the `\\A---` match, so the note reads as
+    "no sensitivity set". The block is there; we simply could not read it — which is not the same
+    as "not confidential". Lives here because the bridge and `llm ask` must answer identically:
+    they diverged once, and the CLI failed open on exactly this input.
+    """
+    return body.lstrip("\ufeff \t\r\n").startswith("---")
+
+
 def slugify(text: str, max_len: int = 60) -> str:
     s = re.sub(r"\(example\)", "", text, flags=re.I).strip().lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")

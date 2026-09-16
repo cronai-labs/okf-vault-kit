@@ -67,7 +67,7 @@ uv run kit.py mcp-config --client lmstudio --vault ~/Notes/vault --write
 
 Pass your own vault. The bridge serves whatever `--vault` says, and its default is the sample vault inside the checkout — so without it the client answers from the sample notes and writes into the checkout instead of your vault. `--write` refuses that on purpose.
 
-This adds two servers to `~/.lmstudio/mcp.json`: **qmd** (`qmd mcp`, search/get/status) and **obsidian-vault** (the kit's bridge: read, search, backlinks, create, append, daily note, set property, plus the graph, todos and minutes tools). The bridge is registered as `uv run …/obsidian_bridge.py`, so LM Studio can start it on any machine that has uv — the MCP SDK is provisioned on first launch. Restart LM Studio, open a chat, enable both tool sets in the *Program* panel, then try:
+This adds **obsidian-vault** to `~/.lmstudio/mcp.json` — the kit's bridge: read, search, backlinks, create, append, daily note, set property, plus the graph, todos and minutes tools. qmd's own MCP server is deliberately *not* registered: it has no policy layer, so it would answer from an index that includes the `sensitivity: confidential` notes the bridge hides. The bridge's own search uses the same qmd index and applies the policy. Pass `--with-qmd-mcp` if you want qmd's tools anyway and accept that. The bridge is registered as `uv run …/obsidian_bridge.py`, so LM Studio can start it on any machine that has uv — the MCP SDK is provisioned on first launch. Restart LM Studio, open a chat, enable both tool sets in the *Program* panel, then try:
 
 > Search my vault for the search relaunch and tell me what is blocking the pilot. Then append a one-line summary to today's daily note.
 
