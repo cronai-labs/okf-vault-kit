@@ -21,6 +21,10 @@ from tests.helpers import ROOT, kitlib
 
 MAKEFILE = (ROOT / "Makefile").read_text(encoding="utf-8")
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
+# `make release` strips `.github/` from the archive on purpose, and the zip is the one place a
+# tester might run the suite without a clone. These assertions are about CI configuration, which
+# is not part of what is distributed, so they skip there instead of erroring.
+HAVE_WORKFLOW = WORKFLOW.is_file()
 
 
 def git(*args: str) -> subprocess.CompletedProcess:
@@ -92,6 +96,8 @@ class Workflow(unittest.TestCase):
     """The single required check is only as good as the list of jobs it waits for."""
 
     def setUp(self):
+        if not HAVE_WORKFLOW:
+            self.skipTest("no .github/ — running from the release archive, which strips it")
         self.ci = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         self.jobs = self.ci["jobs"]
 
@@ -265,3 +271,27 @@ class MacInstaller(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheSuiteRunsFromTheReleaseArchive(unittest.TestCase):
+    """`make release` strips `.github/`, and the zip is where a tester runs the suite without a clone."""
+
+    def test_no_test_reads_dot_github_without_a_skip_guard(self):
+        stripped = ".github"
+        for module in sorted((ROOT / "tests").glob("test_*.py")):
+            text = module.read_text(encoding="utf-8")
+            if stripped not in text:
+                continue
+            lines = text.splitlines()
+            for i, line in enumerate(lines):
+                if stripped not in line or line.lstrip().startswith("#"):
+                    continue
+                # Constructing the Path is harmless; only a READ errors when the file is absent.
+                if not any(op in line for op in ("read_text", "read_bytes", "open(", "glob(",
+                                                 "safe_load", "iterdir")):
+                    continue
+                window = "\n".join(lines[max(0, i - 8):i + 3])
+                self.assertTrue(
+                    "skipTest" in window or "is_file()" in window or "HAVE_WORKFLOW" in window,
+                    f"{module.name}:{i + 1} reads {stripped} with no skip guard — the suite "
+                    f"then errors when run from the release archive, which strips it:\n  {line.strip()}")
