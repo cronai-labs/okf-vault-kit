@@ -67,6 +67,54 @@ class Housekeeping(unittest.TestCase):
         self.assertIn(".ruff_cache", make_target("clean"), "`make lint` writes it into the checkout")
 
 
+class ReleaseNotes(unittest.TestCase):
+    """The Releases page is the first thing a visitor opens, so what it publishes is a gate."""
+
+    def _notes_step(self) -> str:
+        if not HAVE_WORKFLOW:
+            self.skipTest("no .github/ — running from the release archive, which strips it")
+        release = ROOT / ".github" / "workflows" / "release.yml"
+        wf = yaml.safe_load(release.read_text(encoding="utf-8"))
+        for job in wf["jobs"].values():
+            for step in job.get("steps", []):
+                if "CHANGELOG" in str(step.get("name", "")):
+                    return step["run"]
+        self.fail("no release-notes step found in release.yml")
+
+    def test_the_published_body_carries_no_section_heading(self):
+        """CHANGELOG.md is generated before the tag exists, so its heading reads `[Unreleased]`.
+
+        That is correct for an untagged tree and wrong as a release title. `gh release create`
+        already titles the release with the tag, so the body must not carry a heading at all —
+        publishing one is the only way for it to be wrong. (#41)
+        """
+        bash = shutil.which("bash")
+        if bash is None or sys.platform == "win32":
+            # Same guard as test_the_script_parses below, for the same reason and one more: the
+            # step is `runs-on: ubuntu-latest` and calls `python3`, which a Windows shell does not
+            # have. A bare "bash" is worse still -- Windows resolves it to System32\bash.exe, the
+            # WSL stub, which answers "no installed distributions" in UTF-16.
+            self.skipTest("the release job runs on ubuntu")
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copy(ROOT / "CHANGELOG.md", Path(tmp) / "CHANGELOG.md")
+            r = subprocess.run([bash, "-c", self._notes_step()], cwd=tmp,
+                               capture_output=True, text=True, check=False)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            notes = (Path(tmp) / "NOTES.md").read_text(encoding="utf-8")
+
+        self.assertNotIn("[Unreleased]", notes, "the release would be titled Unreleased")
+        self.assertFalse(any(l.startswith("## ") for l in notes.splitlines()),
+                         f"a section heading reached the release body:\n{notes[:200]}")
+        self.assertTrue(any(l.startswith("### ") for l in notes.splitlines()),
+                        "the grouped sections are the body and must survive")
+
+    def test_the_step_still_refuses_an_empty_section(self):
+        """The floor is what catches a wrong changelog flag before the tag is spent."""
+        step = self._notes_step()
+        self.assertIn("-lt 200", step)
+        self.assertIn("entries", step)
+
+
 class NextVersion(unittest.TestCase):
     """`make next-version` is what a maintainer reads before cutting a release."""
 
