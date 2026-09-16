@@ -10,6 +10,11 @@ class Links(unittest.TestCase):
         rep = kitlib.check_links(VAULT)
         self.assertEqual(rep.errors, [], rep.render())
 
+    def test_every_markdown_file_is_counted_once(self):
+        """`checked` is what the CLI prints; a second read of the same file doubled it."""
+        rep = kitlib.check_links(VAULT)
+        self.assertEqual(rep.checked, len(list(kitlib.iter_markdown(VAULT))))
+
     def test_link_checker_detects_broken_links(self):
         v = temp_vault()
         try:

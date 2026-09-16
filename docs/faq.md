@@ -24,6 +24,9 @@ Yes — attach the three briefing files (`priorities.md`, `projects.md`, `decisi
 **Does anything leave my machine?**
 qmd, LM Studio/Unsloth/Ollama and the kit run locally; models are downloaded once from Hugging Face. The only outbound paths are ones you create: attaching files to a hosted model, or Unsloth's Cloudflare remote-access tunnel. GDPR-wise, an OKF bundle is just files in your jurisdiction.
 
+**One of my notes has gone missing from search, the graph and `vault_todos`.**
+It is probably not UTF-8. PowerShell 5.1's `Out-File` and `>` write UTF-16 by default, and the kit reads the vault as UTF-8: a file it cannot decode is skipped by every reader rather than taken as garbled text. Nothing is lost and nothing is rewritten — `kit.py validate` names each such file, every command warns about them on stderr, and the MCP bridge tells the model its results are incomplete. Re-save the file as UTF-8 (`Set-Content -Encoding utf8 note.md (Get-Content note.md)`) and it comes back.
+
 **The Obsidian CLI says the app is not running.**
 That is how it works: it drives the desktop app. For headless use take the kit's bridge with `--backend fs`, or yakitrak's `obsidian-cli`.
 

@@ -142,15 +142,40 @@ def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None,
     changes += _reconcile_priorities(vault, g)
     if apply and any(c.applied for c in changes):
         n = sum(1 for c in changes if c.applied)
-        kitlib.append_log(vault, f"Reconciled hubs and derived states ({n} change(s)) — kit.py reconcile --apply", "Update", today)
+        for skip in _log_entry(vault, f"Reconciled hubs and derived states ({n} change(s)) — kit.py reconcile --apply", "Update", today):
+            changes.append(Change("log_unreadable", "log.md", skip))
     return changes
+
+
+def _log_entry(vault: Path, message: str, kind: str, today: "dt.date | None" = None) -> list[str]:
+    """Write the provenance entry, or name log.md as the one thing that did not happen.
+
+    Every tool here logs what it wrote as its last step. An undecodable log.md used to raise out
+    of that step, after the note was on disk — so the caller reported failure for work the vault
+    had already taken. The entry is skipped instead, and the caller says so.
+    """
+    if kitlib.append_log(vault, message, kind, today) is None:
+        return ["log.md (not valid UTF-8; the provenance entry was not written)"]
+    return []
+
+
+def _unreadable_hub(rel: str) -> Change:
+    """A hub we cannot decode is a finding, not the end of the run.
+
+    Reconcile touches three hubs and every note; one of them written by PowerShell 5.1 must not
+    cost the user the other two. Rewriting it is out of the question — we cannot read what is in
+    it — so the pass is skipped and named.
+    """
+    return Change("hub_unreadable", rel, "not valid UTF-8 — skipped; re-save it as UTF-8 and run reconcile again")
 
 
 def _reconcile_projects(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Change]:
     hub = vault / PROJECT_HUB
     if not hub.exists():
         return []
-    text = hub.read_text(encoding="utf-8")
+    text = kitlib.read_text(hub)
+    if text is None:
+        return [_unreadable_hub(PROJECT_HUB)]
     lines = text.splitlines()
     loc = _find_table(lines, "## One-liners")
     if not loc:
@@ -209,7 +234,9 @@ def _reconcile_decisions(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Ch
     hub = vault / DECISION_HUB
     if not hub.exists():
         return []
-    text = hub.read_text(encoding="utf-8")
+    text = kitlib.read_text(hub)
+    if text is None:
+        return [_unreadable_hub(DECISION_HUB)]
     lines = text.splitlines()
     loc = _find_table(lines, "## Register")
     if not loc:
@@ -268,7 +295,9 @@ def _reconcile_priorities(vault: Path, g: kitgraph.Graph) -> list[Change]:
     p = vault / PRIORITIES
     if not p.exists():
         return []
-    text = p.read_text(encoding="utf-8")
+    text = kitlib.read_text(p)
+    if text is None:
+        return [_unreadable_hub(PRIORITIES)]
     m = re.search(r"^## Open decisions\s*$(.*?)(?=^## |\Z)", text, re.M | re.S)
     section = m.group(1) if m else ""
     changes = []
@@ -349,7 +378,9 @@ def scan_todos(vault: Path, g: kitgraph.Graph | None = None) -> list[Task]:
         if note.path.name in kitlib.RESERVED_FILENAMES or note.rel.startswith(("90-templates/", "09-archive/")) or note.rel == DIGEST:
             continue
         ntype = str((note.frontmatter or {}).get("type") or "")
-        full = note.path.read_text(encoding="utf-8")
+        full = kitlib.read_text(note.path)
+        if full is None:
+            continue          # it decoded a moment ago, in load_vault; it does not now
         offset = full[: len(full) - len(note.body)].count("\n")
         in_code = False
         for i, line in enumerate(note.body.splitlines()):
@@ -377,6 +408,7 @@ class TodoReport:
     duplicates: list[list[Task]] = field(default_factory=list)
     done_conflicts: list[list[Task]] = field(default_factory=list)
     synced: list[Task] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)   # what the run could not read, named for the user
 
     @property
     def open(self) -> list[Task]:
@@ -417,7 +449,7 @@ def todo_report(vault: Path, today: dt.date | None = None, horizon_days: int = 7
                     t.done = True
                     rep.synced.append(t)
         if rep.synced:
-            kitlib.append_log(vault, f"Ticked {len(rep.synced)} task(s) already done elsewhere — kit.py todos --sync-done", "Update", today)
+            rep.skipped += _log_entry(vault, f"Ticked {len(rep.synced)} task(s) already done elsewhere — kit.py todos --sync-done", "Update", today)
     rep.overdue.sort(key=lambda t: t.due); rep.due_soon.sort(key=lambda t: t.due)
     return rep
 
@@ -512,6 +544,7 @@ class Minutes:
     outcomes: list[str] = field(default_factory=list)
     unresolved: list[str] = field(default_factory=list)
     path: str = ""
+    skipped: list[str] = field(default_factory=list)   # what the run could not read, named for the user
 
 
 def extract_minutes(text: str) -> tuple[list[str], list[str], list[str]]:
@@ -606,7 +639,10 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     if out.exists() and not force:
         raise FileExistsError(f"{rel} exists — pass force=True/--force to overwrite")
     tpl = vault / TEMPLATE_DIR / "meeting.md"
-    body = kitlib.render_template(tpl.read_text(encoding="utf-8"), title, date) if tpl.exists() else f"---\ntype: meeting\ntitle: {title}\n---\n# {title}\n"
+    tpl_text = kitlib.read_text(tpl) if tpl.exists() else None
+    if tpl.exists() and tpl_text is None:
+        m.skipped.append(f"{TEMPLATE_DIR}/meeting.md (not valid UTF-8; the note was written from the built-in shape)")
+    body = kitlib.render_template(tpl_text, title, date) if tpl_text is not None else f"---\ntype: meeting\ntitle: {title}\n---\n# {title}\n"
     raw, rest = kitlib.split_frontmatter(body)
     import yaml
     fm = yaml.safe_load(raw) if raw else {}
@@ -626,13 +662,20 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     fm_text = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, default_flow_style=None).rstrip("\n")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(f"---\n{fm_text}\n---\n{rest}", encoding="utf-8", newline="\n")
-    kitlib.append_log(vault, f"Filed meeting note [{title}]({rel}) from a recap ({len(m.actions)} actions, {len(m.decisions)} decisions)", "Creation", date)
+    m.skipped += _log_entry(vault, f"Filed meeting note [{title}]({rel}) from a recap ({len(m.actions)} actions, {len(m.decisions)} decisions)", "Creation", date)
     if daily:
         dpath = kitlib.daily_note_path(vault, date)
+        if dpath.exists() and kitlib.read_text(dpath) is None:
+            # UTF-8 appended to a note we cannot decode is a second kind of damage, not a repair.
+            m.skipped.append(f"{dpath.relative_to(vault).as_posix()} (not valid UTF-8; the daily-note line was not written)")
+            return m
         if not dpath.exists():
             dtpl = vault / kitlib.obsidian_config(vault, "daily-notes.json").get("template", "90-templates/daily.md")
+            dtpl_text = kitlib.read_text(dtpl) if dtpl.exists() else None
+            if dtpl.exists() and dtpl_text is None:
+                m.skipped.append(f"{dtpl.relative_to(vault).as_posix()} (not valid UTF-8; the daily note was created empty)")
             dpath.parent.mkdir(parents=True, exist_ok=True)
-            dpath.write_text(kitlib.render_template(dtpl.read_text(encoding="utf-8"), date.isoformat(), date) if dtpl.exists() else f"# {date}\n", encoding="utf-8", newline="\n")
+            dpath.write_text(kitlib.render_template(dtpl_text, date.isoformat(), date) if dtpl_text is not None else f"# {date}\n", encoding="utf-8", newline="\n")
             kitlib.set_frontmatter(dpath, {"description": f"Daily note for {date.isoformat()} (created while filing minutes)."})
         tail = dpath.read_bytes()[-1:]  # an Obsidian-edited note need not end in a newline
         with dpath.open("a", encoding="utf-8", newline="\n") as fh:

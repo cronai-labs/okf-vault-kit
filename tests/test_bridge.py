@@ -120,6 +120,44 @@ class FsBackend(unittest.TestCase):
                          [f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
                           "search, the graph and todos; re-save it as UTF-8"])
 
+    def test_a_note_we_cannot_decode_is_a_bridge_error_on_every_tool_that_touches_it(self):
+        """The tools that name one file, rather than scanning: with --show-confidential nothing
+        stops them earlier, and a UnicodeDecodeError traceback is not an answer a model can act on."""
+        rel = "07-knowledge/utf16.md"
+        raw = "---\ntype: concept\n---\nUTF16\n".encode("utf-16")
+        (self.vault / rel).write_bytes(raw)
+        for name, call in (("read_note", lambda: self.b.read_note(rel)),
+                           ("append_note", lambda: self.b.append_note(rel, "- appended")),
+                           ("set_property", lambda: self.b.set_property(rel, "state", "done"))):
+            with self.assertRaises(ob.BridgeError, msg=name) as caught:
+                call()
+            self.assertIn("not valid UTF-8", str(caught.exception))
+        self.assertEqual((self.vault / rel).read_bytes(), raw, "a note we cannot read is not one we rewrite")
+
+    def test_an_undecodable_template_fails_the_create_without_writing_the_note(self):
+        (self.vault / "90-templates/meeting.md").write_bytes("# {{title}}\n".encode("utf-16"))
+        with self.assertRaises(ob.BridgeError):
+            self.b.create_note("02-meetings/2026-09-15-sync", template="meeting")
+        self.assertFalse((self.vault / "02-meetings/2026-09-15-sync.md").exists())
+
+    def test_an_undecodable_daily_template_still_gets_the_line_into_the_daily_note(self):
+        day = dt.date(2026, 9, 15)
+        cfg = kitlib.obsidian_config(self.vault, "daily-notes.json")
+        (self.vault / cfg.get("template", "90-templates/daily.md")).write_bytes("# {{date}}\n".encode("utf-16"))
+        rel = self.b.daily_append("- filed by the bridge", day)
+        self.assertIn("- filed by the bridge", (self.vault / rel).read_text(encoding="utf-8"))
+
+    def test_the_whole_vault_tools_tell_the_model_the_result_is_incomplete(self):
+        """A model has no terminal to read the CLI's warning in, and infers "no such note" from a
+        listing that looks complete. The count is announced, never the path: the bridge hides a
+        note whose frontmatter it cannot read, and that includes its name."""
+        self.assertEqual(ob._announced(self.b, "payload"), "payload", "a clean vault says nothing")
+        (self.vault / "07-knowledge/utf16.md").write_bytes("---\ntype: concept\n---\nUTF16\n".encode("utf-16"))
+        out = ob._announced(self.b, "payload")
+        self.assertTrue(out.startswith("payload\n"))
+        self.assertIn("1 file(s)", out)
+        self.assertNotIn("utf16", out)
+
 
 class CliBackend(unittest.TestCase):
     """A stub `obsidian` executable records the argv it was called with."""

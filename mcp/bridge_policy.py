@@ -308,6 +308,11 @@ class Guarded:
     def graph(self):
         return self._graph_view()
 
+    def skipped_files(self) -> list[str]:
+        """How much of the vault no reader can see. Passed through: the count is not a secret."""
+        fn = getattr(self.backend, "skipped_files", None)
+        return fn() if fn else []
+
     _graph_redacted: tuple[Any, Any] | None = None
 
     def _graph_view(self):
@@ -400,7 +405,7 @@ class Guarded:
             daily_ok = bool(daily_rel) and self._side_write_ok(daily_rel)
             out = self.backend.file_minutes(text, title, date, project, people, kind, daily=daily_ok)
             if daily_rel and not daily_ok:
-                out["skipped"] = [f"{daily_rel} (write denied by policy)"]
+                out["skipped"] = list(out.get("skipped", ())) + [f"{daily_rel} (write denied by policy)"]
             return out
         return self._write("file_minutes", args, target, text, run)
 

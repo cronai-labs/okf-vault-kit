@@ -147,20 +147,26 @@ def ontology_path(vault: Path) -> Path | None:
 
 
 def load_ontology(vault: Path) -> Ontology:
-    p = ontology_path(vault)
-    if not p:
-        return Ontology({})
-    return Ontology(yaml.safe_load(p.read_text(encoding="utf-8")) or {}, p)
+    """The vault's ontology, falling back to the kit's own.
+
+    A vault ontology we cannot decode is the same situation as a vault without one: the fallback
+    is a graph built on the shipped classes, not no graph at all. `validate` names the file.
+    """
+    for p in (Path(vault) / ONTOLOGY_REL, DEFAULT_ONTOLOGY):
+        text = kitlib.read_text(p)      # None for a file that is missing as well as one we cannot decode
+        if text is not None:
+            return Ontology(yaml.safe_load(text) or {}, p)
+    return Ontology({})
 
 
 def load_context(vault: Path, onto: Ontology) -> dict[str, Any]:
-    p = Path(vault) / onto.context_file
-    if p.exists():
-        try:
-            return json.loads(p.read_text(encoding="utf-8")).get("@context", {})
-        except json.JSONDecodeError:
-            return {}
-    return {}
+    text = kitlib.read_text(Path(vault) / onto.context_file)
+    if text is None:
+        return {}                      # absent or undecodable: the exports fall back to the base IRI
+    try:
+        return json.loads(text).get("@context", {})
+    except json.JSONDecodeError:
+        return {}
 
 
 # ---------------------------------------------------------------- graph model
@@ -339,9 +345,8 @@ def _self_actor(vault: Path) -> str | None:
     tdir = Path(vault) / "90-templates"
     counts: dict[str, int] = defaultdict(int)
     for p in tdir.glob("*.md") if tdir.exists() else []:
-        try:
-            text = p.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
+        text = kitlib.read_text(p)
+        if text is None:
             continue          # same rule as kitlib.load_vault: skip it, `validate` reports it
         for m in re.finditer(r"by:\s*(human:[\w.-]+)", text):
             counts[m.group(1)] += 1

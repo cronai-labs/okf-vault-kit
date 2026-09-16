@@ -33,6 +33,23 @@ class Ontology(unittest.TestCase):
         fm, notes = onto.normalise({"summary": "x", "health": "amber", "type": "project"})
         self.assertEqual(fm["description"], "x"); self.assertEqual(fm["health"], "yellow"); self.assertEqual(len(notes), 2)
 
+    def test_an_undecodable_ontology_or_context_does_not_stop_the_build(self):
+        """A vault ontology we cannot decode is the same as a vault without one: the kit's own."""
+        v = temp_vault()
+        try:
+            utf16 = "classes:\n  note: {}\n".encode("utf-16")
+            (v / "99-system/ontology.yml").write_bytes(utf16)
+            (v / "context.jsonld").write_bytes(utf16)
+            onto = kitgraph.load_ontology(v)
+            self.assertEqual(onto.source, kitgraph.DEFAULT_ONTOLOGY)
+            self.assertEqual(kitgraph.load_context(v, onto), {})
+            g = kitgraph.build_graph(v, onto)
+            self.assertTrue(g.nodes)
+            paths = kitgraph.write_artifacts(v, g, onto)
+            self.assertTrue(all(p.exists() for p in paths.values()), paths)
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
     def test_template_vault_is_clean(self):
         g = kitgraph.build_graph(VAULT)
         self.assertEqual([f.render() for f in g.findings], [])
