@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import threading
 import unittest
@@ -271,20 +272,55 @@ class NoCompletion(ReasoningModel):
 class ReasoningBudget(unittest.TestCase):
     """A reasoning model spends max_tokens on its own thinking before the answer starts."""
 
-    def serve(self, handler=ReasoningModel) -> str:
+    def serve(self, handler=ReasoningModel):
+        """Start a stub and return (server, base URL).
+
+        It returns the server rather than assigning `self.srv`, because a test that needs a
+        second stub used to repoint `self.srv` at it — so an assertion about the payload the
+        FIRST stub received would silently read the second one instead. (#32)
+        """
         srv = HTTPServer(("127.0.0.1", 0), handler)
         srv.last_payload = {}
-        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        srv.thread = thread
         self.addCleanup(srv.server_close)
         self.addCleanup(srv.shutdown)
-        self.srv = srv
-        return f"http://127.0.0.1:{srv.server_port}/v1"
+        return srv, f"http://127.0.0.1:{srv.server_port}/v1"
 
     def setUp(self):
-        self.llm = kp.OpenAICompatLLM(self.serve())
+        self.srv, base = self.serve()
+        self.llm = kp.OpenAICompatLLM(base)
+
+    @contextlib.contextmanager
+    def diagnosed(self, srv):
+        """Turn a transport failure into evidence instead of a bare traceback.
+
+        This test reached its own loopback stub and failed inside `urlopen` on one Windows runner
+        while every other job in the same run passed (#32). The exception itself was never
+        captured, so the next occurrence has to carry enough to name the cause: what was raised,
+        whether the serving thread was still alive, and whether the port still accepts.
+        """
+        try:
+            yield
+        except (OSError, urllib.error.URLError) as exc:
+            port = srv.server_port
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=2):
+                    reachable = "yes"
+            except OSError as probe:
+                reachable = f"no ({probe!r})"
+            raise AssertionError(
+                f"the request failed at the transport layer, so this result says nothing about "
+                f"the code under test.\n"
+                f"  raised:           {exc!r}\n"
+                f"  stub port:        {port}\n"
+                f"  serving thread:   {'alive' if srv.thread.is_alive() else 'DEAD'}\n"
+                f"  stub accepts now: {reachable}") from exc
 
     def ask(self, model="thinker", **kw) -> kp.ChatResult:
-        return self.llm.complete(model, [{"role": "user", "content": "hi"}], **kw)
+        with self.diagnosed(self.srv):
+            return self.llm.complete(model, [{"role": "user", "content": "hi"}], **kw)
 
     def test_the_request_budgets_thinking_on_top_of_the_answer(self):
         res = self.ask(max_tokens=64)
@@ -320,8 +356,9 @@ class ReasoningBudget(unittest.TestCase):
         self.assertEqual(res.budget_hint(), "")
 
     def test_a_response_without_a_completion_is_an_error_the_cli_catches(self):
-        llm = kp.OpenAICompatLLM(self.serve(NoCompletion))
-        with self.assertRaises(ValueError):
+        srv, base = self.serve(NoCompletion)
+        llm = kp.OpenAICompatLLM(base)
+        with self.diagnosed(srv), self.assertRaises(ValueError):
             llm.complete("thinker", [{"role": "user", "content": "hi"}])
 
     def test_a_bad_headroom_value_does_not_break_the_command(self):
