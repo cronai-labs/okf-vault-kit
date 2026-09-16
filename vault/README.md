@@ -8,7 +8,7 @@ sensitivity: internal
 
 # OKF Vault — an Obsidian second brain that machines can read
 
-A working memory for people who run things: managers, project and product managers, engineers. Plain Markdown files with YAML frontmatter, organized so that **you** can navigate them in Obsidian, **your local LLM** can search and reason over them, and **any agent** that speaks the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) can consume them without a custom SDK.
+A working memory for people who run things: managers, project and product managers, engineers. Plain Markdown files with YAML frontmatter, organized so that **you** can navigate them in Obsidian, **your local LLM** can search and reason over them, and **any agent** that speaks the [Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) can consume them without a custom SDK.
 
 ## Open it (3 minutes)
 

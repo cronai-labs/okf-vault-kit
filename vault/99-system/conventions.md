@@ -29,7 +29,7 @@ One page. If a rule is not here, it is not a rule.
 
 ## Properties
 
-Frontmatter drives the dashboard and makes the vault an [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) bundle that agents can read without a custom SDK. `type` is required on every note and `owner` on projects — nothing else. Fill `description` on everything.
+Frontmatter drives the dashboard and makes the vault an [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format) bundle that agents can read without a custom SDK. `type` is required on every note and `owner` on projects — nothing else. Fill `description` on everything.
 
 | Property | On | Values / format |
 |---|---|---|

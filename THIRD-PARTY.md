@@ -13,7 +13,7 @@ first question from a corporate reviewer is always "what else comes with it".
 | [uv](https://github.com/astral-sh/uv) | MIT or Apache-2.0 | Homebrew / winget | Runs `kit.py` and the bridge with their declared dependencies. |
 | [MCP Python SDK](https://pypi.org/project/mcp/) | MIT | `uv run` / `pip`, pinned `>=2,<3` | Only needed for the MCP bridge. |
 | [PyYAML](https://pypi.org/project/PyYAML/) | MIT | `uv run` / `pip` | Frontmatter parsing. |
-| [Obsidian](https://obsidian.md) | Proprietary, free for personal use | obsidian.md / winget | **Commercial use needs a paid licence.** Check this before rolling the kit out at work — it is the one component with a per-seat cost. |
+| [Obsidian](https://obsidian.md) | Proprietary, free for any use including commercial ([licence](https://obsidian.md/license), changed 2025-02-20) | obsidian.md / winget | The paid Commercial License is optional support, not a requirement. No per-seat cost to clear before a rollout. |
 | [LM Studio](https://lmstudio.ai) | Proprietary, free for personal and work use | lmstudio.ai / winget | Optional. Any OpenAI-compatible endpoint works instead: llama.cpp's `llama-server`, Ollama, vLLM. |
 
 ## Command-line tools the installers add
@@ -54,5 +54,5 @@ from the publisher's own Hugging Face organisation.
 
 ## Specifications
 
-[Open Knowledge Format](https://github.com/GoogleCloudPlatform/knowledge-catalog) v0.2 — Apache-2.0,
+[Open Knowledge Format](https://github.com/GoogleCloudPlatform/open-knowledge-format) v0.2 — Apache-2.0,
 Google Cloud. The vault is an OKF bundle; the spec is a document, not a dependency.

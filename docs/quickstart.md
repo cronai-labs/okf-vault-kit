@@ -18,7 +18,7 @@ Platform installers do this for you: [macOS](platforms/macos.md) · [Windows via
 ## 1. Get the kit and check the machine
 
 ```bash
-git clone <your-fork>/okf-vault-kit && cd okf-vault-kit     # or unzip the release
+git clone https://github.com/cronai-labs/okf-vault-kit && cd okf-vault-kit
 uv run kit.py doctor
 ```
 
