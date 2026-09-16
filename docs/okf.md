@@ -44,6 +44,23 @@ Actor convention: `human:<id>` for people, `process:<id>` for jobs, `<producer>/
 ## Validators
 
 - `uv run kit.py validate --vault <path> --strict` — the kit's validator (Python, no network), also run by `kit.py test`.
+
+### What the exit code means
+
+`validate` always prints three sections; only the first decides the default exit code.
+
+| Section | Whose rules | Fails `validate` | Fails `validate --strict` |
+|---|---|---|---|
+| OKF conformance | the spec, §11 | yes | yes |
+| Links, wikilinks, Bases embeds | this kit's | no | yes |
+| Ontology | this kit's | no | yes |
+
+§11 names what a consumer **MUST NOT** reject a bundle for, and broken cross-links and a missing
+`index.md` are both on that list. A bundle can be fully conformant and still be a mess — the kit
+reports the mess either way, and only asserts non-conformance when the spec says it may.
+
+Use plain `validate` to answer "is this a valid OKF bundle". Use `--strict` for a repo gate:
+it is what `make lint` and CI run, so nothing in this repository slips past on the distinction.
 - Google's reference validator: `node validator/okf-validate.mjs <bundle>` from a checkout of `GoogleCloudPlatform/knowledge-catalog`. The two agree on §11; the kit additionally checks the ISO-8601-with-offset rule, the actor convention and the `status` vocabulary, and warns on missing descriptions.
 
 ## Boundaries

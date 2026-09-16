@@ -279,8 +279,14 @@ class KitCliGraphAndRecon(unittest.TestCase):
         v = temp_vault()
         try:
             (v / "03-projects/bad.md").write_text("---\ntype: project\ndescription: x\nhealth: purple\nowner: me\n---\n", encoding="utf-8")
+            # An ontology enum violation is this kit's rule, not the spec's, so it is reported
+            # but does not set the exit code — §11 forbids rejecting a bundle over it. --strict
+            # is what gates the repo. (#22)
             r = run("validate", "--vault", str(v))
-            self.assertEqual(r.returncode, 1); self.assertIn("enum_violation", r.stdout)
+            self.assertIn("enum_violation", r.stdout)
+            self.assertEqual(r.returncode, 0, "our own rule must not read as non-conformance")
+            r = run("validate", "--vault", str(v), "--strict")
+            self.assertEqual(r.returncode, 1, "--strict still fails on it")
             r = run("validate", "--vault", str(v), "--no-ontology")
             self.assertEqual(r.returncode, 0, "ontology checks can be switched off")
         finally:
