@@ -114,7 +114,7 @@ It also edits frontmatter (`obsidian-cli frontmatter ...`); check `obsidian-cli 
 
 ## kit.py and the MCP bridge
 
-Both scripts carry inline dependency metadata (PEP 723), so **uv** runs them without any setup — `uv run kit.py …` — and that is what the installers and docs use. Plain `python kit.py …` works too once PyYAML (and `mcp<2` for the bridge) is installed.
+Both scripts carry inline dependency metadata (PEP 723), so **uv** runs them without any setup — `uv run kit.py …` — and that is what the installers and docs use. Plain `python kit.py …` works too once PyYAML (and `mcp>=2,<3` for the bridge) is installed.
 
 ```bash
 uv run kit.py doctor | init | validate | index | log | mcp-config | llm smoke | llm ask | test

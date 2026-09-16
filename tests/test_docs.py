@@ -54,25 +54,53 @@ class Docs(unittest.TestCase):
         for cmd in mentioned:
             self.assertIn(cmd, help_text)
 
-    def test_documented_mcp_installs_carry_the_pin(self):
-        """Every `--with mcp` / `pip install mcp` a reader copy-pastes must match pyproject's pin.
-
-        The unpinned form resolves mcp 2.x, whose API the bridge does not speak. When the upper
-        bound in pyproject goes away (issue #13), this stops demanding one.
-        """
+    def mcp_spec(self) -> str:
+        """The one place the SDK version is decided. Every other copy is checked against it."""
         extra = re.search(r'(?m)^mcp = \["([^"]+)"\]',
                           (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         self.assertIsNotNone(extra, "pyproject must declare the mcp extra")
-        bound = re.search(r"<=?[\d.]+", extra.group(1))
+        return extra.group(1)
+
+    def test_documented_mcp_installs_carry_the_pin(self):
+        """Every `--with mcp` / `pip install mcp` a reader copy-pastes must be pyproject's spec.
+
+        Both bounds, not one: the bridge speaks a single major of the SDK, and the other majors
+        do not merely lack a feature — the server class is not there under the name it imports.
+        """
+        spec = self.mcp_spec()
         found = []
-        for path in self.docs() + [ROOT / "ALPHA.md", ROOT / "kit.py"]:
+        for path in self.docs() + [ROOT / "ALPHA.md", ROOT / "kit.py", ROOT / "mcp/obsidian_bridge.py"]:
             for m in MCP_INSTALL.finditer(path.read_text(encoding="utf-8")):
                 found.append((path.relative_to(ROOT), m.group(1)))
         self.assertTrue(found, "no documented mcp install command found — did the wording change?")
-        if bound:
-            for where, spec in found:
-                self.assertIn(bound.group(0), spec,
-                              f"{where}: `{spec}` must carry the {extra.group(1)} pin from pyproject")
+        for where, documented in found:
+            self.assertEqual(documented, spec, f"{where}: `{documented}` must be pyproject's `{spec}`")
+
+    def test_every_declared_mcp_pin_matches_pyproject(self):
+        """The declarations, as opposed to the prose: each is an install path of its own.
+
+        `pip install -r`, `make test`, `uv run` reading the bridge's PEP 723 header, the test kit
+        a tester runs — a copy left behind hands somebody an SDK the bridge cannot drive, on a
+        lane nobody re-reads. Dependabot is the fifth, and the only one that can move on its own.
+        """
+        spec = self.mcp_spec()
+        sites = {
+            "requirements.txt": r"(?m)^#\s*(mcp\S+)\s*$",
+            "Makefile": r"(?m)^MCP\s*\?=\s*(\S+)\s*$",
+            "mcp/obsidian_bridge.py": r'(?m)^# dependencies = \[.*?"(mcp[^"]+)"',
+            "testkit/testkit.py": r'"--with", "(mcp[^"]+)"',
+        }
+        for name, pattern in sites.items():
+            declared = re.findall(pattern, (ROOT / name).read_text(encoding="utf-8"))
+            self.assertTrue(declared, f"{name}: no mcp pin found — did the wording change?")
+            for one in declared:
+                self.assertEqual(one, spec, f"{name} pins `{one}`, pyproject pins `{spec}`")
+
+        upper = re.search(r"<(\d+)", spec)
+        self.assertIsNotNone(upper, f"`{spec}` needs an upper bound, or nothing holds the bot back")
+        self.assertIn(f'versions: [">={upper.group(1)}"]',
+                      (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"),
+                      "dependabot must ignore the major pyproject excludes")
 
     def test_tools_doc_lists_every_bridge_tool(self):
         names = re.findall(r'@mcp\.tool\(name="([^"]+)"\)',

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["pyyaml>=6.0", "mcp>=1.2,<2"]
+# dependencies = ["pyyaml>=6.0", "mcp>=2,<3"]
 # ///
 """obsidian_bridge — an MCP server that lets a local model read and write an Obsidian vault.
 
@@ -12,7 +12,7 @@ Two interchangeable backends:
        Index-aware and template-aware, but the Obsidian app must be running.
 
 Run as an MCP server (stdio). With uv nothing needs installing (deps come from the inline metadata above);
-with plain Python, `pip install 'mcp<2' pyyaml` first (the v2 SDK renamed the API this bridge targets):
+with plain Python, `pip install 'mcp>=2,<3' pyyaml` first (this bridge targets the 2.x server API):
 
   uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault
   python mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault
@@ -38,10 +38,12 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import functools
 import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -443,17 +445,17 @@ def _noext(name: str) -> str:
 def _sdk_hint(exc: ImportError) -> str:
     """Tell the two failures apart: no SDK at all, versus an SDK we cannot drive.
 
-    mcp 2.x renamed FastMCP to MCPServer and moved the module, so the import raises
-    ModuleNotFoundError — an ImportError subclass. Reporting that as "the SDK is missing"
-    sent people off to install something they already had.
+    The v1 SDK has no `mcp.server.mcpserver` — the server class was called FastMCP and lived
+    elsewhere — so the import raises ModuleNotFoundError, an ImportError subclass. Reporting that
+    as "the SDK is missing" sends people off to install something they already had.
     """
     try:
         import importlib.metadata as md
         version = md.version("mcp")
     except Exception:  # noqa: BLE001 — no SDK at all
-        return ("the MCP python SDK is missing: pip install 'mcp<2'   (or run with --selftest)")
+        return ("the MCP python SDK is missing: pip install 'mcp>=2,<3'   (or run with --selftest)")
     return (f"the installed MCP python SDK ({version}) is not supported by this bridge: {exc}\n"
-            f"this code targets the v1 API; install a compatible one with:  pip install 'mcp<2'\n"
+            f"this code targets the 2.x API; install a compatible one with:  pip install 'mcp>=2,<3'\n"
             f"or with uv, which reads the pin from the script header:       uv run {Path(__file__).name} ...")
 
 
@@ -476,10 +478,48 @@ def _announced(backend, payload: str) -> str:
             "and to re-save them as UTF-8.")
 
 
-def build_server(backend, host: str = "127.0.0.1", port: int = 8765, read_only: bool = False):
-    from mcp.server.fastmcp import FastMCP
+# What the backend raises to say "that call was wrong, or not allowed" — as opposed to crashing.
+# PolicyError and BridgeError are the bridge's own refusals; ValueError and sqlite3.Error are how
+# `graph_query` refuses a query, and it is the one tool whose argument the model writes freehand.
+REFUSALS = (BridgeError, bridge_policy.PolicyError, ValueError, sqlite3.Error)
 
-    mcp = FastMCP("obsidian-vault", host=host, port=port, instructions=(
+
+class _Refusals:
+    """The backend as the tools see it, with every refusal raised as the SDK's `ToolError`.
+
+    A refusal is an answer: "marked confidential", "writes to `05-people` are denied by policy",
+    "only SELECT / WITH queries are allowed" are written for the model to read and act on. The
+    SDK forwards a `ToolError`'s message to the model and withholds every other exception's, so
+    a refusal has to arrive as one — and a crash still does not, which is what keeps a
+    traceback's absolute paths out of the model's context.
+    """
+
+    def __init__(self, backend, tool_error):
+        self._backend, self._tool_error = backend, tool_error
+
+    def __getattr__(self, name: str):
+        attr = getattr(self._backend, name)
+        if not callable(attr):
+            return attr
+
+        @functools.wraps(attr)
+        def call(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            except REFUSALS as exc:
+                raise self._tool_error(str(exc)) from exc
+
+        return call
+
+
+def build_server(backend, read_only: bool = False):
+    # The bind address is not the server's business in 2.x: it belongs to the transport, so both
+    # --http paths below pass it at run time instead.
+    from mcp.server.mcpserver import MCPServer
+    from mcp.server.mcpserver.exceptions import ToolError
+
+    backend = _Refusals(backend, ToolError)
+    mcp = MCPServer("obsidian-vault", version=kitlib.KIT_VERSION, instructions=(
         "Read and write the user's Obsidian vault. Notes are Markdown with YAML frontmatter (OKF). "
         "Search first, then read specific notes by path. Prefer append over overwrite. "
         "Tasks are written as `- [ ] verb — owner, due YYYY-MM-DD`."))
@@ -615,7 +655,7 @@ def main(argv=None) -> int:
         print("policy:", policy.describe())
         return selftest(backend)
     try:
-        server = build_server(backend, args.host, args.port, read_only=policy.read_only)
+        server = build_server(backend, read_only=policy.read_only)
     except ImportError as exc:
         sys.exit(_sdk_hint(exc))
     print(f"policy: {policy.describe()}", file=sys.stderr)
@@ -623,7 +663,7 @@ def main(argv=None) -> int:
         token = bridge_policy.new_token() if args.token == "new" else args.token
         if token:
             import uvicorn
-            app = bridge_policy.BearerAuth(server.streamable_http_app(), token)
+            app = bridge_policy.BearerAuth(server.streamable_http_app(host=args.host), token)
             print(f"obsidian-vault MCP bridge on http://{args.host}:{args.port}/mcp — bearer token required"
                   + (f": {token}" if args.token == "new" else ""), file=sys.stderr)
             uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
@@ -631,7 +671,7 @@ def main(argv=None) -> int:
             if args.host not in ("127.0.0.1", "localhost", "::1"):
                 print("WARNING: HTTP bridge without --token on a non-loopback address — anyone who can reach it can edit the vault", file=sys.stderr)
             print(f"obsidian-vault MCP bridge on http://{args.host}:{args.port}/mcp (streamable HTTP, no auth)", file=sys.stderr)
-            server.run(transport="streamable-http")
+            server.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         server.run()  # stdio transport
     return 0

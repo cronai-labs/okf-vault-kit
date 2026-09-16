@@ -10,7 +10,8 @@ updates:
     directory: /
     schedule: { interval: weekly }
     commit-message: { prefix: "build" }
-    # mcp is pinned to <2 deliberately (issue #13); do not let a bot walk it forward
+    # The bridge targets the 2.x server API and a new major renames it, so the pin stops at
+    # <3 on purpose (docs/decisions/mcp-sdk-pinned-to-v1.md); a bot must not walk it forward.
     ignore:
       - dependency-name: mcp
-        versions: [">=2"]
+        versions: [">=3"]

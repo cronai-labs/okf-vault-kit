@@ -211,22 +211,33 @@ class BridgeProcess(unittest.TestCase):
         finally:
             shutil.rmtree(vault.parent, ignore_errors=True)
 
-    def test_mcp_server_lists_tools(self):
-        try:
-            import mcp  # noqa: F401
-            from mcp import ClientSession, StdioServerParameters
-            from mcp.client.stdio import stdio_client
-        except ImportError:
-            self.skipTest("mcp python sdk not installed (pip install 'mcp<2')")
+    # The tool surface is the contract: every client config `kit.py mcp-config` has ever written
+    # names these, so a rename or a dropped tool breaks a machine we cannot reach.
+    TOOLS = {"obsidian_search", "obsidian_read_note", "obsidian_list_files", "obsidian_backlinks",
+             "graph_context", "graph_neighbors", "graph_path", "graph_query", "vault_todos",
+             "obsidian_create_note", "obsidian_append_note", "obsidian_daily_append",
+             "obsidian_set_property", "file_meeting_minutes"}
+
+    def test_a_real_stdio_session_serves_every_tool_and_still_refuses(self):
+        """The whole bridge over the wire: 14 tools, a read, a write, and three refusals.
+
+        The refusals are the half that a port can quietly lose. The SDK decides which exceptions
+        reach the model, so "marked confidential" can become a bare "Error executing tool" while
+        the tool list, the reads and the writes all still look right.
+        """
         import importlib.metadata
         try:
+            # The package database, not `import mcp`: this repository has a directory named
+            # `mcp/`, which imports as a namespace package on exactly the machines with no SDK.
             version = importlib.metadata.version("mcp")
         except importlib.metadata.PackageNotFoundError:
-            version = ""
-        major = version.split(".")[0]
-        if major.isdigit() and int(major) >= 2:
-            self.skipTest(f"mcp {version} installed; the bridge targets the v1 API (mcp>=1.2,<2, issue #13)")
+            self.skipTest("mcp python sdk not installed (pip install 'mcp>=2,<3')")
+        if version.split(".")[0] != "2":
+            self.skipTest(f"mcp {version} installed; the bridge targets the 2.x API — pip install 'mcp>=2,<3'")
         import asyncio
+
+        from mcp import ClientSession, StdioServerParameters
+        from mcp.client.stdio import stdio_client
         vault = temp_vault()
 
         async def go():
@@ -235,12 +246,33 @@ class BridgeProcess(unittest.TestCase):
                 async with ClientSession(r, w) as s:
                     await s.initialize()
                     tools = {t.name for t in (await s.list_tools()).tools}
-                    res = await s.call_tool("obsidian_read_note", {"file": "07-knowledge/hybrid-search"})
-                    return tools, res.content[0].text
+                    out = {}
+                    for label, name, args in (
+                            ("read", "obsidian_read_note", {"file": "07-knowledge/hybrid-search"}),
+                            ("write", "obsidian_create_note", {"name": "03-projects/over-the-wire", "content": "written by the session"}),
+                            ("confidential", "obsidian_read_note", {"file": "05-people/alex-example"}),
+                            ("denied", "obsidian_create_note", {"name": "05-people/nope", "content": "x"}),
+                            ("write_sql", "graph_query", {"sql": "delete from nodes"})):
+                        res = await s.call_tool(name, args)
+                        out[label] = (bool(res.is_error), res.content[0].text)
+                    return tools, out
         try:
-            tools, text = asyncio.run(go())
-            self.assertTrue({"obsidian_search", "obsidian_read_note", "obsidian_daily_append", "obsidian_set_property", "graph_context", "graph_query", "vault_todos", "file_meeting_minutes"} <= tools)
-            self.assertIn("Hybrid search", text)
+            tools, out = asyncio.run(go())
+            self.assertEqual(tools, self.TOOLS, f"the tool surface moved: {sorted(tools)}")
+
+            self.assertFalse(out["read"][0], out["read"][1])
+            self.assertIn("Hybrid search", out["read"][1])
+            self.assertFalse(out["write"][0], out["write"][1])
+            self.assertEqual(out["write"][1], "03-projects/over-the-wire.md")
+            self.assertIn("written by the session",
+                          (vault / "03-projects/over-the-wire.md").read_text(encoding="utf-8"))
+
+            for label, why in (("confidential", "is marked confidential"),
+                               ("denied", "denied by policy"),
+                               ("write_sql", "only SELECT / WITH queries are allowed")):
+                self.assertTrue(out[label][0], f"{label} must be refused, got {out[label][1]!r}")
+                self.assertIn(why, out[label][1],
+                              f"{label}: a refusal the model cannot read is one it will retry")
         finally:
             shutil.rmtree(vault.parent, ignore_errors=True)
 

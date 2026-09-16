@@ -3,7 +3,7 @@
 The suite is plain `unittest` (runs with `pytest` too). Offline tests always run; anything needing a tool or an endpoint **skips itself** with a message saying what to install or set.
 
 ```bash
-uv run --with 'mcp<2' kit.py test               # everything, verbose (the SDK enables the real MCP session test)
+uv run --with 'mcp>=2,<3' kit.py test           # everything, verbose (the SDK enables the real MCP session test)
 uv run kit.py test -p "test_bridge.py"          # one module
 python -m pytest tests -q                       # if you prefer pytest (needs pyyaml installed)
 ```
@@ -16,11 +16,11 @@ python -m pytest tests -q                       # if you prefer pytest (needs py
 | `test_okf_conformance.py` | OKF v0.2 rules on the template vault; validator catches missing `type`, wrong `status`, bad timestamps/actors; `index.md` and `log.md` shape; index is up to date | nothing |
 | `test_links.py` | every markdown link, wikilink and base embed resolves; code blocks ignored | nothing |
 | `test_kit_cli.py` | `kit.py` end-to-end via subprocess: validate, index determinism, init + personalisation, log, mcp-config (print and merge-write), doctor, llm ask fallback | nothing |
-| `test_bridge.py` | MCP bridge `fs` backend on a temp vault (search, read, create-from-template, append, daily append, set property, path-escape guard); `cli` backend against a stub `obsidian` binary (argument grammar); `--selftest`; real MCP stdio session | `uv run --with 'mcp<2'` (or `pip install 'mcp<2'`) for the last one; mcp 2.x skips it, the bridge targets the v1 API |
+| `test_bridge.py` | MCP bridge `fs` backend on a temp vault (search, read, create-from-template, append, daily append, set property, path-escape guard); `cli` backend against a stub `obsidian` binary (argument grammar); `--selftest`; real MCP stdio session (14 tools, a read, a write, and three policy refusals) | `uv run --with 'mcp>=2,<3'` (or `pip install 'mcp>=2,<3'`) for the last one; the v1 SDK skips it, the bridge targets the 2.x API |
 | `test_graph.py` | ontology loading/inheritance/aliases; template graph is clean; injected faults produce the right findings; resolver methods; derived facts (trust, stale → at-risk propagation, transitive supersedes, state conflicts); JSON determinism; N-Triples well-formedness and vocabulary mapping; JSON-LD shape; SQLite views and recursive CTEs; artifacts on disk | nothing |
 | `test_reconcile.py` | hub drift/missing rows detected and applied (free text and escaped pipes preserved, newest-first register, rows with spaces in the filename round-trip); superseded state written back without reformatting the rest of the frontmatter; back-dated log entries stay newest-first; task parsing; duplicates, done/open conflicts, `--sync-done` owner and recurring guards; digest validity; entity detection; minutes extraction and end-to-end filing (frontmatter, sections, log, daily link, no overwrite) | nothing |
 | `test_security.py` | policy layer (deny/allow lists, read-only tool surface, confidential hiding across read/search/list/todos/graph, size and rate limits, propose mode, audit log); `proposals` CLI list/apply/reject; bearer-token check and ASGI middleware | nothing |
-| `test_docs.py` | docs exist, relative links resolve, H1 present, README indexes docs, CLI commands mentioned exist, documented `mcp` installs carry the same pin as `pyproject.toml`, `tools.md` lists every tool the bridge registers | nothing |
+| `test_docs.py` | docs exist, relative links resolve, H1 present, README indexes docs, CLI commands mentioned exist, every declared and documented `mcp` pin matches `pyproject.toml`, `tools.md` lists every tool the bridge registers | nothing |
 | `test_e2e_qmd.py` | qmd indexes a temp copy of the vault with `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` redirected into a temp directory, so your own collections and index database are never touched (the GGUF models are symlinked from the real cache rather than downloaded again); keyword search finds the concept note, `get` works; vector/hybrid query and `bench` behind flags | `qmd` on PATH |
 | `test_e2e_llm.py` | endpoint lists models, follows a one-line instruction, answers a grounded question from a decision note, `kit.py llm smoke`; tool-call emission behind a flag | a running OpenAI-compatible endpoint |
 

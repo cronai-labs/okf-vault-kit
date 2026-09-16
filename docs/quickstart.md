@@ -76,7 +76,7 @@ LM Studio asks you to confirm each tool call the first time. Say yes to reads; r
 ## 6. Prove it
 
 ```bash
-uv run --with 'mcp<2' kit.py test           # vault, OKF, links, CLI, bridge, docs — offline
+uv run --with 'mcp>=2,<3' kit.py test       # vault, OKF, links, CLI, bridge, docs — offline
 KIT_E2E_EMBED=1 uv run kit.py test -p "test_e2e_*.py"   # + qmd vector/hybrid + live endpoint
 ```
 
