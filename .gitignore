@@ -1,6 +1,12 @@
 __pycache__/
 *.pyc
 .pytest_cache/
+# ruff drops a .gitignore of its own into this directory; the repo ignores what it generates
+# from here, so `git check-ignore` answers with a rule somebody reviewed.
+.ruff_cache/
+# nested checkouts a local tool parks inside the repo: never committed, and never linted or
+# searched as if they were part of this one — `ruff check .` walks the whole tree.
+.claude/worktrees/
 .qmd/
 vault/.obsidian/workspace.json
 vault/.obsidian/workspace-mobile.json

@@ -51,13 +51,12 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import kitlib  # noqa: E402
-import kitgraph  # noqa: E402
-import kitrecon  # noqa: E402
-import bridge_policy  # noqa: E402  (mcp/bridge_policy.py)
+import bridge_policy  # mcp/bridge_policy.py
+import kitgraph
+import kitlib
+import kitrecon
 
-
-STOPWORDS = {"the", "and", "for", "with", "what", "why", "how", "who", "which", "when", "where", "did", "does", "was", "were", "are", "our", "this", "that", "from", "into", "about", "der", "die", "das", "und", "ist", "wie", "was", "wer", "mit", "von", "für", "auf", "ein", "eine", "nicht", "wird"}
+STOPWORDS = {"the", "and", "for", "with", "what", "why", "how", "who", "which", "when", "where", "did", "does", "was", "were", "are", "our", "this", "that", "from", "into", "about", "der", "die", "das", "und", "ist", "wie", "wer", "mit", "von", "für", "auf", "ein", "eine", "nicht", "wird"}
 
 class BridgeError(RuntimeError):
     pass
@@ -76,7 +75,7 @@ def _check_name(name: str) -> None:
     synced to Windows at all.
     """
     for seg in name.strip().replace("\\", "/").split("/"):
-        stem = seg[:-3] if seg.endswith(".md") else seg
+        stem = seg.removesuffix(".md")
         if not stem or stem in (".", ".."):
             continue
         bad = sorted({c for c in stem if c in WIN_INVALID or ord(c) < 32})
@@ -267,9 +266,9 @@ class FsBackend:
         return out
 
     # -- graph side (rebuilt when any note changes)
-    _graph_cache: tuple[float, "kitgraph.Graph"] | None = None
+    _graph_cache: tuple[float, kitgraph.Graph] | None = None
 
-    def graph(self) -> "kitgraph.Graph":
+    def graph(self) -> kitgraph.Graph:
         latest = max((p.stat().st_mtime for p in kitlib.iter_markdown(self.vault)), default=0.0)
         if self._graph_cache and self._graph_cache[0] >= latest:
             return self._graph_cache[1]
@@ -359,7 +358,7 @@ class CliBackend:
         self.binary = shutil.which(binary) or binary
         self._fs = FsBackend(Path(vault_path)) if vault_path else None
 
-    def _need_fs(self) -> "FsBackend":
+    def _need_fs(self) -> FsBackend:
         if not self._fs:
             raise BridgeError("graph, todo and minutes tools need the vault path: start the bridge with --vault <path> as well")
         return self._fs
@@ -393,7 +392,7 @@ class CliBackend:
             cmd.append(f"{k}={v}")
         cmd += flags or []
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+            r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
         except FileNotFoundError as exc:
             raise BridgeError("official Obsidian CLI not on PATH — Obsidian 1.12+, Settings → General → Command line interface → Register") from exc
         if r.returncode != 0:
@@ -437,7 +436,7 @@ class CliBackend:
 
 
 def _noext(name: str) -> str:
-    return name[:-3] if name.endswith(".md") else name
+    return name.removesuffix(".md")
 
 
 # ---------------------------------------------------------------- MCP server

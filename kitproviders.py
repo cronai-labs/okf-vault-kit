@@ -74,7 +74,7 @@ def is_loopback(url: str) -> bool:
         return False
 
 
-def urlopen(target: "str | urllib.request.Request", timeout: float):
+def urlopen(target: str | urllib.request.Request, timeout: float):
     """`urlopen`, with the proxy switched off for loopback addresses.
 
     urllib routes every request through HTTP(S)_PROXY unless NO_PROXY names the host, and a managed
@@ -191,7 +191,7 @@ class QmdSearch:
         timeout = _qmd_timeout()
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=timeout)
+                               timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             # qmd downloads its rerank model on first use; on a blocked network that never finishes,
             # and an unbounded wait here means no output, no fallback and nothing to read.

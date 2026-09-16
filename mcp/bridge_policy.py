@@ -19,15 +19,17 @@ Standard library + PyYAML (through kitlib).
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import json
 import posixpath
 import re
 import secrets
 import time
-from dataclasses import dataclass, field, replace
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import kitgraph
 import kitlib
@@ -53,7 +55,7 @@ class Policy:
     audit_path: Path | None = None             # None = no audit log
 
     @staticmethod
-    def from_args(args, vault: Path | None) -> "Policy":
+    def from_args(args, vault: Path | None) -> Policy:
         audit = None
         if not getattr(args, "no_audit", False) and vault is not None:
             audit = Path(args.audit) if getattr(args, "audit", None) else vault / ".kit" / "bridge-audit.jsonl"
@@ -84,7 +86,7 @@ def _norm_rel(path: str) -> str:
     `03-projects/../05-people/x` misses the `05-people` prefix and lands there anyway.
     """
     p = path.strip().replace("\\", "/")
-    p = p[:-3] if p.endswith(".md") else p
+    p = p.removesuffix(".md")
     p = posixpath.normpath(p) if p.strip("/") else ""
     return "" if p == "." else p.strip("/")
 
@@ -238,10 +240,9 @@ class Guarded:
         try:
             out = fn()
         except Exception as exc:
-            try:
+            # the caller needs the original failure; writes already have their attempt line
+            with contextlib.suppress(OSError):
                 self._audit(tool, args, False, f"{exc.__class__.__name__}: {exc}")
-            except OSError:
-                pass   # the caller needs the original failure; writes already have their attempt line
             raise
         self._audit(tool, args, True, (out if isinstance(out, str) else json.dumps(out, default=str))[:120])
         return out
@@ -422,7 +423,7 @@ class Guarded:
 
 # ---------------------------------------------------------------- proposals
 
-def _reguard(backend, policy: "Policy | None" = None) -> Guarded:
+def _reguard(backend, policy: Policy | None = None) -> Guarded:
     """A policy-checking view of a backend, whatever the caller handed us.
 
     `kit.py proposals apply` builds a bare FsBackend, so without this the apply path is the one
@@ -457,7 +458,7 @@ class ProposalStore:
             raise PolicyError(f"no pending proposal {pid}")
         return p, json.loads(p.read_text(encoding="utf-8"))
 
-    def apply(self, pid: str, backend, policy: "Policy | None" = None) -> str:
+    def apply(self, pid: str, backend, policy: Policy | None = None) -> str:
         """Run a proposal through the policy a second time.
 
         A proposal is a request, not a licence: it was recorded minutes or days ago, the vault has

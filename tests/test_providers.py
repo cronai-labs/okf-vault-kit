@@ -7,15 +7,15 @@ import shutil
 import subprocess
 import threading
 import unittest
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from unittest import mock
 
-from tests.helpers import VAULT, temp_vault
-
 import kitgraph
 import kitproviders as kp
+from tests.helpers import VAULT, temp_vault
 
 
 class Selection(unittest.TestCase):
@@ -226,7 +226,7 @@ class LoopbackIgnoresTheProxy(unittest.TestCase):
             # (urllib.request.urlopen caches one opener per process, so it cannot be used here —
             # an earlier test may have built it before these variables were set.)
             proxied = urllib.request.build_opener(urllib.request.ProxyHandler())
-            with self.assertRaises(Exception):
+            with self.assertRaises(urllib.error.URLError):
                 proxied.open(f"{self.base}/models", timeout=2)
 
 
@@ -351,5 +351,5 @@ class EndpointScheme(unittest.TestCase):
                 kp.urlopen(url, timeout=0.2)
             except ValueError as exc:            # must never be the scheme guard
                 self.assertNotIn("must be http", str(exc))
-            except Exception:
-                pass                              # a connection error is the expected outcome
+            except Exception:                # noqa: BLE001 — any connection error is the expected outcome
+                pass

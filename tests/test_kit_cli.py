@@ -21,7 +21,7 @@ KIT = [sys.executable, str(ROOT / "kit.py")]
 
 
 def run(*args, **kw):
-    return subprocess.run(KIT + list(args), capture_output=True, text=True, encoding="utf-8", errors="replace", **kw)
+    return subprocess.run(KIT + list(args), capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, **kw)
 
 
 def model_stub(ids):
@@ -436,7 +436,6 @@ class DoctorReport(unittest.TestCase):
         """This repository has a directory named `mcp/`, so from the repo root a bare
         `import mcp` succeeds as a namespace package. Detection must ask the package database,
         or doctor reports the SDK present on exactly the machines that lack it."""
-        import kit
         src = (ROOT / "kit.py").read_text(encoding="utf-8")
         self.assertNotIn("import mcp  # noqa", src, "doctor must not detect the SDK by importing it")
         self.assertIn("importlib.metadata.version(\"mcp\")", src)

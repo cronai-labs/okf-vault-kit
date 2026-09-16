@@ -10,6 +10,7 @@ Standard library + PyYAML only.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import difflib
 import json
@@ -18,9 +19,10 @@ import re
 import sqlite3
 import urllib.parse
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 import yaml
 
@@ -248,7 +250,7 @@ class Resolver:
             if n.kind != "note":
                 continue
             self.by_path[n.path] = nid
-            self.by_path[n.path[:-3] if n.path.endswith(".md") else n.path] = nid
+            self.by_path[n.path.removesuffix(".md")] = nid
             self.by_stem[Path(n.path).stem.lower()].append(nid)
             self.by_name[_norm(n.title)].append(nid)
             for alias in n.props.get("aliases") or []:
@@ -301,7 +303,7 @@ class Resolver:
         w = WIKI_VALUE.match(raw)
         if w:
             stem = Path(w.group(1).strip()).name.lower()
-            stem = stem[:-3] if stem.endswith(".md") else stem
+            stem = stem.removesuffix(".md")
             cands = self.by_stem.get(stem, [])
             cands = self._prefer_range(cands, ranges)
             if len(cands) == 1:
@@ -375,7 +377,7 @@ def _iso(value: Any) -> str:
 def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | None = None) -> Graph:
     vault = Path(vault)
     onto = onto or load_ontology(vault)
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.UTC)
     g = Graph(built_at=now.isoformat())
     self_actor = _self_actor(vault)
     g.nodes[SELF_ID] = Node(id=SELF_ID, kind="virtual", type="person", title="me", description="The vault owner", props={"actor": self_actor})
@@ -426,7 +428,7 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
             if fid in declared:
                 g.add_edge(nid, "cites", declared[fid], "body")
         if onto.rule("unused_source"):
-            for fid, sid in declared.items():
+            for fid in declared:
                 if fid not in cited:
                     g.findings.append(Finding("info", "unused_source", nid, f"source `{fid}` is declared but never cited with [^{fid}]", "cite it in the body or remove it"))
         # body links
@@ -435,11 +437,11 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
             target = m.group(1)
             if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
                 continue
-            tid, method, _ = resolver.resolve(f"[x]({target})", None, note.rel)
+            tid, _method, _ = resolver.resolve(f"[x]({target})", None, note.rel)
             if tid and tid != nid:
                 g.add_edge(nid, "links_to", tid, "body")
         for m in kitlib.WIKILINK_RE.finditer(text):
-            tid, method, _ = resolver.resolve(f"[[{m.group(1).strip()}]]", None, note.rel)
+            tid, _method, _ = resolver.resolve(f"[[{m.group(1).strip()}]]", None, note.rel)
             if tid and tid != nid:
                 g.add_edge(nid, "links_to", tid, "body")
 
@@ -517,7 +519,7 @@ def _check_props(g: Graph, node: Node, specs: dict[str, PropSpec], onto: Ontolog
 
 def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
     # inverse edges
-    for src, pred, dst, origin in list(g.edges):
+    for src, pred, dst, _origin in list(g.edges):
         inv = onto.inverse(pred)
         if inv:
             g.add_edge(dst, inv, src, "derived")
@@ -542,7 +544,7 @@ def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
                     if inv:
                         g.add_edge(reach, inv, start, "derived")
     # per-node derived props
-    for nid, node in g.nodes.items():
+    for node in g.nodes.values():
         if node.kind != "note":
             continue
         fm = node.props
@@ -555,9 +557,9 @@ def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
             sa = fm.get("stale_after")
             stale = False
             if isinstance(sa, dt.datetime):
-                stale = (sa if sa.tzinfo else sa.replace(tzinfo=dt.timezone.utc)) < now
+                stale = (sa if sa.tzinfo else sa.replace(tzinfo=dt.UTC)) < now
             elif isinstance(sa, str) and kitlib._is_iso(sa):
-                stale = dt.datetime.fromisoformat(sa.replace("Z", "+00:00")) < now
+                stale = dt.datetime.fromisoformat(sa) < now
             node.derived["stale"] = stale
         if onto.is_a(node.type, KNOWLEDGE_ROOT) or node.type == KNOWLEDGE_ROOT:
             node.derived["status_effective"] = fm.get("status") or "stable"
@@ -589,9 +591,8 @@ def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
                                               "set state: superseded (kit.py reconcile --apply does this)"))
     if onto.rule("decision_needs_context"):
         for nid, node in g.nodes.items():
-            if node.kind == "note" and node.type == "decision":
-                if not any(p in ("project", "area") for _, p, _, _ in g.out_edges(nid)):
-                    g.findings.append(Finding("warning", "decision_without_context", nid, "decision has neither a project nor an area", "set `project:` or `area:`"))
+            if node.kind == "note" and node.type == "decision" and not any(p in ("project", "area") for _, p, _, _ in g.out_edges(nid)):
+                g.findings.append(Finding("warning", "decision_without_context", nid, "decision has neither a project nor an area", "set `project:` or `area:`"))
 
 
 # ---------------------------------------------------------------- queries
@@ -633,7 +634,7 @@ def shortest_path(g: Graph, a: str, b: str, skip: Iterable[str] = PROVENANCE_PRE
         cur = q.popleft()
         if cur == b:
             break
-        for src, p, dst, _ in g.out_edges(cur):
+        for _src, p, dst, _ in g.out_edges(cur):
             if p in skip:
                 continue
             if dst not in prev:
@@ -674,7 +675,7 @@ def context_pack(g: Graph, node: str, depth: int = 1) -> str:
     for k, v in sorted(n.derived.items()):
         lines.append(f"- {k} (derived): {v}")
     grouped: dict[str, list[str]] = defaultdict(list)
-    for src, p, dst, d in neighbors(g, nid, depth):
+    for src, p, dst, _d in neighbors(g, nid, depth):
         if src == nid:
             grouped[p].append(_label(g, dst))
     if grouped:
@@ -879,10 +880,8 @@ def to_sqlite(g: Graph, path: str | Path = ":memory:") -> sqlite3.Connection:
                          "— pause syncing or close it, then run the build again") from exc
     finally:
         if tmp.exists():
-            try:
+            with contextlib.suppress(OSError):
                 tmp.unlink()
-            except OSError:
-                pass
 
 
 def _fill_sqlite(con: sqlite3.Connection, g: Graph) -> None:

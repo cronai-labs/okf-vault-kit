@@ -2,12 +2,10 @@
 import datetime as dt
 import shutil
 import unittest
-from pathlib import Path
-
-from tests.helpers import VAULT, kitlib, temp_vault
 
 import kitgraph
 import kitrecon
+from tests.helpers import VAULT, kitlib, temp_vault
 
 
 class Hubs(unittest.TestCase):
@@ -191,7 +189,7 @@ class HubRows(unittest.TestCase):
             (v / "03-projects/Customer Portal.md").write_text(PROJECT_NOTE.format(title="Customer Portal"), encoding="utf-8", newline="\n")
             hub = v / kitrecon.PROJECT_HUB
             text = hub.read_text(encoding="utf-8")
-            row = [l for l in text.splitlines() if "Search relaunch" in l][0]
+            row = next(l for l in text.splitlines() if "Search relaunch" in l)
             hub.write_text(text.replace(row, row + "\n| [Customer Portal](Customer%20Portal.md) | green | active |  | Customer Portal work. |"),
                            encoding="utf-8", newline="\n")
             self.assertEqual([c.render() for c in kitrecon.reconcile(v)], [], "the row Obsidian writes is not broken")
@@ -203,14 +201,14 @@ class HubRows(unittest.TestCase):
         try:
             hub = v / kitrecon.PROJECT_HUB
             text = hub.read_text(encoding="utf-8")
-            row = [l for l in text.splitlines() if "Search relaunch" in l][0]
+            row = next(l for l in text.splitlines() if "Search relaunch" in l)
             cells = row.split(" | ")
             cells[-1] = "CI \\| CD pipeline for docs portal |"
             hub.write_text(text.replace(row, " | ".join(cells)), encoding="utf-8", newline="\n")
             kitlib.set_frontmatter(v / "03-projects/search-relaunch.md", {"health": "green"})
             applied = kitrecon.reconcile(v, apply=True, today=dt.date(2026, 9, 14))
             self.assertEqual([c.code for c in applied if c.applied], ["hub_drift"])
-            out = [l for l in hub.read_text(encoding="utf-8").splitlines() if "Search relaunch" in l][0]
+            out = next(l for l in hub.read_text(encoding="utf-8").splitlines() if "Search relaunch" in l)
             self.assertIn("| green | active |", out)
             self.assertIn("CI \\| CD pipeline for docs portal", out, "the escape is free text and stays byte for byte")
             self.assertEqual(len(kitrecon._split_row(out)), 5, "no phantom column")

@@ -6,6 +6,13 @@
 make check      # build + lint + test, exactly what CI runs
 ```
 
+`make lint` runs [ruff](https://docs.astral.sh/ruff/) over every Python file in the repo. The rule
+set is named rule by rule in `pyproject.toml`, and every rule that is turned off carries its reason
+on the same line — argue with the config, not with a `# noqa`. If you do need one, give it a code
+and a reason, the way the existing ones do. Why that set, and what it deliberately does not check:
+[docs/decisions/python-linting-ruff.md](docs/decisions/python-linting-ruff.md). There is no
+formatter, and `make fmt` says so rather than pretending.
+
 `make test` runs on **Python 3.11**, the minimum supported version — not whatever `uv` picks. That
 is deliberate: a 3.13-only API once passed locally and failed the matrix.
 

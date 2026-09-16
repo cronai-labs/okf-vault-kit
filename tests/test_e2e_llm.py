@@ -15,10 +15,9 @@ import sys
 import unittest
 import urllib.request
 
-from tests.helpers import ROOT, VAULT, env_flag, llm_base_url, llm_reachable
-
 import kit
 import kitproviders
+from tests.helpers import ROOT, VAULT, env_flag, llm_base_url, llm_reachable
 
 MODELS = llm_reachable()
 
@@ -79,7 +78,7 @@ class LocalLlmEndToEnd(unittest.TestCase):
                         f"nothing in the answer comes from the note: {text}")
 
     def test_kit_llm_smoke_command(self):
-        r = subprocess.run([sys.executable, str(ROOT / "kit.py"), "llm", "smoke", "--model", self.model], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300)
+        r = subprocess.run([sys.executable, str(ROOT / "kit.py"), "llm", "smoke", "--model", self.model], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300, check=False)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     @unittest.skipUnless(env_flag("KIT_E2E_TOOLS"), "set KIT_E2E_TOOLS=1 to test tool calling")

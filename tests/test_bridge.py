@@ -1,6 +1,5 @@
 """The Obsidian MCP bridge: fs backend on a temp vault, cli backend against a stub `obsidian` binary."""
 import datetime as dt
-import os
 import shutil
 import stat
 import subprocess
@@ -12,7 +11,7 @@ from pathlib import Path
 from tests.helpers import ROOT, kitlib, temp_vault
 
 sys.path.insert(0, str(ROOT / "mcp"))
-import obsidian_bridge as ob  # noqa: E402
+import obsidian_bridge as ob
 
 IS_WIN = sys.platform.startswith("win")
 
@@ -117,8 +116,8 @@ class FsBackend(unittest.TestCase):
         # skipped, and named: nothing is allowed to go missing quietly
         self.assertEqual(kitlib.undecodable(self.vault), [rel])
         self.assertEqual(kitlib.validate_okf(self.vault).errors,
-                         [f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
-                          "search, the graph and todos; re-save it as UTF-8"])
+                         [(f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
+                           "search, the graph and todos; re-save it as UTF-8")])
 
     def test_a_note_we_cannot_decode_is_a_bridge_error_on_every_tool_that_touches_it(self):
         """The tools that name one file, rather than scanning: with --show-confidential nothing
@@ -205,7 +204,7 @@ class BridgeProcess(unittest.TestCase):
         vault = temp_vault()
         try:
             r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(vault), "--selftest"],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("selftest OK", r.stdout)
         finally:
@@ -236,26 +235,26 @@ class BridgeProcess(unittest.TestCase):
             self.skipTest(f"mcp {version} installed; the bridge targets the 2.x API — pip install 'mcp>=2,<3'")
         import asyncio
 
-        from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
+
+        from mcp import ClientSession, StdioServerParameters
         vault = temp_vault()
 
         async def go():
             params = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(vault)])
-            async with stdio_client(params) as (r, w):
-                async with ClientSession(r, w) as s:
-                    await s.initialize()
-                    tools = {t.name for t in (await s.list_tools()).tools}
-                    out = {}
-                    for label, name, args in (
-                            ("read", "obsidian_read_note", {"file": "07-knowledge/hybrid-search"}),
-                            ("write", "obsidian_create_note", {"name": "03-projects/over-the-wire", "content": "written by the session"}),
-                            ("confidential", "obsidian_read_note", {"file": "05-people/alex-example"}),
-                            ("denied", "obsidian_create_note", {"name": "05-people/nope", "content": "x"}),
-                            ("write_sql", "graph_query", {"sql": "delete from nodes"})):
-                        res = await s.call_tool(name, args)
-                        out[label] = (bool(res.is_error), res.content[0].text)
-                    return tools, out
+            async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
+                await s.initialize()
+                tools = {t.name for t in (await s.list_tools()).tools}
+                out = {}
+                for label, name, args in (
+                        ("read", "obsidian_read_note", {"file": "07-knowledge/hybrid-search"}),
+                        ("write", "obsidian_create_note", {"name": "03-projects/over-the-wire", "content": "written by the session"}),
+                        ("confidential", "obsidian_read_note", {"file": "05-people/alex-example"}),
+                        ("denied", "obsidian_create_note", {"name": "05-people/nope", "content": "x"}),
+                        ("write_sql", "graph_query", {"sql": "delete from nodes"})):
+                    res = await s.call_tool(name, args)
+                    out[label] = (bool(res.is_error), res.content[0].text)
+                return tools, out
         try:
             tools, out = asyncio.run(go())
             self.assertEqual(tools, self.TOOLS, f"the tool surface moved: {sorted(tools)}")

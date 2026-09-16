@@ -1,7 +1,6 @@
 """OKF v0.2 conformance of the template vault (and of the validator itself)."""
 import shutil
 import unittest
-from pathlib import Path
 
 from tests.helpers import VAULT, kitlib, temp_vault
 

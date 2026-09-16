@@ -3,6 +3,9 @@
 # Tests run on the *minimum* supported Python: 3.13 hid a 3.11-only failure once already.
 PY      ?= 3.11
 MCP     ?= mcp>=2,<3
+# Pinned on purpose: a linter that moves on its own turns an unrelated CI run red, and the rule set
+# in pyproject.toml is written against one version. The version moves in a commit, never on a whim.
+RUFF    ?= ruff@0.16.7
 VERSION := $(shell cat VERSION)
 DIST    ?= dist
 
@@ -25,12 +28,13 @@ test: ## the offline suite, on the minimum supported Python
 test-qmd: ## the end-to-end lane; needs qmd on PATH
 	uv run --python $(PY) kit.py test -p "test_e2e_qmd.py"
 
-lint: ## byte-compile everything and check the template vault
-	uv run --python $(PY) python -m compileall -q kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp tests
+lint: ## ruff, a byte-compile on the floor Python, and the template vault
+	uvx $(RUFF) check .
+	uv run --python $(PY) python -m compileall -q kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp testkit tests
 	uv run --python $(PY) kit.py validate --vault vault --strict
 
 fmt: ## no formatter is configured; say so rather than pretend
-	@echo "no formatter configured — style is reviewed, not enforced"
+	@echo "no formatter configured — ruff lints, it does not reformat; style is reviewed"
 
 check: build lint test ## everything CI runs
 
@@ -56,5 +60,5 @@ next-version: ## what the next tag would be, from the commits since the last one
 	@uvx git-cliff --config cliff.toml --bumped-version
 
 clean: ## remove everything the tooling generates
-	rm -rf $(DIST) build .venv **/__pycache__ .kit vault/.kit
+	rm -rf $(DIST) build .venv **/__pycache__ .kit vault/.kit .ruff_cache
 	find . -name '__pycache__' -type d -prune -exec rm -rf {} +

@@ -25,7 +25,7 @@ WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 
 def git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace")
+                          encoding="utf-8", errors="replace", check=False)
 
 
 def make_target(name: str) -> str:
@@ -39,7 +39,7 @@ class Housekeeping(unittest.TestCase):
     """Running the tooling must not dirty the checkout, and `clean` must remove what it does."""
 
     GENERATED = ["vault/.kit/graph.json", ".kit/graph.sqlite", ".venv/pyvenv.cfg",
-                 "build/lib/kit.py", "dist/okf-vault-kit.zip"]
+                 "build/lib/kit.py", "dist/okf-vault-kit.zip", ".ruff_cache/CACHEDIR.TAG"]
 
     def test_generated_paths_are_ignored(self):
         if git("rev-parse", "--is-inside-work-tree").returncode != 0:
@@ -58,6 +58,9 @@ class Housekeeping(unittest.TestCase):
         self.assertIn("vault/.kit", recipe,
                       "graph build writes vault/.kit when no vault is given; clean must remove it")
         self.assertIn("build", recipe, "a PEP 517 build leaves build/ behind")
+
+    def test_clean_removes_the_linter_cache(self):
+        self.assertIn(".ruff_cache", make_target("clean"), "`make lint` writes it into the checkout")
 
 
 class ReleaseGuards(unittest.TestCase):
@@ -112,11 +115,67 @@ class Workflow(unittest.TestCase):
     def test_ci_calls_the_makefile(self):
         targets = set(re.findall(r"(?m)^([a-z-]+):", MAKEFILE))
         called = set()
-        for name, job in self.jobs.items():
+        for job in self.jobs.values():
             for step in job.get("steps", []):
                 called |= set(re.findall(r"\bmake ([a-z-]+)", step.get("run", "")))
         self.assertTrue(called <= targets, f"CI calls targets the Makefile lacks: {called - targets}")
         self.assertIn("check", called, "the Makefile claims CI runs `check`; it must")
+
+
+class LintGate(unittest.TestCase):
+    """Ruff is the Python gate, and it hangs off `make lint` — so CI picks it up with no job of its own."""
+
+    PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    def test_lint_runs_ruff(self):
+        self.assertIn("ruff", make_target("lint"),
+                      "`make lint` is the only place CI would pick the linter up")
+
+    def test_the_linter_version_is_pinned(self):
+        self.assertRegex(MAKEFILE, r"(?m)^RUFF\s*\?=\s*ruff@\d+\.\d+\.\d+$",
+                         "an unpinned linter turns an unrelated CI run red on a day nobody changed code")
+
+    def test_the_rule_set_is_named_not_inherited(self):
+        self.assertIn("[tool.ruff.lint]", self.PYPROJECT)
+        self.assertRegex(self.PYPROJECT, r"(?m)^select = \[",
+                         "ruff's default set moves between releases; the gate has to name its rules")
+
+    def test_every_suppressed_rule_says_why(self):
+        block = re.search(r"(?ms)^ignore = \[(.*?)^\]", self.PYPROJECT)
+        self.assertIsNotNone(block, "a rule set that turns nothing off still has to say so")
+        lines = [line for line in block.group(1).splitlines() if line.strip()]
+        self.assertTrue(lines, "no suppressed rules to check")
+        for line in lines:
+            with self.subTest(rule=line.strip()):
+                self.assertRegex(line, r'^\s+"[A-Z]+\d*",\s+# \S',
+                                 "a rule turned off without a reason is one nobody can review")
+
+
+class SuiteBootstrap(unittest.TestCase):
+    """The bridge is importable only once `mcp/` is on sys.path, and each module must do that itself.
+
+    Leaning on whichever module imported the bridge first makes the suite depend on discovery
+    order: the full run stays green while `python -m unittest tests.<module>` fails on its own.
+    Sorting imports is enough to reorder it, which is how this was found.
+    """
+
+    BRIDGE_IMPORT = re.compile(r"(?m)^import (?:obsidian_bridge|bridge_policy)\b")
+    PATH_INSERT = re.compile(r'(?m)^sys\.path\.insert\(0, str\(ROOT / "mcp"\)\)')
+
+    def test_bridge_importers_put_mcp_on_the_path_first(self):
+        checked = 0
+        for path in sorted((ROOT / "tests").glob("test_*.py")):
+            src = path.read_text(encoding="utf-8")
+            imported = self.BRIDGE_IMPORT.search(src)
+            if not imported:
+                continue
+            checked += 1
+            with self.subTest(module=path.name):
+                inserted = self.PATH_INSERT.search(src)
+                self.assertIsNotNone(inserted, f"{path.name} imports the bridge without adding mcp/ to sys.path")
+                self.assertLess(inserted.start(), imported.start(),
+                                f"{path.name} imports the bridge before the sys.path insert that makes it importable")
+        self.assertTrue(checked, "no test module imports the bridge; this guard has gone stale")
 
 
 class WheelLane(unittest.TestCase):
@@ -190,7 +249,7 @@ class MacInstaller(unittest.TestCase):
         defs = "\n".join(l for l in self.script.splitlines() if re.match(r"^(cask|app)\(\)", l))
         probe = f'{defs}\ncask() {{ echo "install:$1"; }}\napp obsidian "No Such Vendor App.app"\n'
         r = subprocess.run([bash, "-c", probe], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
+                           encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(r.stdout.strip(), "install:obsidian")
 
@@ -200,7 +259,7 @@ class MacInstaller(unittest.TestCase):
             self.skipTest("no bash")
         for name in ("install-macos.sh", "install-wsl.sh"):
             r = subprocess.run([bash, "-n", str(ROOT / "scripts" / name)], capture_output=True,
-                               text=True, encoding="utf-8", errors="replace")
+                               text=True, encoding="utf-8", errors="replace", check=False)
             self.assertEqual(r.returncode, 0, f"{name}: {r.stderr}")
 
 

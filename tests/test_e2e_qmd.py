@@ -8,6 +8,7 @@ The GGUF models are the one thing we keep sharing — symlinked from the real ca
   KIT_E2E_EMBED=1   also embed and run a vector + hybrid query (downloads ~300 MB + ~1.7 GB of models once)
   KIT_E2E_BENCH=1   also run `qmd bench` with tests/fixtures/qmd-bench.json (needs all three models)
 """
+import contextlib
 import json
 import os
 import shutil
@@ -28,7 +29,7 @@ _ISOLATED: dict[str, str] = {}
 
 def qmd(*args, cwd: Path, timeout: int = 900) -> subprocess.CompletedProcess:
     env = dict(os.environ, NO_COLOR="1", QMD_TRUST_LOCAL_CONFIG="1", **_ISOLATED)
-    return subprocess.run(["qmd", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env)
+    return subprocess.run(["qmd", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env, check=False)
 
 
 @unittest.skipUnless(has_tool("qmd"), "qmd not installed (npm install -g @tobilu/qmd)")
@@ -40,10 +41,9 @@ class QmdEndToEnd(unittest.TestCase):
         cache = cls.xdg / "cache" / "qmd"
         cache.mkdir(parents=True)
         if REAL_MODELS.is_dir():
-            try:
+            # no symlinks (Windows without developer mode): models download into the temp cache
+            with contextlib.suppress(OSError, NotImplementedError):
                 (cache / "models").symlink_to(REAL_MODELS, target_is_directory=True)
-            except (OSError, NotImplementedError):
-                pass  # no symlinks (Windows without developer mode): models download into the temp cache
         _ISOLATED.update(XDG_CONFIG_HOME=str(cls.xdg / "config"), XDG_CACHE_HOME=str(cls.xdg / "cache"))
         cls.real_config_before = REAL_CONFIG.read_text(encoding="utf-8") if REAL_CONFIG.exists() else None
         try:
