@@ -389,16 +389,26 @@ def cmd_validate(args) -> int:
     print(okf.render())
     print("== Links, wikilinks, Bases embeds ==")
     print(links.render())
-    reports = [okf, links]
+    hygiene = [links]
     use_onto = not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)
     if use_onto:
         g = kitgraph.build_graph(vault)
         onto = kitgraph.ontology_report(g)
         print("== Ontology: ranges, enums, required, references, derived facts ==")
         print(onto.render())
-        reports.append(onto)
-    failed = any(r.errors for r in reports) or (args.strict and any(r.warnings for r in reports))
-    return 1 if failed else 0
+        hygiene.append(onto)
+
+    # OKF v0.2 §11 lists what a consumer MUST NOT reject a bundle for, and broken cross-links and
+    # a missing index.md are both on that list. So conformance alone decides the default exit
+    # code: a bundle can be conformant and still be a mess, and only the first is ours to assert.
+    # Our own rules are gated by --strict, which is what `make lint` and CI run.
+    conformance_failed = bool(okf.errors)
+    hygiene_failed = any(r.errors or r.warnings for r in hygiene) or bool(okf.warnings)
+    if hygiene_failed and not args.strict:
+        print("\nnote: the findings above outside `OKF conformance` are this kit's rules, not the "
+              "spec's — OKF v0.2 §11 forbids rejecting a bundle for them, so they do not set the "
+              "exit code. Run `validate --strict` to fail on them too (this is what CI runs).")
+    return 1 if conformance_failed or (args.strict and hygiene_failed) else 0
 
 
 def cmd_log(args) -> int:
@@ -954,7 +964,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--collection", help="qmd collection name (default: derived from the vault path, so two vaults do not share one index)"); p.add_argument("--no-qmd", action="store_true"); p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("index", help="regenerate index.md"); p.add_argument("--vault"); p.set_defaults(fn=cmd_index)
-    p = sub.add_parser("validate", help="OKF conformance, links, ontology"); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="warnings fail too")
+    p = sub.add_parser("validate", help="OKF conformance, links, ontology"); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance")
     p.add_argument("--ontology", action="store_true", help="force the ontology checks (default: on when 99-system/ontology.yml exists)"); p.add_argument("--no-ontology", action="store_true"); p.set_defaults(fn=cmd_validate)
     gp = sub.add_parser("graph", help="build, export and query the vault graph"); gsub = gp.add_subparsers(dest="graph_cmd", required=True)
     p = gsub.add_parser("build", help="write .kit/graph.{json,nt,jsonld,sqlite}"); p.add_argument("--vault"); p.add_argument("--out"); p.set_defaults(fn=cmd_graph_build)
