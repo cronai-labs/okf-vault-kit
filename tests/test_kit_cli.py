@@ -175,8 +175,15 @@ class KitCli(unittest.TestCase):
             self.assertTrue((target / "index.md").exists())
             text = (target / "90-templates/meeting.md").read_text(encoding="utf-8")
             self.assertIn("human:tester", text); self.assertNotIn("human:me", text)
+            # The ACTOR is `by: human:me` in frontmatter. The token also appears in the prose of
+            # 99-system/getting-started.md, whose job is to tell the reader to replace it — a blind
+            # replace turned that instruction into nonsense, and would do the same to the user's own
+            # notes on a later --force. So: no actor left anywhere, and the instruction intact. (#10)
             for p in kitlib.iter_markdown(target):
-                self.assertNotIn("human:me", p.read_text(encoding="utf-8"), p)
+                self.assertNotIn("by: human:me", p.read_text(encoding="utf-8"), p)
+            guide = (target / "99-system/getting-started.md").read_text(encoding="utf-8")
+            self.assertIn("Replace `human:me` with your own actor id", guide,
+                          "init rewrote the instruction that tells the reader what to replace")
             self.assertEqual(kitlib.validate_okf(target).errors, [])
             r = run("init", "--target", str(target), "--no-qmd")
             self.assertNotEqual(r.returncode, 0, "refuses to overwrite a non-empty target without --force")
@@ -297,7 +304,7 @@ class KitCliGraphAndRecon(unittest.TestCase):
         try:
             r = run("graph", "build", "--vault", str(v)); self.assertEqual(r.returncode, 0, r.stderr); self.assertIn("0 finding(s)", r.stdout)
             self.assertTrue((v / ".kit/graph.sqlite").exists())
-            r = run("graph", "query", "select count(*) n from nodes", "--vault", str(v), "--json"); self.assertEqual(json.loads(r.stdout)[0]["n"], 26)
+            r = run("graph", "query", "select count(*) n from nodes", "--vault", str(v), "--json"); self.assertEqual(json.loads(r.stdout)[0]["n"], 27)   # 27: an open sample decision was added for the Open Decisions view (#10)
             r = run("graph", "query", "drop table nodes", "--vault", str(v)); self.assertEqual(r.returncode, 1)
             r = run("graph", "export", "--format", "nt", "--vault", str(v)); self.assertIn("<http://purl.org/dc/terms/title>", r.stdout)
             r = run("graph", "neighbors", "alex-example", "--pred", "owns", "--vault", str(v)); self.assertIn("—owns→", r.stdout)

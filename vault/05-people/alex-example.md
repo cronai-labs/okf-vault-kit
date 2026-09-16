@@ -9,6 +9,7 @@ next_1_1: 2026-09-16
 tags: [person]
 sensitivity: confidential
 generated: { by: human:me, at: "2026-09-11T15:30:00+02:00" }
+example: true
 ---
 
 # Alex Example

@@ -49,4 +49,4 @@ Three files that are always current and always literal text — attach them to a
 2. [Projects](../03-projects/projects.md) — one line per project
 3. [Decision Log](../06-decisions/decision-log.md) — one line per decision
 
-> First time here? Read [Getting Started](../99-system/getting-started.md) (10 minutes). Notes marked **(example)** show the patterns — replace them in week one.
+> First time here? Read [Getting Started](../99-system/getting-started.md) (10 minutes). Notes marked **(example)** show the patterns — replace them in week one, then remove them with `kit.py examples remove`.

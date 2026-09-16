@@ -72,4 +72,4 @@ Templates are the one exception: their bodies carry no relative links. A path wr
 
 ## Examples
 
-Notes marked **(example)** are fictional. Replace them in week one, then delete them; the dashboard views need nothing else to work.
+Notes marked **(example)** are fictional, and carry `example: true` in frontmatter — that key, not the title, is what `kit.py examples remove` reads. Replace them in week one, then run the command; the dashboard views need nothing else to work.

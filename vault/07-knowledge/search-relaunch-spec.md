@@ -9,6 +9,7 @@ stale_after: 2026-10-15T00:00:00Z
 tags: [spec, search]
 sensitivity: internal
 generated: { by: human:me, at: "2026-09-02T13:00:00+02:00" }
+example: true
 ---
 
 # Search relaunch — pilot spec (example)

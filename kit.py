@@ -25,6 +25,7 @@ Every command also runs as `uv run kit.py ...` with no manual dependency setup (
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import importlib.metadata
 import json
@@ -35,7 +36,9 @@ import shutil
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -233,8 +236,12 @@ def cmd_init(args) -> int:
                 # leave it alone. `kit.py validate` names it again, in full.
                 skipped += 1
                 continue
-            if "human:me" in text:
-                p.write_text(text.replace("human:me", actor), encoding="utf-8", newline="\n")
+            # `by: human:me` — the frontmatter actor, not every occurrence of the token. A blind
+            # replace rewrote the prose of 99-system/getting-started.md, whose whole job is to
+            # tell the reader to replace `human:me`, into an instruction contradicting itself —
+            # and would do the same to the user's own notes on a later `init --force`.
+            if "by: human:me" in text:
+                p.write_text(text.replace("by: human:me", f"by: {actor}"), encoding="utf-8", newline="\n")
                 n += 1
         print(f"personalised {n} file(s) with {actor}"
               + (f" — {skipped} file(s) left untouched: not valid UTF-8" if skipped else ""))
@@ -647,6 +654,145 @@ def _llm_structure(text: str, base: str, model: str) -> dict | None:
     return {"outcomes": [str(x) for x in data.get("outcomes", [])], "decisions": [str(x) for x in data.get("decisions", [])], "actions": actions}
 
 
+# ---------------------------------------------------------------- examples
+
+def _sample_notes(vault: Path) -> list[kitlib.Note]:
+    """Notes the vault ships to demonstrate itself, marked machine-readably.
+
+    `example: true` in frontmatter is the boundary. The `(example)` suffix in a title is its
+    human rendering and is deliberately not the marker: it was one of four inconsistent ways the
+    set used to be signalled, and a person following "delete the (example) notes" left two
+    fake colleagues behind and broke fifteen links.
+    """
+    return [n for n in kitlib.load_vault(vault)
+            if isinstance(n.frontmatter, dict) and n.frontmatter.get("example") is True]
+
+
+def _lines_referencing(path: Path, targets: set[Path], vault: Path) -> list[int]:
+    """Indices of lines carrying a markdown link to any target, code fences and spans excluded.
+
+    Whole-line removal is right for every shape these references take — a list item, a table row,
+    a numbered priority — and a link inside a code span is a naming example, not a reference, so
+    `99-system/conventions.md` keeps the filename it teaches with.
+    """
+    out: list[int] = []
+    in_fence = False
+    for i, line in enumerate(path.read_text(encoding="utf-8-sig").splitlines()):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
+        bare = kitlib.CODE_SPAN_RE.sub("", line)
+        for m in list(kitlib.MD_LINK_RE.finditer(bare)) + list(kitlib.MD_IMAGE_RE.finditer(bare)):
+            target = m.group(1)
+            if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
+                continue
+            target = urllib.parse.unquote(target.split("#", 1)[0])
+            if not target:
+                continue
+            resolved = (vault / target.lstrip("/")) if target.startswith("/") else (path.parent / target)
+            with contextlib.suppress(OSError):
+                if resolved.resolve() in targets:
+                    out.append(i)
+                    break
+    return out
+
+
+def _dead_names(samples: list[kitlib.Note]) -> set[str]:
+    """Every spelling by which a frontmatter property can name a note that is about to go."""
+    names: set[str] = set()
+    for n in samples:
+        fm = n.frontmatter or {}
+        names.add(n.path.stem.lower())
+        for key in ("title", "name"):
+            if isinstance(fm.get(key), str):
+                names.add(fm[key].lower())
+        aliases = fm.get("aliases")
+        if isinstance(aliases, list):
+            names.update(str(a).lower() for a in aliases if str(a).strip())
+    return {re.sub(r"\s*\(example\)\s*$", "", name).strip() for name in names if name.strip()}
+
+
+def _frontmatter_repairs(note: kitlib.Note, dead: set[str]) -> dict[str, Any]:
+    """List-valued properties with their dead entries dropped.
+
+    The ontology resolves `people: [Alex Example]` by title, so deleting the note leaves the
+    property pointing at nothing and `validate --strict` red — which is the whole failure this
+    command exists to prevent. Only lists are pruned: a scalar reference cannot be removed
+    without deciding whether the key is required, and none of the shipped sample set has one.
+    """
+    out: dict[str, Any] = {}
+    for key, value in (note.frontmatter or {}).items():
+        if not isinstance(value, list):
+            continue
+        kept = [v for v in value
+                if not (isinstance(v, str) and re.sub(r"\s*\(example\)\s*$", "", v).strip().lower() in dead)]
+        if len(kept) != len(value):
+            out[key] = kept
+    return out
+
+
+def cmd_examples(args) -> int:
+    vault = _vault(args.vault)
+    if args.action != "remove":
+        return 2
+    samples = _sample_notes(vault)
+    if not samples:
+        print("no notes are marked `example: true` — nothing to remove")
+        return 0
+    targets = {n.path.resolve() for n in samples}
+
+    dead = _dead_names(samples)
+    repairs: dict[Path, list[int]] = {}
+    fm_repairs: dict[Path, dict[str, Any]] = {}
+    for note in kitlib.load_vault(vault):
+        if note.path.resolve() in targets:
+            continue
+        hits = _lines_referencing(note.path, targets, vault)
+        if hits:
+            repairs[note.path] = hits
+        props = _frontmatter_repairs(note, dead)
+        if props:
+            fm_repairs[note.path] = props
+
+    print(f"{len(samples)} sample note(s) to delete:")
+    for n in sorted(samples, key=lambda x: x.rel):
+        print(f"  - {n.rel}")
+    if repairs:
+        total = sum(len(v) for v in repairs.values())
+        print(f"{total} referring line(s) to remove, in {len(repairs)} file(s):")
+        for path in sorted(repairs):
+            for i in repairs[path]:
+                line = path.read_text(encoding="utf-8-sig").splitlines()[i].strip()
+                print(f"  - {path.relative_to(vault).as_posix()}:{i + 1}  {line[:90]}")
+    if fm_repairs:
+        print(f"{len(fm_repairs)} file(s) with frontmatter entries to prune:")
+        for path in sorted(fm_repairs):
+            for key, value in fm_repairs[path].items():
+                print(f"  - {path.relative_to(vault).as_posix()}  {key}: -> {value}")
+    print("index.md will be regenerated.")
+    if args.dry_run:
+        print("\ndry run — nothing was changed. Re-run without --dry-run to apply.")
+        return 0
+
+    for path, hits in repairs.items():
+        drop = set(hits)
+        text = path.read_text(encoding="utf-8-sig")
+        kept = [ln for i, ln in enumerate(text.splitlines()) if i not in drop]
+        path.write_text("\n".join(kept) + ("\n" if text.endswith("\n") else ""),
+                        encoding="utf-8", newline="\n")
+    for path, props in fm_repairs.items():
+        kitlib.set_frontmatter(path, props)
+    for n in samples:
+        n.path.unlink()
+    kitlib.write_index(vault)
+    kitlib.append_log(vault, f"Removed {len(samples)} example note(s) and their references.", "Update")
+    print(f"\nremoved {len(samples)} note(s); repaired {len(repairs) + len(fm_repairs)} file(s); index regenerated")
+    print("run `kit.py validate --strict` to confirm")
+    return 0
+
+
 # ---------------------------------------------------------------- proposals (human-in-the-loop writes)
 
 def _bridge_modules():
@@ -928,6 +1074,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--search-provider", choices=["auto", "qmd", "naive"], help="override the configured search backend")
     p.add_argument("--graph", action="store_true", help="add graph facts (context packs) for the top hits"); p.add_argument("--dry-run", action="store_true", help="print the assembled prompt, do not call the model"); p.set_defaults(fn=cmd_llm_ask)
     p = sub.add_parser("test", help="run the end-to-end tests"); p.add_argument("-p", "--pattern", default=None); p.set_defaults(fn=cmd_test)
+    p = sub.add_parser("examples", help="the notes this vault ships to demonstrate itself")
+    esub = p.add_subparsers(dest="action", required=True)
+    _e = esub.add_parser("remove", help="delete every note marked `example: true` and repair what referred to it")
+    _e.add_argument("--vault"); _e.add_argument("--dry-run", action="store_true", help="print what would change and stop")
+    _e.set_defaults(fn=cmd_examples)
+
     p = sub.add_parser("proposals", help="list/show/apply/reject writes recorded by a bridge running with --propose")
     psub = p.add_subparsers(dest="action", required=True)
     for _name, _help, _needs_id in (("list", "pending proposals, oldest first", False),

@@ -6,6 +6,7 @@ date: 2026-09-11
 tags: [review, weekly]
 sensitivity: internal
 generated: { by: human:me, at: "2026-09-11T16:30:00+02:00" }
+example: true
 ---
 
 # Weekly review — week 37, 2026

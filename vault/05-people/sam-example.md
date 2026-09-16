@@ -9,6 +9,7 @@ aliases: [Sam]
 tags: [person]
 sensitivity: confidential
 generated: { by: human:me, at: "2026-09-11T15:35:00+02:00" }
+example: true
 ---
 
 # Sam Example
