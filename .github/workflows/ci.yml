@@ -9,6 +9,13 @@ on:
   push:
     branches: [main]
   pull_request:
+    # `edited` and `ready_for_review` are NOT in the default set
+    # ([opened, synchronize, reopened]), and the policy job below reads the pull
+    # request title. Without them a title corrected after opening keeps its failing
+    # result forever, because nothing re-runs the check -- a required check that can
+    # never go green is worse than no check. The cost is a re-run when a title or
+    # body is edited; the concurrency group above cancels the superseded one.
+    types: [opened, synchronize, reopened, edited, ready_for_review]
   workflow_dispatch:
 
 # A new push to the same branch makes the previous run's answer irrelevant. main is exempt:
