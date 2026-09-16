@@ -24,6 +24,20 @@ uv run --with 'mcp>=2,<3' kit.py test                  # prove it
 
 `uv run` provisions each script's declared dependencies on the fly; plain `python kit.py …` works too once PyYAML is installed.
 
+Or take a pinned release instead of the tip of `main`. Every release ships the archive and its
+checksum; verify it before you unpack:
+
+```bash
+v=0.1.0
+base=https://github.com/cronai-labs/okf-vault-kit/releases/download/v$v
+curl -fsSLO $base/okf-vault-kit-$v.zip && curl -fsSLO $base/okf-vault-kit-$v.zip.sha256
+shasum -a 256 -c okf-vault-kit-$v.zip.sha256    # sha256sum -c on Linux
+unzip -q okf-vault-kit-$v.zip && cd okf-vault-kit-$v
+```
+
+The archive carries the vault, the CLI and the full suite, but not `.github/` — a dozen tests
+assert things about CI and the git checkout and skip cleanly when run from it.
+
 ## What is in the box
 
 | Path | What |

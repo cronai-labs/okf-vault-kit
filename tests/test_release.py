@@ -81,12 +81,26 @@ class ReleaseNotes(unittest.TestCase):
                     return step["run"]
         self.fail("no release-notes step found in release.yml")
 
-    def test_the_published_body_carries_no_section_heading(self):
-        """CHANGELOG.md is generated before the tag exists, so its heading reads `[Unreleased]`.
+    def test_the_changelog_target_names_the_version(self):
+        """`make changelog` must pass `--tag v$(VERSION)`.
 
-        That is correct for an untagged tree and wrong as a release title. `gh release create`
-        already titles the release with the tag, so the body must not carry a heading at all —
-        publishing one is the only way for it to be wrong. (#41)
+        Without it git-cliff sees an untagged tree and writes `[Unreleased]`. The tag is created
+        *after* the commit that carries the changelog, so the released file would describe itself
+        as unreleased forever — and the tag-aware guard in test_docs would then fail every
+        release instead of catching a stale one. That is how v0.1.0 shipped. (#43)
+        """
+        recipe = make_target("changelog")
+        self.assertIn("--tag v$(VERSION)", recipe,
+                      "`make changelog` must name the version it is generating for")
+        self.assertIn("refs/tags/v$(VERSION)", recipe,
+                      "and must refuse once that version is tagged: git-cliff would then label "
+                      "the commits since the tag with it too, emitting a duplicate section")
+
+    def test_the_published_body_carries_no_section_heading(self):
+        """The release body must never carry a `## ` heading.
+
+        `gh release create --title "$REF"` already names the release after the tag, so a heading
+        in the body is redundant — and redundant is the only way for it to be wrong. (#41, #43)
         """
         bash = shutil.which("bash")
         if bash is None or sys.platform == "win32":

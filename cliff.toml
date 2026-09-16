@@ -72,11 +72,6 @@ tag_pattern = "^v[0-9]+\\.[0-9]+\\.[0-9]+"
 topo_order = false
 sort_commits = "oldest"
 
-commit_preprocessors = [
-  # Strip the trailing Claude Code session/co-author trailers from subjects.
-  { pattern = '\\s+\\(#([0-9]+)\\)$', replace = " ([#${1}](https://github.com/cronai-labs/okf-vault-kit/issues/${1}))" },
-]
-
 commit_parsers = [
   # The <!-- n --> prefixes only order the sections (group_by sorts
   # alphabetically); striptags removes them in the template.
