@@ -57,8 +57,11 @@ changelog: ## regenerate CHANGELOG.md from the commit history
 	uvx git-cliff --config cliff.toml --output CHANGELOG.md
 
 next-version: ## what the next tag would be, from the commits since the last one
-	@next=$$(uvx git-cliff --config cliff.toml --bumped-version); \
-	  if [ "$${next#v}" = "$(VERSION)" ]; then \
+	@next=$$(uvx git-cliff --config cliff.toml --bumped-version 2>/dev/null); \
+	  if [ -z "$$(git tag -l 'v*')" ]; then \
+	    echo "$$next"; \
+	    echo "(no tag exists yet, so this is cliff.toml's initial_tag -- the first release, not a bump)"; \
+	  elif [ "$${next#v}" = "$(VERSION)" ]; then \
 	    echo "no releasable changes since v$(VERSION) -- only non-releasing commit types have landed."; \
 	    echo "(git-cliff returns the current version when nothing bumps it; that is not a next tag.)"; \
 	  else \
