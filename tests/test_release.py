@@ -101,6 +101,33 @@ class Workflow(unittest.TestCase):
         self.ci = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
         self.jobs = self.ci["jobs"]
 
+    def test_draft_ci_and_ready_for_review_stay_paired(self):
+        """One of these two must be true, or a PR can reach `ready` with no run at all.
+
+        Either drafts run CI — in which case `ready_for_review` is redundant and re-runs the whole
+        matrix on a commit already tested — or drafts are skipped, in which case
+        `ready_for_review` is the only thing that ever starts a run for a PR opened as a draft, and
+        removing it leaves a required check that can never go green. (#34)
+        """
+        # `on` parses as the boolean True: YAML 1.1, and this file is read by a YAML 1.1 loader.
+        on = self.ci.get("on", self.ci.get(True))
+        types = on["pull_request"]["types"]
+        skips_drafts = any("draft" in str(job.get("if", "")) for job in self.jobs.values())
+
+        if skips_drafts:
+            self.assertIn("ready_for_review", types,
+                          "a job skips drafts, so a PR opened as a draft never runs until it is "
+                          "marked ready — `ready_for_review` has to be in the types list")
+        else:
+            self.assertNotIn("ready_for_review", types,
+                             "nothing skips drafts, so a draft is already fully tested and this "
+                             "trigger only re-runs the matrix on the identical commit")
+
+    def test_edited_survives_because_the_policy_job_reads_the_title(self):
+        """Dropping `edited` strands a corrected title on its old, failing result."""
+        on = self.ci.get("on", self.ci.get(True))
+        self.assertIn("edited", on["pull_request"]["types"])
+
     def test_every_job_is_aggregated(self):
         needed = set(self.jobs["ci-required"]["needs"])
         others = set(self.jobs) - {"ci-required"}
