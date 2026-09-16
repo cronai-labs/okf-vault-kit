@@ -75,7 +75,11 @@ jobs:
           sections = re.split(r"^## ", text, flags=re.M)[1:]
           if not sections:
               sys.exit("CHANGELOG.md has no '## ' section to publish")
-          body = "## " + sections[0].rstrip() + "\n"
+          # The section's BODY, without its heading. CHANGELOG.md is generated before the tag
+          # exists, so git-cliff writes `[Unreleased]` -- correct for an untagged tree, and the
+          # wrong title for a release. `gh release create --title "$REF"` already names the
+          # release after the tag, so the heading is redundant even when it happens to be right.
+          body = sections[0].split("\n", 1)[1].strip() + "\n"
           sys.stdout.write(body)
           PY
           bytes=$(wc -c < NOTES.md | tr -d ' ')
