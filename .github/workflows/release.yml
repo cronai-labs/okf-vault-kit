@@ -58,16 +58,34 @@ jobs:
           fi
           echo "commit is on main"
 
-      - name: Gate
-        run: make check
-
       - name: Build the archive
+        # `make release` depends on `check`, so the gate runs here. A separate Gate step
+        # ran the whole suite a second time for no added signal.
         run: make release
 
-      - name: Release notes from the commit history
-        # One line per change, generated from conventional commits -- not the
-        # squashed PR bodies, which would make notes measured in kilobytes.
-        run: uvx git-cliff --config cliff.toml --latest --strip all > NOTES.md
+      - name: Release notes from CHANGELOG.md
+        # The changelog is the curated artefact: it is committed, reviewed in the PR that
+        # bumps the version, and it is what a reader sees in the repository. Rendering the
+        # notes separately from the commit range produced a body that contradicted it.
+        # git-cliff still owns `--bumped-version`, which is what it is good at.
+        run: |
+          python3 - <<'PY' > NOTES.md
+          import pathlib, re, sys
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          sections = re.split(r"^## ", text, flags=re.M)[1:]
+          if not sections:
+              sys.exit("CHANGELOG.md has no '## ' section to publish")
+          body = "## " + sections[0].rstrip() + "\n"
+          sys.stdout.write(body)
+          PY
+          bytes=$(wc -c < NOTES.md | tr -d ' ')
+          entries=$(grep -c '^[-*] ' NOTES.md || true)
+          echo "notes: ${bytes}B, ${entries} entries"
+          head -20 NOTES.md
+          if [ "$bytes" -lt 200 ] || [ "$entries" -lt 1 ]; then
+            echo "::error::release notes are ${bytes}B / ${entries} entries -- the changelog section is empty or unparsed"
+            exit 1
+          fi
 
       - name: Publish
         env:

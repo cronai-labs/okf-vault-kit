@@ -41,9 +41,21 @@ from `--help` on a specific version, say which version; if it was not verified, 
 
 ## Releasing
 
+**Pushing the tag is the whole release.** `.github/workflows/release.yml` builds the archive,
+publishes the GitHub release and verifies the checksum of what it published. Do not create the
+release or attach assets by hand — the workflow's `gh release create` then fails with
+`already_exists`, and the release that exists is the one nothing verified.
+
 ```bash
-make release    # builds dist/okf-vault-kit-<VERSION>.zip and its .sha256 from a clean tree
+make next-version                 # what the commits since the last tag would bump to
+# bump VERSION, run `make changelog`, open a PR, merge it
+git tag v$(cat VERSION) && git push origin v$(cat VERSION)
 ```
 
 `VERSION` is the single source of truth — `pyproject.toml` reads it, `kit.py --version` prints it,
-and tests fail on drift. Tag `v<VERSION>`, then attach the zip and checksum to a GitHub release.
+and tests fail on drift. The release notes come from the newest `## ` section of `CHANGELOG.md`,
+so that file is what a reader sees on the Releases page; the workflow refuses to publish if that
+section renders to almost nothing.
+
+`make release` builds `dist/okf-vault-kit-<VERSION>.zip` and its `.sha256` locally from a clean,
+tagged tree. It is what CI runs, and is useful for checking the artifact before tagging.

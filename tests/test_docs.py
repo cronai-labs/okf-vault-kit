@@ -97,8 +97,14 @@ class Docs(unittest.TestCase):
 
         upper = re.search(r"<(\d+)", spec)
         self.assertIsNotNone(upper, f"`{spec}` needs an upper bound, or nothing holds the bot back")
+        # `make release` strips `.github/`, and the zip is the one place a tester might run the
+        # suite without a clone. The dependabot assertion is about CI config, not about what is
+        # distributed, so it skips there rather than erroring.
+        dependabot = ROOT / ".github/dependabot.yml"
+        if not dependabot.is_file():
+            self.skipTest("no .github/ — running from the release archive, which strips it")
         self.assertIn(f'versions: [">={upper.group(1)}"]',
-                      (ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"),
+                      dependabot.read_text(encoding="utf-8"),
                       "dependabot must ignore the major pyproject excludes")
 
     def test_tools_doc_lists_every_bridge_tool(self):
