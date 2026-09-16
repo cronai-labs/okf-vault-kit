@@ -53,7 +53,7 @@ git tag v$(cat VERSION) && git push origin v$(cat VERSION)
 ```
 
 `VERSION` is the single source of truth — `pyproject.toml` reads it, `kit.py --version` prints it,
-and tests fail on drift. The release notes come from the newest `## ` section of `CHANGELOG.md`,
+and tests fail on drift. The release notes come from the newest second-level section of `CHANGELOG.md`,
 so that file is what a reader sees on the Releases page; the workflow refuses to publish if that
 section renders to almost nothing.
 
