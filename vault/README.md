@@ -34,4 +34,4 @@ The kit that ships this vault — search tooling (qmd), the Obsidian CLI, a loca
 | `09-archive` | Everything inactive (excluded from views and search) |
 | `90-templates` · `99-system` | Note templates · conventions, AI workflows, getting started |
 
-Notes marked **(example)** show the intended patterns. Replace them in week one, then delete them.
+Notes marked **(example)** show the intended patterns. Replace them in week one, then run `uv run kit.py examples remove --vault .` — deleting them by hand leaves broken links, because the samples link to each other on purpose.

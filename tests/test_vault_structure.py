@@ -1,4 +1,5 @@
 """Structure of the template vault: folders, Obsidian config, templates, bookmarks, bases, root capture, private folders."""
+import datetime
 import json
 import re
 import shutil
@@ -72,7 +73,16 @@ class VaultStructure(unittest.TestCase):
             note = kitlib.parse_note(path, VAULT)
             self.assertIsNone(note.fm_error, f"{t}: {note.fm_error}")
             self.assertIn("type", note.frontmatter or {}, f"{t} needs a type")
-            self.assertIn("{{title}}", path.read_text(encoding="utf-8"))
+            # The daily template is filled by the Daily Notes plugin, which substitutes
+            # {{date}} and {{time}} but NOT {{title}} — so it names its title by date, matching
+            # the shipped `[daily]/YYYY/MM/YYYY-MM-DD` format. Assert the rendered title, not the
+            # token, or this passes on a template that ships a literal `{{title}}` to the user.
+            rendered = kitlib.render_template(path.read_text(encoding="utf-8"), "Rendered probe",
+                                              datetime.date(2026, 9, 14))
+            title = (kitlib.split_frontmatter(rendered)[0] or "")
+            self.assertNotIn("{{", title, f"{t}: an unrendered token reached the title")
+            expected = "2026-09-14" if t == "daily" else "Rendered probe"
+            self.assertIn(expected, title, f"{t}: title did not render to {expected}")
 
     def test_every_template_renders_into_a_vault_that_validates(self):
         """A note made from a shipped template must pass `kit.py validate` where it is actually filed.

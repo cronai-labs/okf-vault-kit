@@ -18,7 +18,7 @@ sensitivity: internal
 ## 2. Make it yours (week one)
 
 - Replace `human:me` with your own actor id (`human:<your-handle>`) in `90-templates/*` — the kit's `uv run kit.py init --actor human:<handle>` does it for you.
-- Create one real project (`Alt + T` → project), one real decision, one person note. Delete the **(example)** notes.
+- Create one real project (`Alt + T` → project), one real decision, one person note. Then remove the demonstration notes with `uv run kit.py examples remove --vault .` — it deletes them *and* repairs every hub, list and index entry that referred to them. Add `--dry-run` first to see exactly what it would change.
 - Keep the daily note going. Five minutes, not fifty.
 
 ## 3. The rhythm

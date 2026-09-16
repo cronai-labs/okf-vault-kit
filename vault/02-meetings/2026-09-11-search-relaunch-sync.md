@@ -10,6 +10,7 @@ state: waiting
 tags: [meeting, search]
 sensitivity: internal
 generated: { by: human:me, at: "2026-09-11T14:40:00+02:00" }
+example: true
 ---
 
 # Search relaunch sync 2026-09-11 (example)

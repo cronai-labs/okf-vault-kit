@@ -11,6 +11,7 @@ tags: [decision, adr, search]
 sensitivity: internal
 generated: { by: human:me, at: "2026-09-08T17:05:00+02:00" }
 verified: { by: human:me, at: "2026-09-11T15:00:00+02:00" }
+example: true
 ---
 
 # Adopt qmd for local search (example)

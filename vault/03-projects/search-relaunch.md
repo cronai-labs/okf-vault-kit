@@ -12,6 +12,7 @@ due: 2026-09-18
 tags: [project, search]
 sensitivity: internal
 generated: { by: human:me, at: "2026-09-11T15:20:00+02:00" }
+example: true
 ---
 
 # Search relaunch (example)

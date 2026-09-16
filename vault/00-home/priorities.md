@@ -29,7 +29,7 @@ I lead [role — one sentence: team, product, remit]. Peak season is [when]; the
 
 ## Open decisions
 
-- Embedding model for DE/EN: keep the default or switch to a multilingual one — Sam, decide by 2026-09-17 (example)
+- [Embedding model for German and English queries](../06-decisions/2026-09-15-embedding-model-for-de-en.md) — Sam, decide by 2026-09-17 (example)
 
 ## Waiting on
 

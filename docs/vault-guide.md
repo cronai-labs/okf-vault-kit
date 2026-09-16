@@ -12,7 +12,7 @@ The vault is a directory of Markdown files with YAML frontmatter. Obsidian rende
 | `state` for workflow, `status` for OKF lifecycle | they answer different questions ("what am I doing with this" vs. "can an agent trust this"); both stay valid. `state` is a plain property with suggested words — the kit deliberately ships no formal workflow/state machine |
 | Daily notes in `01-journal/daily/YYYY/MM/` | a year of notes stays browsable; the path is computed, never typed |
 | Templates via the core Templates plugin, `Alt + T` | zero plugins; `{{date:…}}` formats give ISO-8601 timestamps with offset for `generated.at` |
-| Example notes marked **(example)** | show the patterns; the tests use them as fixtures; delete them in week one |
+| Example notes marked **(example)** | show the patterns; the tests use them as fixtures; remove them in week one with `kit.py examples remove` (they cross-link on purpose, so deleting by hand breaks the vault) |
 
 ## Folders
 
