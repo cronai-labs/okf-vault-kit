@@ -4,7 +4,7 @@ title: The MCP bridge stays on the v1 SDK until the 2.x migration is deliberate 
 description: Pinned `mcp>=1.2,<2` because 2.x renamed FastMCP to MCPServer; superseded on 2026-09-16 when the bridge was migrated to `mcp>=2,<3`.
 tags: [mcp, dependencies, ci]
 sources:
-  - { name: "issue #13, and the failure PR #14 fixed", credibility: verified-firsthand }
+  - { name: "the CI failure an unpinned resolve caused, and the fix for it", credibility: verified-firsthand }
   - { name: "reproduced on a clean machine 2026-09-15: unpinned resolves 2.x and the bridge does not start", credibility: verified-firsthand }
   - { name: "issue #2: the migration, verified with a real stdio session against mcp 2.2.0", credibility: verified-firsthand }
 verified: true
@@ -45,15 +45,18 @@ pressure in the security-relevant file is the worse trade.
 
 Not a date alone. Revisit when **any** of these happens:
 
-- issue #13 is picked up (the migration itself)
+- the migration itself is picked up
 - the v1 line stops receiving fixes, or a CVE lands in it
 - a client the alpha testers actually use requires a 2.x-only protocol feature
 
-## Accepted debt
+## Accepted debt — repaid
 
-Tracked by [#13](https://github.com/cronai-labs/okf-vault-kit/issues/13). The drift test that
-keeps the copies of the pin honest lives in `tests/test_docs.py`; when #13 lands, that test is
-the checklist of everything to update.
+This was accepted debt while it stood. It no longer is: see *Superseded* below. The drift test
+that keeps the copies of the pin honest lives in `tests/test_docs.py`, and was the checklist of
+everything the migration had to update.
+
+Issue numbers from before this repository was re-initialised are deliberately not linked here:
+they resolve to unrelated issues in the current numbering, which is worse than a dead link.
 
 ## Superseded — the debt is repaid
 

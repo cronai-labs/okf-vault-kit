@@ -90,7 +90,11 @@ Keep the vault in git and every change the model made is one `git diff` away.
 The kit is MIT. What else you install, and under which terms, is listed in
 [THIRD-PARTY.md](../THIRD-PARTY.md). Two items usually matter to a reviewer:
 
-- **Obsidian requires a paid commercial licence for business use.**
+- **Obsidian is free for commercial use**, and has been since its licence change of 2025-02-20:
+  *"Obsidian is free for all purposes, including personal, commercial, and non-profit use."*
+  ([obsidian.md/license](https://obsidian.md/license), read 2026-09-16). A Commercial License is
+  sold, but it is optional support, not a requirement — so there is no per-seat cost to clear
+  before a rollout.
 - **Gemma-family models** (including the embedding model qmd downloads by default) are under
   Google's Gemma Terms of Use, not an OSI-approved licence. The kit's default chat model,
   MiniCPM5-2B, is Apache-2.0.

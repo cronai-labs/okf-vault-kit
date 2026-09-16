@@ -1,5 +1,14 @@
 # Feedback
 
+**Where to send it:** open an [Alpha feedback issue](https://github.com/cronai-labs/okf-vault-kit/issues/new?template=alpha_feedback.yml).
+Something broken goes to [Bug report](https://github.com/cronai-labs/okf-vault-kit/issues/new?template=bug_report.yml);
+a managed machine, proxy or blocked registry that stopped you goes to
+[It would not install](https://github.com/cronai-labs/okf-vault-kit/issues/new?template=install_blocked.yml) —
+that one is the report we want most.
+
+An answer to one question beats silence on all three, and an issue with two sentences in it is a
+complete submission.
+
 Three questions. Prose is fine — a paragraph each beats a filled-in form.
 
 Run the test kit first — one command, and it writes the report for you:

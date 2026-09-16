@@ -1,6 +1,6 @@
 # OKF — how the vault maps to Google's Open Knowledge Format v0.2
 
-The Open Knowledge Format (OKF) is Google Cloud's open, vendor-neutral specification (v0.1 June 2026, v0.2 July 2026, Apache-2.0, in the `GoogleCloudPlatform/knowledge-catalog` repository) for representing knowledge as **a directory of Markdown files with YAML frontmatter**. It formalises the "LLM wiki" pattern — an agent-maintained, cross-linked Markdown corpus — so that people, agents, search indexes and plain code can read the same files. It is a file format, not a service: no SDK, no registry, no lock-in.
+The Open Knowledge Format (OKF) is Google Cloud's open, vendor-neutral specification (v0.1 June 2026, v0.2 July 2026, Apache-2.0, at [`GoogleCloudPlatform/open-knowledge-format`](https://github.com/GoogleCloudPlatform/open-knowledge-format), spec in `SPEC.md`) for representing knowledge as **a directory of Markdown files with YAML frontmatter**. It formalises the "LLM wiki" pattern — an agent-maintained, cross-linked Markdown corpus — so that people, agents, search indexes and plain code can read the same files. It is a file format, not a service: no SDK, no registry, no lock-in.
 
 This vault is a conformant OKF bundle. That costs almost nothing and buys interoperability with every agent that speaks OKF.
 
@@ -44,7 +44,7 @@ Actor convention: `human:<id>` for people, `process:<id>` for jobs, `<producer>/
 ## Validators
 
 - `uv run kit.py validate --vault <path> --strict` — the kit's validator (Python, no network), also run by `kit.py test`.
-- Google's reference validator: `node validator/okf-validate.mjs <bundle>` from a checkout of `GoogleCloudPlatform/knowledge-catalog`. The two agree on §11; the kit additionally checks the ISO-8601-with-offset rule, the actor convention and the `status` vocabulary, and warns on missing descriptions.
+- **There is no second validator to cross-check against.** The spec repository ships no reference validator, so the kit's conformance claim rests on the kit's own implementation plus the spec text — read §11 and judge for yourself rather than taking a green run as independent confirmation. Beyond §11 the kit also checks the ISO-8601-with-offset rule, the actor convention and the `status` vocabulary, and warns on missing descriptions; those are the kit's rules, not the spec's.
 
 ### What the exit code means
 

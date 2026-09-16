@@ -19,3 +19,6 @@ build/
 # generated graph artifacts; the kit writes them into whatever vault it is pointed at,
 # which is the tracked template vault/ when no --vault or KIT_VAULT is given.
 .kit/
+
+# the release workflow renders the notes here from CHANGELOG.md before publishing
+NOTES.md

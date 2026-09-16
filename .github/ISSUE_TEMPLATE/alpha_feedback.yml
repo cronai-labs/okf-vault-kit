@@ -1,0 +1,44 @@
+name: Alpha feedback
+description: Did you keep using it? The three questions from FEEDBACK.md
+labels: [feedback]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Prose is fine — a paragraph each beats a filled-in form, and a short
+        answer to one question beats silence on all three.
+
+        A test-kit report is welcome but not required here. It carries no note
+        content; paths are reduced to a bare filename and tokens carrying your
+        account or machine name are replaced.
+  - type: textarea
+    id: first-hour
+    attributes:
+      label: The first hour
+      description: What did you expect to happen that did not? Where did you have to guess?
+    validations:
+      required: false
+  - type: textarea
+    id: after-a-week
+    attributes:
+      label: After a week
+      description: >
+        What did you actually use it for? What did you expect to be there and was
+        not? Is there anything you now do here that you used to do somewhere else?
+    validations:
+      required: false
+  - type: textarea
+    id: local-model
+    attributes:
+      label: The local model
+      description: >
+        Did you keep using it? What did it get right, and what did it get wrong in
+        a way that made you stop trusting it?
+    validations:
+      required: false
+  - type: textarea
+    id: honest-question
+    attributes:
+      label: If we took this away next week, would you notice?
+    validations:
+      required: false

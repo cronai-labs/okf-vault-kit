@@ -4,7 +4,12 @@ An Obsidian vault template that is also a Google **Open Knowledge Format** bundl
 
 For managers, project/product managers and engineers: same structure, three lanes.
 
+> **This is an alpha.** Read [ALPHA.md](ALPHA.md) for what we are asking of you and what is not
+> finished yet, and [FEEDBACK.md](FEEDBACK.md) for where to send what you find. The version is in
+> [`VERSION`](VERSION) and printed by `kit.py --version`.
+
 ```bash
+git clone https://github.com/cronai-labs/okf-vault-kit && cd okf-vault-kit
 uv run kit.py doctor                                   # what is installed, what is missing
 uv run kit.py init --target ~/Notes/vault --actor human:you
 export KIT_VAULT=~/Notes/vault                         # so the commands below mean YOUR vault
@@ -62,4 +67,4 @@ Two runtimes, both single binaries from Homebrew/winget: **uv** (Python 3.11+, P
 
 Everything offline is executed by the test suite. qmd and LLM end-to-end tests run wherever those tools exist; they are gated, not mocked. Bases views were validated structurally and need one visual check in Obsidian after edits.
 
-Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). MIT — see [LICENSE](LICENSE); what else you end up installing, and under which licence, is in [THIRD-PARTY.md](THIRD-PARTY.md) (note that Obsidian needs a paid licence for commercial use). Changes in [CHANGELOG.md](CHANGELOG.md).
+Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). MIT — see [LICENSE](LICENSE); what else you end up installing, and under which licence, is in [THIRD-PARTY.md](THIRD-PARTY.md) (Obsidian itself is free for commercial use since its 2025-02-20 licence change). Changes in [CHANGELOG.md](CHANGELOG.md).
