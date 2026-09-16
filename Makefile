@@ -53,8 +53,19 @@ release: check ## build the distributable zip and its checksum
 	@cd $(DIST) && shasum -a 256 okf-vault-kit-$(VERSION).zip > okf-vault-kit-$(VERSION).zip.sha256
 	@echo && ls -l $(DIST) && cat $(DIST)/okf-vault-kit-$(VERSION).zip.sha256
 
-changelog: ## regenerate CHANGELOG.md from the commit history
-	uvx git-cliff --config cliff.toml --output CHANGELOG.md
+# `--tag` names the version being generated. Without it git-cliff sees an untagged tree and
+# writes `[Unreleased]` -- and because the tag is created *after* this commit, the released
+# changelog would permanently describe itself as unreleased. That is how v0.1.0 shipped. (#43)
+#
+# It only means that for a version that has not shipped yet, hence the refusal: with v$(VERSION)
+# already tagged, git-cliff labels the commits *since* that tag with it too and emits a second
+# `## [$(VERSION)]` section above the real one. Bump VERSION first.
+changelog: ## regenerate CHANGELOG.md for the version in VERSION
+	@git rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null 2>&1 && { \
+	  echo "v$(VERSION) is already tagged -- bump VERSION before regenerating the changelog,"; \
+	  echo "or git-cliff will file the commits since that tag under v$(VERSION) as well."; \
+	  exit 1; } || true
+	uvx git-cliff --config cliff.toml --tag v$(VERSION) --output CHANGELOG.md
 
 next-version: ## what the next tag would be, from the commits since the last one
 	@next=$$(uvx git-cliff --config cliff.toml --bumped-version 2>/dev/null); \

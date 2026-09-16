@@ -5,7 +5,7 @@ All notable changes to OKF Vault Kit are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-09-16
 
 ### Bug Fixes
 
@@ -18,5 +18,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **testkit:** One redactor, and a report that answers the follow-up questions (#28) ([7413f14](https://github.com/cronai-labs/okf-vault-kit/commit/7413f14c7a8f7aca5cc73dc224a42a5213f17568))
 - **vault:** Make the sample set removable, and stop init corrupting its own onboarding page (#29) ([79d0bac](https://github.com/cronai-labs/okf-vault-kit/commit/79d0bacb8a4ade17fbf01399767b423f183737eb))
 - **release:** One procedure, notes from the changelog, and a suite that passes from the zip (#30) ([5842744](https://github.com/cronai-labs/okf-vault-kit/commit/584274400843dc7af927a3b97436bcf210e18341))
-- **release:** Next-version must not call the first release "nothing to release" ([84e48fb](https://github.com/cronai-labs/okf-vault-kit/commit/84e48fb17ce8d27a21deae78fbc599f0f938436b))
+- **release:** Next-version must not call the first release "nothing to release" (#37) ([3c3154e](https://github.com/cronai-labs/okf-vault-kit/commit/3c3154e4fc1526294df3322e73d3eb2218bdea35))
+- **release:** Publish the changelog section's body, not its heading (#42) ([5fe4f94](https://github.com/cronai-labs/okf-vault-kit/commit/5fe4f94c8483a74384733d667b53b1182bd7e5d3))
 

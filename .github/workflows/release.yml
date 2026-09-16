@@ -2,7 +2,8 @@ name: release
 
 # The release path. Releases are cut by pushing a tag that matches VERSION:
 #
-#   make changelog                       # git-cliff regenerates CHANGELOG.md
+#   echo 0.5.0 > VERSION                 # first: `make changelog` generates *for* this version
+#   make changelog                       # git-cliff writes the `## [0.5.0]` section
 #   git commit -am "chore(release): 0.5.0"
 #   git tag v0.5.0 && git push origin main v0.5.0
 #
@@ -75,10 +76,10 @@ jobs:
           sections = re.split(r"^## ", text, flags=re.M)[1:]
           if not sections:
               sys.exit("CHANGELOG.md has no '## ' section to publish")
-          # The section's BODY, without its heading. CHANGELOG.md is generated before the tag
-          # exists, so git-cliff writes `[Unreleased]` -- correct for an untagged tree, and the
-          # wrong title for a release. `gh release create --title "$REF"` already names the
-          # release after the tag, so the heading is redundant even when it happens to be right.
+          # The section's BODY, without its heading. `make changelog` passes `--tag v$VERSION`,
+          # so the heading reads `## [0.5.0] - <date>` rather than `[Unreleased]` -- but
+          # `gh release create --title "$REF"` already names the release after the tag, so
+          # publishing any heading here is redundant and is the only way for it to be wrong.
           body = sections[0].split("\n", 1)[1].strip() + "\n"
           sys.stdout.write(body)
           PY
