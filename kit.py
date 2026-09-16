@@ -160,7 +160,10 @@ def cmd_doctor(args) -> int:
     vault = vault_for_cfg
     if vault.exists():
         rep = kitlib.validate_okf(vault)
-        rows.append(("vault", str(vault), f"{rep.checked} notes, {len(rep.errors)} OKF error(s), {len(rep.warnings)} warning(s)"))
+        # Say when this is the shipped sample. Without it the row is identical for every tester
+        # and cannot answer the one question it exists for: is my own vault healthy?
+        sample = " — the kit's sample; pass --vault or set KIT_VAULT to describe yours" if vault == TEMPLATE_VAULT.resolve() else ""
+        rows.append(("vault", str(vault), f"{rep.checked} notes, {len(rep.errors)} OKF error(s), {len(rep.warnings)} warning(s){sample}"))
     else:
         rows.append(("vault", str(vault), "not found — run `kit.py init`"))
     w = max(len(r[0]) for r in rows)
@@ -324,18 +327,19 @@ def cmd_init(args) -> int:
         print(f"personalised {n} file(s) with {actor}"
               + (f" — {skipped} file(s) left untouched: not valid UTF-8" if skipped else ""))
     kitlib.write_index(target)
-    _write_kit_config(target, args.collection)
+    collection = args.collection or kitproviders.suggest_collection_name(target)
+    _write_kit_config(target, collection)
     print(f"vault ready: {target}")
     qmd = None if args.no_qmd else _qmd()
     if qmd:
-        name = args.collection
+        name = collection
         r = _run([qmd, "collection", "add", str(target), "--name", name, "--mask", QMD_MASK])
         said = r.stdout.strip() or r.stderr.strip()
         if said:
             print(said)
         if r.returncode != 0:
             print(f"qmd collection '{name}' NOT registered (qmd exited {r.returncode}) — search falls back to plain "
-                  f"term frequency until you run: qmd collection add {target} --name {name} --mask \"{QMD_MASK}\"")
+                  f'term frequency until you run: qmd collection add "{target}" --name {name} --mask "{QMD_MASK}"')
         else:
             c = _run([qmd, "context", "add", f"qmd://{name}", "Personal knowledge vault: journal, meetings, projects, people, decisions, knowledge notes (OKF frontmatter)."])
             if c.returncode != 0:
@@ -345,7 +349,8 @@ def cmd_init(args) -> int:
                   "ignore list. To match config/qmd/index.example.yml, put this under the collection in qmd's "
                   "index.yml: ignore: [\".obsidian/**\", \"09-archive/**\", \"90-templates/**\"]")
     else:
-        print(f"next: install qmd (docs/tools.md) and run `qmd collection add {target} --name {args.collection} --mask \"**/*.md\"`")
+        print(f'next: install qmd (docs/tools.md) and run `qmd collection add "{target}" '
+              f'--name {collection} --mask "{QMD_MASK}"`')
     print("open the folder as a vault in Obsidian and read 99-system/getting-started.md")
     return 0
 
@@ -717,8 +722,18 @@ def _bridge_modules():
 
 
 def cmd_proposals(args) -> int:
-    vault = _vault(args.vault)
     bridge_policy, obsidian_bridge = _bridge_modules()
+    try:
+        return _proposals(args, bridge_policy, obsidian_bridge)
+    except bridge_policy.PolicyError as exc:
+        # Refusing a proposal at apply time is what the policy layer is for; docs/security.md
+        # advertises this path, so it reports rather than crashes.
+        print(f"refused: {exc}", file=sys.stderr)
+        return 1
+
+
+def _proposals(args, bridge_policy, obsidian_bridge) -> int:
+    vault = _vault(args.vault)
     store = bridge_policy.ProposalStore(vault / kitgraph.KIT_DIR / "proposals")
     if args.action == "list":
         items = store.pending()
@@ -737,7 +752,7 @@ def cmd_proposals(args) -> int:
         kitlib.append_log(vault, f"Applied proposal {args.id} ({out})", "Update")
         print(f"applied {args.id}: {out}"); return 0
     if args.action == "reject":
-        store.reject(args.id, args.reason or ""); print(f"rejected {args.id}"); return 0
+        store.reject(args.id, getattr(args, "reason", None) or ""); print(f"rejected {args.id}"); return 0
     return 2
 
 
@@ -936,7 +951,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--report", metavar="FILE", help="also write a redacted report (no note content) to send with feedback"); p.set_defaults(fn=cmd_doctor)
     p = sub.add_parser("init", help="create a personal vault from the template")
     p.add_argument("--target", required=True); p.add_argument("--actor", help="human:<handle> — replaces human:me in the copied vault")
-    p.add_argument("--collection", default="vault", help="qmd collection name (default: vault)"); p.add_argument("--no-qmd", action="store_true"); p.add_argument("--force", action="store_true")
+    p.add_argument("--collection", help="qmd collection name (default: derived from the vault path, so two vaults do not share one index)"); p.add_argument("--no-qmd", action="store_true"); p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("index", help="regenerate index.md"); p.add_argument("--vault"); p.set_defaults(fn=cmd_index)
     p = sub.add_parser("validate", help="OKF conformance, links, ontology"); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="warnings fail too")
@@ -972,7 +987,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--graph", action="store_true", help="add graph facts (context packs) for the top hits"); p.add_argument("--dry-run", action="store_true", help="print the assembled prompt, do not call the model"); p.set_defaults(fn=cmd_llm_ask)
     p = sub.add_parser("test", help="run the end-to-end tests"); p.add_argument("-p", "--pattern", default=None); p.set_defaults(fn=cmd_test)
     p = sub.add_parser("proposals", help="list/show/apply/reject writes recorded by a bridge running with --propose")
-    p.add_argument("action", choices=["list", "show", "apply", "reject"]); p.add_argument("id", nargs="?"); p.add_argument("--vault"); p.add_argument("--reason"); p.set_defaults(fn=cmd_proposals)
+    psub = p.add_subparsers(dest="action", required=True)
+    for _name, _help, _needs_id in (("list", "pending proposals, oldest first", False),
+                                    ("show", "the full record of one proposal", True),
+                                    ("apply", "write one proposal into the vault", True),
+                                    ("reject", "discard one proposal", True)):
+        _p = psub.add_parser(_name, help=_help)
+        if _needs_id:
+            _p.add_argument("id")
+        _p.add_argument("--vault")
+        if _name == "reject":
+            _p.add_argument("--reason")
+        _p.set_defaults(fn=cmd_proposals)
 
     args = ap.parse_args(argv)
     return args.fn(args)

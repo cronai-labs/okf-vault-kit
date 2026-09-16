@@ -126,6 +126,27 @@ def load_config(vault: Path | None) -> dict[str, Any]:
     return providers if isinstance(providers, dict) else {}
 
 
+def suggest_collection_name(vault: Path) -> str:
+    """A default qmd collection name distinct per vault, for `init` to write into the config.
+
+    Every documented install path ends in a directory called `vault`, so the directory name alone
+    collides: a second vault then answers from the first one's index, with citations that look
+    right. The parent directory is what actually distinguishes them (`~/Notes/vault`,
+    `~/work/acme/vault`), so the default is `<parent>-<name>`.
+
+    Only `init` calls this. `collection_name` still falls back to DEFAULT_COLLECTION so vaults
+    configured before this existed keep querying the collection they registered.
+    """
+    vault = Path(vault).expanduser().resolve()
+    parent = vault.parent
+    # Never the home directory's own name: it is the account name, and the doctor report a tester
+    # sends back prints the collection. `~/vault` keeps the bare name, which is unambiguous anyway.
+    prefix = "" if parent == Path.home() else parent.name
+    parts = [p for p in (prefix, vault.name) if p and p not in (".", "/")]
+    slug = re.sub(r"[^a-z0-9]+", "-", "-".join(parts).lower()).strip("-")
+    return slug or DEFAULT_COLLECTION
+
+
 def collection_name(vault: Path | None, explicit: str | None = None) -> str:
     """The qmd collection to query: explicit > what `init` wrote into the vault > the init default.
 

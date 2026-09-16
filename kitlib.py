@@ -529,7 +529,10 @@ def set_frontmatter(path: Path, values: dict[str, Any]) -> None:
     re-serialised as a whole, and then in block style, never collapsed onto one flow line.
     """
     path = Path(path)
-    text = path.read_text(encoding="utf-8")
+    # utf-8-sig for the same reason parse_note uses it: split_frontmatter is anchored at the start
+    # of the text, so a byte-order mark hides the existing block and this would prepend a second
+    # one, orphaning the real type/title into the body. The mark is not written back.
+    text = path.read_text(encoding="utf-8-sig")
     raw, body = split_frontmatter(text)
     if raw is None and EMPTY_FM_RE.match(text):
         raw, body = "", EMPTY_FM_RE.sub("", text)   # '---\n---': a block with no keys, not body text
