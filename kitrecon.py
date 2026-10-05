@@ -33,7 +33,16 @@ CLOSED_STATES = {"done", "decided", "superseded", "archived", "cancelled"}
 
 TASK_RE = re.compile(r"^(?P<indent>\s*)[-*]\s+\[(?P<mark> |x|X)\]\s+(?P<text>.*?)\s*$")
 OWNER_DUE_RE = re.compile(r"^(?P<text>.*?)\s+(?:—|–|--)\s+(?P<owner>[^,]+?)(?:,\s*due\s+(?P<due>\d{4}-\d{2}-\d{2}))?\s*$")
-DUE_EMOJI_RE = re.compile(r"\s*(?:📅|due:)\s*(\d{4}-\d{2}-\d{2})")
+DUE_EMOJI_RE = re.compile(r"\s*(?:[📅📆🗓]️?|due:)\s*(\d{4}-\d{2}-\d{2})")
+# The other signifiers of the Obsidian Tasks plugin (emoji format), each with its value. They are
+# stripped before the owner is parsed, so `— me ✅ 2026-10-05` still reads as owner "me". A recurrence
+# rule runs until the next signifier or the end of the line.
+_TASKS_SIGNS = "📅📆🗓⏳⌛🛫➕✅❌🔁🔺⏫🔼🔽⏬🆔⛔🏁"
+TASKS_SIGNIFIER_RE = re.compile(
+    r"\s*(?:[⏳⌛🛫➕✅❌]️?\s*\d{4}-\d{2}-\d{2}"
+    rf"|🔁️?[^{_TASKS_SIGNS}]*"
+    r"|🆔️?\s*[\w-]+|⛔️?\s*[\w-]+(?:\s*,\s*[\w-]+)*|🏁️?\s*\w+"
+    r"|[🔺⏫🔼🔽⏬]️?)")
 TABLE_ROW_RE = re.compile(r"^\|(.+)\|\s*$")
 CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")                       # `\|` is a literal pipe inside a cell, not a border
 LINK_TARGET_RE = re.compile(r"\[[^\]]*\]\(\s*(?:<(?P<angle>[^>]*)>|(?P<plain>[^)]*?))(?:\s+\"[^\"]*\")?\s*\)")
@@ -356,6 +365,7 @@ def parse_task_line(line: str) -> tuple[bool, str, str, str] | None:
     de = DUE_EMOJI_RE.search(text)
     if de:
         due = de.group(1); text = DUE_EMOJI_RE.sub("", text).strip()
+    text = TASKS_SIGNIFIER_RE.sub("", text).strip()
     owner = ""
     od = OWNER_DUE_RE.match(text)
     if od and _plausible_owner(od.group("owner"), bool(od.group("due"))):

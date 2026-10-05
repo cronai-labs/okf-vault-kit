@@ -27,6 +27,8 @@ The passes run in a fixed order: derived states → project hub → decision hub
 
 Scans every `- [ ]` / `- [x]` in the vault (templates, archive and the digest itself excluded, code blocks ignored) and parses the convention `verb — owner, due YYYY-MM-DD` (em/en dash or `--`; `📅 YYYY-MM-DD` and `due: YYYY-MM-DD` are understood too).
 
+Vaults that use the Obsidian Tasks plugin can write `verb — owner 📅 YYYY-MM-DD` instead. The due date is read from `📅`, `📆` or `🗓`; every other Tasks signifier is stripped with its value before the owner is read: `⏳`/`⌛` scheduled, `🛫` start, `➕` created, `✅` done, `❌` cancelled, `🔁` recurrence rule, `🔺 ⏫ 🔼 🔽 ⏬` priority, `🆔`/`⛔` dependencies and `🏁` on completion. `kit.py minutes` and the digest still write the kit convention.
+
 ```bash
 uv run kit.py todos                     # summary: overdue, due within 7 days, conflicts
 uv run kit.py todos --owner Alex --json # scriptable

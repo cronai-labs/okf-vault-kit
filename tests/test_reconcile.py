@@ -65,6 +65,42 @@ class Todos(unittest.TestCase):
         self.assertEqual(kitrecon.parse_task_line("- [ ] a - b - c")[1], "a - b - c", "plain hyphens are not owner separators")
         self.assertIsNone(kitrecon.parse_task_line("- not a task"))
 
+    def test_parse_task_line_tasks_plugin_signifiers(self):
+        """Every signifier of the Obsidian Tasks plugin is stripped before the owner is parsed (#50)."""
+        cases = {
+            "- [x] Send invoice — me ✅ 2026-10-05": (True, "Send invoice", "me", ""),
+            "- [ ] Send invoice — me ⏳ 2026-10-10 📅 2026-10-15": (False, "Send invoice", "me", "2026-10-15"),
+            "- [ ] Send invoice — me ⌛ 2026-10-10": (False, "Send invoice", "me", ""),
+            "- [ ] Send invoice — me 🛫 2026-10-01 📅 2026-10-15": (False, "Send invoice", "me", "2026-10-15"),
+            "- [ ] Send invoice — me ➕ 2026-10-01 📅 2026-10-15": (False, "Send invoice", "me", "2026-10-15"),
+            "- [x] Send invoice — me ❌ 2026-10-05": (True, "Send invoice", "me", ""),
+            "- [ ] Water plants — me 🔁 every week on Monday when done 📅 2026-10-12": (False, "Water plants", "me", "2026-10-12"),
+            "- [ ] Water plants — me 📅 2026-10-12 🔁 every week": (False, "Water plants", "me", "2026-10-12"),
+            "- [ ] Send invoice — me ⏫ 📅 2026-10-15": (False, "Send invoice", "me", "2026-10-15"),
+            "- [ ] Send invoice — me 🔺": (False, "Send invoice", "me", ""),
+            "- [ ] Send invoice — me 🔽": (False, "Send invoice", "me", ""),
+            "- [ ] Send invoice — me 🆔 abc123 ⛔ def456,ghi789 🏁 delete": (False, "Send invoice", "me", ""),
+            "- [ ] Send invoice — me 📆 2026-10-15": (False, "Send invoice", "me", "2026-10-15"),
+            "- [ ] Send invoice — me 🗓 2026-10-15": (False, "Send invoice", "me", "2026-10-15"),
+            "- [ ] Send invoice — me 🗓️ 2026-10-15": (False, "Send invoice", "me", "2026-10-15"),
+        }
+        for line, expected in cases.items():
+            with self.subTest(line=line):
+                self.assertEqual(kitrecon.parse_task_line(line), expected)
+        self.assertEqual(kitrecon.parse_task_line("- [ ] Buy 🍎 and 🔥 wood — me")[1], "Buy 🍎 and 🔥 wood",
+                         "an emoji that is not a signifier is part of the text")
+
+    def test_conflict_found_when_the_done_copy_carries_a_done_date(self):
+        v = temp_vault()
+        try:
+            (v / "02-meetings/x.md").write_text("---\ntype: meeting\ndescription: x\ndate: 2026-09-10\n---\n"
+                                                "- [x] Prepare go/no-go one-pager — me ✅ 2026-09-12\n", encoding="utf-8")
+            rep = kitrecon.todo_report(v, today=dt.date(2026, 9, 14))
+            self.assertEqual(len(rep.done_conflicts), 1)
+            self.assertEqual({t.owner for t in rep.done_conflicts[0]}, {"me"})
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
     def test_report_on_template(self):
         rep = kitrecon.todo_report(VAULT, today=dt.date(2026, 9, 14))
         self.assertGreater(len(rep.open), 5)
