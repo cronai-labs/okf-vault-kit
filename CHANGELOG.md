@@ -5,6 +5,14 @@ All notable changes to OKF Vault Kit are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-10-15
+
+### Bug Fixes
+
+- **release:** Generate the changelog for the version being released, and gate it (#44) ([a6ad52e](https://github.com/cronai-labs/okf-vault-kit/commit/a6ad52e3daaf3e59ebf3ea5f657af7141a7e6897))
+- **todos:** Strip Tasks-plugin signifiers before reading the owner (#51) ([c9c045c](https://github.com/cronai-labs/okf-vault-kit/commit/c9c045cd4e0cd3bd479f74df5fb6cc4060053073))
+- **vault:** Stop the template's stale_after dates from expiring in CI (#62) ([f987412](https://github.com/cronai-labs/okf-vault-kit/commit/f987412ada21e24f7b3dab97c26719931cf7966e))
+- **validate:** Take the template folder from templates.json, and skip its placeholder links (#69) ([1678fcc](https://github.com/cronai-labs/okf-vault-kit/commit/1678fcc438b1cd8e6cff689cb0d99d2f485dfe21))
 ## [0.1.0] - 2026-09-16
 
 ### Bug Fixes
