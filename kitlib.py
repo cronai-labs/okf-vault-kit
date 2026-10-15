@@ -61,6 +61,9 @@ EMPTY_FM_RE = re.compile(r"\A---[ \t]*\r?\n---[ \t]*\r?\n?")   # FM_RE needs a l
 FM_KEY_RE = re.compile(r"^([A-Za-z_][\w.-]*)\s*:")
 CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
+# Comments are not rendered, so nothing inside one is a link or a citation: HTML, and Obsidian's own.
+HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+OBSIDIAN_COMMENT_RE = re.compile(r"%%.*?%%", re.DOTALL)
 MD_LINK_RE = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
 MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 WIKILINK_RE = re.compile(r"(?<!\!)\[\[([^\]\|#]+)(?:#[^\]\|]*)?(?:\|[^\]]*)?\]\]")
@@ -363,9 +366,12 @@ def validate_okf(root: Path) -> Report:
 
 # ---------------------------------------------------------------- links
 
-def _strip_code(text: str) -> str:
+def _strip_unrendered(text: str) -> str:
+    """Drop what a reader never sees as a link: code first (a `<!--` in code opens nothing), then comments."""
     text = CODE_FENCE_RE.sub("", text)
-    return CODE_SPAN_RE.sub("", text)
+    text = CODE_SPAN_RE.sub("", text)
+    text = HTML_COMMENT_RE.sub("", text)
+    return OBSIDIAN_COMMENT_RE.sub("", text)
 
 
 def _base_views(base_path: Path) -> list[str]:
@@ -400,7 +406,7 @@ def check_links(root: Path) -> Report:
         raw_text = read_text(path)
         if raw_text is None:
             continue          # validate_okf already reports it; a second finding would only repeat
-        text = _strip_code(raw_text)
+        text = _strip_unrendered(raw_text)
         rep.checked += 1
         # a placeholder target is filled in when a note is created from the template; any other
         # link in a template must still resolve

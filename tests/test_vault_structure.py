@@ -108,7 +108,7 @@ class VaultStructure(unittest.TestCase):
     def test_templates_carry_no_relative_body_links(self):
         for name in EXPECTED_TEMPLATES:
             path = VAULT / "90-templates" / f"{name}.md"
-            body = kitlib._strip_code(kitlib.parse_note(path, VAULT).body)
+            body = kitlib._strip_unrendered(kitlib.parse_note(path, VAULT).body)
             targets = [m.group(1) for m in kitlib.MD_LINK_RE.finditer(body)]
             local = [x for x in targets if not x.startswith(("http://", "https://", "mailto:", "#"))]
             self.assertEqual(local, [], f"{name}.md: relative link(s) break once the note is filed elsewhere")
