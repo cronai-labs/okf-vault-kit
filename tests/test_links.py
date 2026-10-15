@@ -46,6 +46,20 @@ class Links(unittest.TestCase):
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
 
+    def test_links_inside_comments_are_ignored(self):
+        """An HTML or Obsidian comment is not rendered, so a link in it is not a link (#81)."""
+        v = temp_vault()
+        try:
+            (v / "02-meetings/c.md").write_text(
+                "---\ntype: meeting\ndescription: x\n---\n"
+                "<!-- see [x](nope.md) and,\non the next line, [[Nope]] -->\n"
+                "%% [y](nope2.md) [[Nope2]] %%\n"
+                "after both comments: [[Still-Nope]]\n", encoding="utf-8")
+            self.assertEqual(kitlib.check_links(v).errors, ["02-meetings/c.md: broken wikilink [[Still-Nope]]"],
+                             "comments are skipped, and the text after them is still checked")
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
 
 class TemplateFolder(unittest.TestCase):
     """A template's placeholder link is filled in when the note is created, not when it is checked."""

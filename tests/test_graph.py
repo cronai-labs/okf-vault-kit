@@ -148,6 +148,19 @@ class GraphBuild(unittest.TestCase):
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
 
+    def test_a_link_inside_a_comment_is_not_an_edge(self):
+        """Same rule as the link check (#81): what is not rendered does not link."""
+        v = temp_vault()
+        try:
+            (v / "07-knowledge/commenter.md").write_text(
+                "---\ntype: concept\ndescription: x\n---\n\n# Commenter\n\n<!-- see [[hybrid-search]] -->\n%% [[reindex-qmd]] %%\n",
+                encoding="utf-8")
+            g = kitgraph.build_graph(v)
+            linked = {t for s, p, t, _ in g.edges if s == "07-knowledge/commenter.md" and p == "links_to"}
+            self.assertEqual(linked, set())
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
     def test_stale_and_at_risk_propagate(self):
         v = temp_vault()
         try:

@@ -424,7 +424,7 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
                 g.add_edge(nid, "has_source", sid, "frontmatter")
                 if s.get("id"):
                     declared[str(s["id"])] = sid
-        cited = set(FOOTNOTE_REF.findall(kitlib._strip_code(note.body)))
+        cited = set(FOOTNOTE_REF.findall(kitlib._strip_unrendered(note.body)))
         for fid in cited:
             if fid in declared:
                 g.add_edge(nid, "cites", declared[fid], "body")
@@ -433,7 +433,7 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
                 if fid not in cited:
                     g.findings.append(Finding("info", "unused_source", nid, f"source `{fid}` is declared but never cited with [^{fid}]", "cite it in the body or remove it"))
         # body links
-        text = kitlib._strip_code(note.body)
+        text = kitlib._strip_unrendered(note.body)
         for m in kitlib.MD_LINK_RE.finditer(text):
             target = m.group(1)
             if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
