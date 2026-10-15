@@ -6,6 +6,11 @@ updates:
     directory: /
     schedule: { interval: weekly }
     commit-message: { prefix: "ci" }     # ci: never triggers a release
+    # init and analyze must run the same release, or CodeQL refuses to run. Without a group,
+    # Dependabot bumps each path in its own PR, and neither can pass (#56, #57).
+    groups:
+      codeql-action:
+        patterns: ["github/codeql-action*"]
   - package-ecosystem: pip
     directory: /
     schedule: { interval: weekly }
