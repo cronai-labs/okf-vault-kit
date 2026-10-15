@@ -122,11 +122,25 @@ class ReleaseNotes(unittest.TestCase):
         self.assertTrue(any(l.startswith("### ") for l in notes.splitlines()),
                         "the grouped sections are the body and must survive")
 
-    def test_the_step_still_refuses_an_empty_section(self):
-        """The floor is what catches a wrong changelog flag before the tag is spent."""
+    def _run_notes_step(self, changelog: str) -> subprocess.CompletedProcess:
+        bash = shutil.which("bash")
+        if bash is None or sys.platform == "win32":
+            self.skipTest("the release job runs on ubuntu")   # same guard as above, same reasons
         step = self._notes_step()
-        self.assertIn("-lt 200", step)
-        self.assertIn("entries", step)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+            return subprocess.run([bash, "-c", step], cwd=tmp, capture_output=True, text=True, check=False)
+
+    def test_the_step_refuses_a_section_without_entries(self):
+        """An empty or unparsed section is what the gate exists for: caught before the tag is spent."""
+        r = self._run_notes_step("# Changelog\n\n## [9.9.9] - 2026-01-01\n\n### Bug Fixes\n\n## [9.9.8] - 2025-12-01\n\n- old\n")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_release_with_one_short_entry_passes(self):
+        """One fix is a release. A byte floor rejected exactly this for 0.1.2 (#84)."""
+        r = self._run_notes_step("# Changelog\n\n## [9.9.9] - 2026-01-01\n\n### Bug Fixes\n\n- **x:** Fix one thing (#1)\n")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("1 entries", r.stdout)
 
 
 class NextVersion(unittest.TestCase):
