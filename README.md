@@ -28,7 +28,7 @@ Or take a pinned release instead of the tip of `main`. Every release ships the a
 checksum; verify it before you unpack:
 
 ```bash
-v=0.1.0
+v=0.1.1
 base=https://github.com/cronai-labs/okf-vault-kit/releases/download/v$v
 curl -fsSLO $base/okf-vault-kit-$v.zip && curl -fsSLO $base/okf-vault-kit-$v.zip.sha256
 shasum -a 256 -c okf-vault-kit-$v.zip.sha256    # sha256sum -c on Linux
