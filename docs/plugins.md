@@ -23,12 +23,13 @@ Obsidian itself is free for commercial use (licence change in February 2025), so
 | **Dataview** | inline queries, JS views | engineer | prefer Bases; keep Dataview only for what Bases cannot do yet (computed roll-ups across notes) |
 | **Kanban** | board views backed by markdown lists | PM | fine for a single project board; not a substitute for project notes |
 | **Excalidraw** | diagrams as `.excalidraw.md` | engineer, PM | large files; keep in `08-resources` |
-| **Linter** | enforce frontmatter and formatting rules on save | engineer | can be configured to keep `description` present and dates ISO — complements `kit.py validate` |
 | **obsidian-qmd** (achekulaev) | semantic search *inside* Obsidian, powered by your qmd index | all | requires qmd installed; the plugin shells out to it |
 | **Local REST API** | HTTP access to the vault for external tools | engineer | alternative to the official CLI for agents; secure the token |
 | **Web Clipper** (official browser extension, not a plugin) | clean captures into `08-resources/clippings` | all | set the template to include `type: resource` and a `description` |
 
 Skip: anything that rewrites frontmatter silently, anything that syncs to a third-party cloud by default, and "AI assistant" plugins that send note content to hosted APIs — the kit's local setup gives you the same features with the data staying on the machine.
+
+That rules out **Linter** in a vault that agents edit: lint-on-save rewrites a note's frontmatter while Obsidian has it open, and can race with an agent writing the same file. `kit.py validate` reports what Linter would fix (a missing `description`, non-ISO dates) without changing any file.
 
 ## Obsidian settings that matter more than plugins
 
