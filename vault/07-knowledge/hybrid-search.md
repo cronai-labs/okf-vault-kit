@@ -4,7 +4,7 @@ title: Hybrid search
 description: Retrieval that fuses keyword (BM25) and vector results with reciprocal rank fusion, optionally re-ranked by a small LLM — why it beats either method alone.
 tags: [concept, search, retrieval]
 status: stable
-stale_after: 2027-03-01T00:00:00Z
+stale_after: 2099-12-31T00:00:00Z
 sources:
   - id: qmd-readme
     resource: https://github.com/tobi/qmd
