@@ -5,6 +5,12 @@ All notable changes to OKF Vault Kit are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-10-15
+
+### Bug Fixes
+
+- **validate:** Skip links inside HTML and Obsidian comments (#82) ([ba1fb25](https://github.com/cronai-labs/okf-vault-kit/commit/ba1fb251a408173fd1bb207c7fe1dd93a1dba7b0))
+- **release:** Gate the release notes on entries, not on a 200-byte floor (#85) ([c51d89a](https://github.com/cronai-labs/okf-vault-kit/commit/c51d89aa5d5a40f7e0e7cb31de69156120f0e30d))
 ## [0.1.1] - 2026-10-15
 
 ### Bug Fixes
