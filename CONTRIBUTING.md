@@ -55,7 +55,7 @@ git tag v$(cat VERSION) && git push origin v$(cat VERSION)
 `VERSION` is the single source of truth — `pyproject.toml` reads it, `kit.py --version` prints it,
 and tests fail on drift. The release notes come from the newest second-level section of `CHANGELOG.md`,
 so that file is what a reader sees on the Releases page; the workflow refuses to publish if that
-section renders to almost nothing.
+section has no entry.
 
 `make release` builds `dist/okf-vault-kit-<VERSION>.zip` and its `.sha256` locally from a clean,
 tagged tree. It is what CI runs, and is useful for checking the artifact before tagging.

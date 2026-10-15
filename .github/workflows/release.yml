@@ -87,7 +87,9 @@ jobs:
           entries=$(grep -c '^[-*] ' NOTES.md || true)
           echo "notes: ${bytes}B, ${entries} entries"
           head -20 NOTES.md
-          if [ "$bytes" -lt 200 ] || [ "$entries" -lt 1 ]; then
+          # An empty or unparsed section has no entry; one entry is a release. No byte floor: it
+          # only ever rejected a small, correct release (#84).
+          if [ "$entries" -lt 1 ]; then
             echo "::error::release notes are ${bytes}B / ${entries} entries -- the changelog section is empty or unparsed"
             exit 1
           fi
