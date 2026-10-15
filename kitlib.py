@@ -46,7 +46,8 @@ KIT_VERSION = _kit_version()
 RESERVED_FILENAMES = {"index.md", "log.md"}
 RAW_ROOT_FILENAMES = {"Inbox.md"}   # raw capture at the bundle root: reserved by basename there, and only there
 IGNORED_DIRS = {".obsidian", ".git", ".qmd", ".kit", "node_modules", ".trash"}
-TEMPLATE_DIRS = {"90-templates"}
+DEFAULT_TEMPLATE_DIR = "90-templates"   # when .obsidian/templates.json names no folder
+PLACEHOLDER_RE = re.compile(r"\{\{[^}]*\}\}")   # core Templates: {{title}}, {{date:YYYY-MM}}, ...
 
 ISO_DATETIME = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$"
@@ -162,12 +163,32 @@ def _visible(rel: Path) -> bool:
     return not any(is_private_dir(part) for part in rel.parts[:-1]) and rel.name not in IGNORED_DIRS
 
 
+def template_dir(root: Path) -> str:
+    """The vault's template folder: core Templates' `folder` setting, else the kit's default.
+
+    A templates.json we cannot read must not take `validate` down with it; it means the default.
+    """
+    try:
+        cfg = obsidian_config(root, "templates.json")
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        cfg = {}
+    folder = cfg.get("folder") if isinstance(cfg, dict) else None
+    folder = folder.strip().strip("/") if isinstance(folder, str) else ""
+    return folder or DEFAULT_TEMPLATE_DIR
+
+
+def in_template_dir(rel: str, tdir: str) -> bool:
+    """True for a vault-relative POSIX path inside the template folder `tdir`."""
+    return rel == tdir or rel.startswith(tdir + "/")
+
+
 def iter_markdown(root: Path, include_templates: bool = True) -> Iterable[Path]:
     root = Path(root)
+    tdir = None if include_templates else template_dir(root)
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if not is_private_dir(d))
         rel_dir = Path(dirpath).relative_to(root)
-        if not include_templates and rel_dir.parts and rel_dir.parts[0] in TEMPLATE_DIRS:
+        if tdir is not None and rel_dir.parts and in_template_dir(rel_dir.as_posix(), tdir):
             continue
         for name in sorted(filenames):
             if name.lower().endswith(".md"):
@@ -269,9 +290,9 @@ def check_reserved(note: Note, rep: Report) -> None:
             rep.errors.append(f"{note.rel}: log.md must not carry frontmatter")
 
 
-def check_concept(note: Note, rep: Report) -> None:
+def check_concept(note: Note, rep: Report, tdir: str = DEFAULT_TEMPLATE_DIR) -> None:
     rel = note.rel
-    is_template = rel.split("/")[0] in TEMPLATE_DIRS
+    is_template = in_template_dir(rel, tdir)
     if note.fm_error:
         rep.errors.append(f"{rel}: {note.fm_error}")
         return
@@ -315,12 +336,13 @@ def validate_okf(root: Path) -> Report:
     for rel in undecodable(Path(root)):
         rep.errors.append(f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
                           "search, the graph and todos; re-save it as UTF-8")
+    tdir = template_dir(Path(root))
     for note in load_vault(Path(root)):
         rep.checked += 1
         if note.path.name in RESERVED_FILENAMES:
             check_reserved(note, rep)
         elif not is_raw_root(note.rel):
-            check_concept(note, rep)
+            check_concept(note, rep, tdir)
     return rep
 
 
@@ -355,6 +377,7 @@ def check_links(root: Path) -> Report:
                 rep.errors.append(f"{p.relative_to(root).as_posix()}: invalid Bases YAML: {exc}")
             except (UnicodeDecodeError, OSError) as exc:
                 rep.errors.append(f"{p.relative_to(root).as_posix()}: cannot be read as UTF-8: {exc}")
+    tdir = template_dir(root)
     for path in iter_markdown(root):
         rel = path.relative_to(root).as_posix()
         raw_text = read_text(path)
@@ -362,9 +385,14 @@ def check_links(root: Path) -> Report:
             continue          # validate_okf already reports it; a second finding would only repeat
         text = _strip_code(raw_text)
         rep.checked += 1
+        # a placeholder target is filled in when a note is created from the template; any other
+        # link in a template must still resolve
+        is_template = in_template_dir(rel, tdir)
         for m in list(MD_LINK_RE.finditer(text)) + list(MD_IMAGE_RE.finditer(text)):
             target = m.group(1)
             if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
+                continue
+            if is_template and PLACEHOLDER_RE.search(target):
                 continue
             target = urllib.parse.unquote(target.split("#", 1)[0])
             if not target:
@@ -374,6 +402,8 @@ def check_links(root: Path) -> Report:
                 rep.errors.append(f"{rel}: broken link -> {target}")
         for m in WIKILINK_RE.finditer(text):
             target = m.group(1).strip()
+            if is_template and PLACEHOLDER_RE.search(target):
+                continue
             stem = Path(target).name.lower()
             stem = stem.removesuffix(".md")
             if stem not in by_stem and stem not in by_name:
