@@ -19,7 +19,7 @@ import sys
 import urllib.parse
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import yaml
@@ -46,7 +46,6 @@ KIT_VERSION = _kit_version()
 RESERVED_FILENAMES = {"index.md", "log.md"}
 RAW_ROOT_FILENAMES = {"Inbox.md"}   # raw capture at the bundle root: reserved by basename there, and only there
 IGNORED_DIRS = {".obsidian", ".git", ".qmd", ".kit", "node_modules", ".trash"}
-DEFAULT_TEMPLATE_DIR = "90-templates"   # when .obsidian/templates.json names no folder
 PLACEHOLDER_RE = re.compile(r"\{\{[^}]*\}\}")   # core Templates: {{title}}, {{date:YYYY-MM}}, ...
 
 ISO_DATETIME = re.compile(
@@ -163,32 +162,48 @@ def _visible(rel: Path) -> bool:
     return not any(is_private_dir(part) for part in rel.parts[:-1]) and rel.name not in IGNORED_DIRS
 
 
-def template_dir(root: Path) -> str:
-    """The vault's template folder: core Templates' `folder` setting, else the kit's default.
+def template_folder(root: Path) -> tuple[str | None, str | None]:
+    """(folder, error) for core Templates' `folder` setting in .obsidian/templates.json.
 
-    A templates.json we cannot read must not take `validate` down with it; it means the default.
+    No file, or no folder set: (None, None). Obsidian has no template folder then, and neither
+    has the kit. A setting we cannot use: (None, error). Callers exempt nothing then, and
+    `check_links` reports the error, so a broken config can never widen an exemption.
     """
+    name = ".obsidian/templates.json"
+    p = Path(root) / name
+    if not p.exists():
+        return None, None
     try:
-        cfg = obsidian_config(root, "templates.json")
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        cfg = {}
-    folder = cfg.get("folder") if isinstance(cfg, dict) else None
-    folder = folder.strip().strip("/") if isinstance(folder, str) else ""
-    return folder or DEFAULT_TEMPLATE_DIR
+        cfg = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, f"{name}: cannot be read as JSON: {exc}"
+    if not isinstance(cfg, dict):
+        return None, f"{name}: expected a JSON object, found {type(cfg).__name__}"
+    folder = cfg.get("folder")
+    if folder in (None, ""):
+        return None, None
+    if not isinstance(folder, str):
+        return None, f"{name}: `folder` must be a string, found {folder!r}"
+    rel = PurePosixPath(folder)
+    if rel.is_absolute() or Path(folder).is_absolute() or ".." in rel.parts:
+        return None, f"{name}: `folder` must be a path inside the vault, found {folder!r}"
+    if not (Path(root) / rel).is_dir():
+        return None, f"{name}: `folder` {folder!r} is not a folder in this vault"
+    return rel.as_posix(), None
 
 
-def in_template_dir(rel: str, tdir: str) -> bool:
-    """True for a vault-relative POSIX path inside the template folder `tdir`."""
-    return rel == tdir or rel.startswith(tdir + "/")
+def in_template_dir(rel: str, tdir: str | None) -> bool:
+    """True for a vault-relative POSIX path inside the template folder `tdir` (None: no folder)."""
+    return tdir is not None and (rel == tdir or rel.startswith(tdir + "/"))
 
 
 def iter_markdown(root: Path, include_templates: bool = True) -> Iterable[Path]:
     root = Path(root)
-    tdir = None if include_templates else template_dir(root)
+    tdir = None if include_templates else template_folder(root)[0]
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames if not is_private_dir(d))
         rel_dir = Path(dirpath).relative_to(root)
-        if tdir is not None and rel_dir.parts and in_template_dir(rel_dir.as_posix(), tdir):
+        if rel_dir.parts and in_template_dir(rel_dir.as_posix(), tdir):
             continue
         for name in sorted(filenames):
             if name.lower().endswith(".md"):
@@ -290,7 +305,7 @@ def check_reserved(note: Note, rep: Report) -> None:
             rep.errors.append(f"{note.rel}: log.md must not carry frontmatter")
 
 
-def check_concept(note: Note, rep: Report, tdir: str = DEFAULT_TEMPLATE_DIR) -> None:
+def check_concept(note: Note, rep: Report, tdir: str | None) -> None:
     rel = note.rel
     is_template = in_template_dir(rel, tdir)
     if note.fm_error:
@@ -336,7 +351,7 @@ def validate_okf(root: Path) -> Report:
     for rel in undecodable(Path(root)):
         rep.errors.append(f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
                           "search, the graph and todos; re-save it as UTF-8")
-    tdir = template_dir(Path(root))
+    tdir = template_folder(Path(root))[0]   # a broken config is check_links' finding
     for note in load_vault(Path(root)):
         rep.checked += 1
         if note.path.name in RESERVED_FILENAMES:
@@ -377,7 +392,9 @@ def check_links(root: Path) -> Report:
                 rep.errors.append(f"{p.relative_to(root).as_posix()}: invalid Bases YAML: {exc}")
             except (UnicodeDecodeError, OSError) as exc:
                 rep.errors.append(f"{p.relative_to(root).as_posix()}: cannot be read as UTF-8: {exc}")
-    tdir = template_dir(root)
+    tdir, config_error = template_folder(root)
+    if config_error:
+        rep.errors.append(config_error)
     for path in iter_markdown(root):
         rel = path.relative_to(root).as_posix()
         raw_text = read_text(path)

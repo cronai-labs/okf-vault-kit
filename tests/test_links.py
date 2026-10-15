@@ -84,22 +84,50 @@ class TemplateFolder(unittest.TestCase):
             (v / ".obsidian/templates.json").write_text('{"folder": "meta/templates"}', encoding="utf-8")
             (v / "meta/templates").mkdir(parents=True)
             (v / "meta/templates/t.md").write_text("---\ntype: note\ndescription:\n---\n" + self.PLACEHOLDERS, encoding="utf-8")
-            self.assertEqual(kitlib.template_dir(v), "meta/templates")
+            self.assertEqual(kitlib.template_folder(v), ("meta/templates", None))
             self.assertEqual([e for e in kitlib.check_links(v).errors if e.startswith("meta/")], [])
             warnings = kitlib.validate_okf(v).warnings
             self.assertFalse([w for w in warnings if w.startswith("meta/templates/t.md")], warnings)
             self.assertTrue([w for w in warnings if w.startswith("90-templates/")],
-                            "the configured folder replaces the default; 90-templates is an ordinary folder now")
+                            "only the configured folder is exempt; the name 90-templates means nothing by itself")
             self.assertNotIn("meta/templates/t.md", kitgraph.build_graph(v).nodes)
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
 
-    def test_without_templates_json_the_default_folder_applies(self):
+    def test_without_templates_json_no_folder_is_exempt(self):
+        """Obsidian has no template folder then, so the kit must not guess one."""
         v = temp_vault()
         try:
             (v / ".obsidian/templates.json").unlink()
-            self.assertEqual(kitlib.template_dir(v), "90-templates")
+            self.assertEqual(kitlib.template_folder(v), (None, None))
             (v / "90-templates/t.md").write_text("---\ntype: note\ndescription:\n---\n" + self.PLACEHOLDERS, encoding="utf-8")
-            self.assertEqual(kitlib.check_links(v).errors, [])
+            self.assertIn("90-templates/t.md: broken wikilink [[x/{{date:YYYY-MM}}]]", kitlib.check_links(v).errors)
+            self.assertTrue([w for w in kitlib.validate_okf(v).warnings if w.startswith("90-templates/t.md")])
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
+
+    def test_a_broken_templates_json_is_reported_and_exempts_nothing(self):
+        cases = {
+            "not JSON": "{folder: 90-templates",
+            "not an object": '["90-templates"]',
+            "folder not a string": '{"folder": 90}',
+            "absolute folder": '{"folder": "/90-templates"}',
+            "folder outside the vault": '{"folder": "../90-templates"}',
+            "folder does not exist": '{"folder": "no-such-folder"}',
+        }
+        for case, content in cases.items():
+            with self.subTest(case):
+                v = temp_vault()
+                try:
+                    (v / ".obsidian/templates.json").write_text(content, encoding="utf-8")
+                    folder, error = kitlib.template_folder(v)
+                    self.assertIsNone(folder)
+                    self.assertTrue(error and error.startswith(".obsidian/templates.json: "), error)
+                    (v / "90-templates/t.md").write_text("---\ntype: note\ndescription:\n---\n" + self.PLACEHOLDERS, encoding="utf-8")
+                    errors = kitlib.check_links(v).errors
+                    self.assertIn(error, errors)
+                    self.assertIn("90-templates/t.md: broken wikilink [[x/{{date:YYYY-MM}}]]", errors,
+                                  "a config we cannot trust exempts nothing")
+                    kitlib.validate_okf(v); kitgraph.build_graph(v)   # neither may raise
+                finally:
+                    shutil.rmtree(v.parent, ignore_errors=True)

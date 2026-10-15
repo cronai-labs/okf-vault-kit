@@ -344,9 +344,9 @@ class Resolver:
 
 def _self_actor(vault: Path) -> str | None:
     """The vault owner's actor id: the `human:` actor the templates stamp (kit init --actor)."""
-    tdir = Path(vault) / kitlib.template_dir(vault)
+    folder = kitlib.template_folder(vault)[0]
     counts: dict[str, int] = defaultdict(int)
-    for p in tdir.glob("*.md") if tdir.exists() else []:
+    for p in (Path(vault) / folder).glob("*.md") if folder else []:
         text = kitlib.read_text(p)
         if text is None:
             continue          # same rule as kitlib.load_vault: skip it, `validate` reports it
@@ -382,7 +382,7 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
     self_actor = _self_actor(vault)
     g.nodes[SELF_ID] = Node(id=SELF_ID, kind="virtual", type="person", title="me", description="The vault owner", props={"actor": self_actor})
 
-    tdir = kitlib.template_dir(vault)
+    tdir = kitlib.template_folder(vault)[0]
     notes = [n for n in kitlib.load_vault(vault)
              if n.path.name not in kitlib.RESERVED_FILENAMES and not kitlib.in_template_dir(n.rel, tdir)]
     # pass 1: nodes
