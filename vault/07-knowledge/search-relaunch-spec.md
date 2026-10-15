@@ -5,7 +5,7 @@ description: Problem, goals, proposal and success metrics for the docs-portal se
 project: "[Search relaunch](../03-projects/search-relaunch.md)"
 owner: "[Alex Example](../05-people/alex-example.md)"
 status: draft
-stale_after: 2026-10-15T00:00:00Z
+stale_after: 2099-12-31T00:00:00Z
 tags: [spec, search]
 sensitivity: internal
 generated: { by: human:me, at: "2026-09-02T13:00:00+02:00" }

@@ -1,4 +1,5 @@
 """Ontology validation, graph build, derived facts, exports, SQLite queries — on the template and on injected faults."""
+import datetime as dt
 import json
 import re
 import shutil
@@ -50,6 +51,12 @@ class Ontology(unittest.TestCase):
     def test_template_vault_is_clean(self):
         g = kitgraph.build_graph(VAULT)
         self.assertEqual([f.render() for f in g.findings], [])
+
+    def test_template_vault_stays_clean_as_the_calendar_moves(self):
+        """An example's `stale_after` is a date CI walks into: 2026-10-15 turned `make lint` red on main with no change."""
+        g = kitgraph.build_graph(VAULT, now=dt.datetime(2099, 1, 1, tzinfo=dt.UTC))
+        self.assertEqual([f.render() for f in g.findings], [])
+        self.assertEqual([n.id for n in g.nodes.values() if n.derived.get("stale")], [])
 
     def test_detects_range_enum_required_and_unresolved(self):
         v = temp_vault()

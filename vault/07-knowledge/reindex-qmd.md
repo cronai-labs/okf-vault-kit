@@ -4,7 +4,7 @@ title: Reindex qmd
 description: Rebuild the local qmd index and embeddings for the vault after a large import, a model change, or search results that look stale.
 tags: [runbook, search, qmd]
 status: stable
-stale_after: 2027-01-15T00:00:00Z
+stale_after: 2099-12-31T00:00:00Z
 sources:
   - id: qmd-readme
     resource: https://github.com/tobi/qmd
