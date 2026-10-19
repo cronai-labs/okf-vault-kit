@@ -39,6 +39,19 @@ views:
         direction: DESC
     limit: 26
   - type: table
+    name: Monthly Reviews
+    filters:
+      and:
+        - file.inFolder("01-journal/monthly")
+    order:
+      - file.name
+      - date
+      - description
+    sort:
+      - property: date
+        direction: DESC
+    limit: 12
+  - type: table
     name: Quarterly Reviews
     filters:
       and:

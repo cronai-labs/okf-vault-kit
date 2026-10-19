@@ -508,6 +508,17 @@ def daily_note_path(root: Path, day) -> Path:
     return Path(root) / folder / rel if folder else Path(root) / rel
 
 
+def month_note_path(root: Path, day) -> Path:
+    """The month note for `day`: `<journal folder>/monthly/YYYY-MM.md`.
+
+    The journal folder is the daily-notes `folder`, so day and month notes move together when a
+    user re-points it. One folder per period type, like `weekly/` and `quarterly/`.
+    """
+    folder = obsidian_config(root, "daily-notes.json").get("folder", "")
+    rel = Path("monthly") / f"{day.year:04d}-{day.month:02d}.md"
+    return Path(root) / folder / rel if folder else Path(root) / rel
+
+
 # ---------------------------------------------------------------- templates, frontmatter edits, slugs
 
 def render_template(text: str, title: str, day: datetime.date | None = None) -> str:
