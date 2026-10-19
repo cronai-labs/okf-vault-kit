@@ -19,7 +19,7 @@ Obsidian itself is free for commercial use (licence change in February 2025), so
 |---|---|---|---|
 | **Templater** | scripted templates, JS in templates, prompts on insert | all | more power than the core Templates plugin; only worth it once you want conditional or computed frontmatter |
 | **Tasks** | queries over `- [ ]` with due dates, recurrence, priorities | manager, PM | the vault's `Open Actions` page already does this with core search; Tasks adds due-date logic |
-| **Calendar** / **Periodic Notes** | calendar sidebar; weekly/quarterly notes with the same `YYYY/MM` discipline as dailies | all | Periodic Notes replaces the manual `01-journal/weekly` naming |
+| **Calendar** / **Periodic Notes** | calendar sidebar; weekly/monthly/quarterly notes with the same `YYYY/MM` discipline as dailies | all | Periodic Notes replaces the manual `01-journal/weekly` naming |
 | **Dataview** | inline queries, JS views | engineer | prefer Bases; keep Dataview only for what Bases cannot do yet (computed roll-ups across notes) |
 | **Kanban** | board views backed by markdown lists | PM | fine for a single project board; not a substitute for project notes |
 | **Excalidraw** | diagrams as `.excalidraw.md` | engineer, PM | large files; keep in `08-resources` |

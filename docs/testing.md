@@ -12,7 +12,7 @@ python -m pytest tests -q                       # if you prefer pytest (needs py
 
 | Module | Covers | Needs |
 |---|---|---|
-| `test_vault_structure.py` | folders, `.obsidian/*.json`, daily-note path computation, 13 templates, bookmarks, Bases files parse and every embedded view exists | nothing |
+| `test_vault_structure.py` | folders, `.obsidian/*.json`, daily-note and month-note path computation, 14 templates, bookmarks, Bases files parse and every embedded view exists | nothing |
 | `test_okf_conformance.py` | OKF v0.2 rules on the template vault; validator catches missing `type`, wrong `status`, bad timestamps/actors; `index.md` and `log.md` shape; index is up to date | nothing |
 | `test_links.py` | every markdown link, wikilink and base embed resolves; code blocks ignored | nothing |
 | `test_kit_cli.py` | `kit.py` end-to-end via subprocess: validate, index determinism, init + personalisation, log, mcp-config (print and merge-write), doctor, llm ask fallback | nothing |
