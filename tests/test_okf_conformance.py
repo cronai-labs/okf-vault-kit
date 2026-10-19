@@ -63,3 +63,57 @@ class OkfConformance(unittest.TestCase):
             self.assertEqual(rep.errors, [], rep.render())
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
+
+
+DAY_NOTE = "---\ntype: daily\ndescription: probe\ndate: 2026-10-19\n---\n"
+
+
+class DayNotePlacement(unittest.TestCase):
+    """A journal must not flood one folder: a day note belongs in its year/month folder."""
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, ignore_errors=True)
+
+    def _write(self, rel):
+        path = self.vault / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(DAY_NOTE, encoding="utf-8", newline="\n")
+
+    def _placement(self, rep):
+        return [w for w in rep.warnings if "day note" in w]
+
+    def test_a_flat_day_note_is_a_warning_not_an_error(self):
+        self._write("01-journal/daily/2026-10-19.md")
+        rep = kitlib.validate_okf(self.vault)
+        self.assertEqual(rep.errors, [], rep.render())
+        found = self._placement(rep)
+        self.assertEqual(len(found), 1, rep.render())
+        self.assertTrue(found[0].startswith("01-journal/daily/2026-10-19.md: "), found)
+        self.assertIn("01-journal/daily/2026/10/2026-10-19.md", found[0], "the warning names where it belongs")
+
+    def test_a_day_note_in_the_wrong_month_is_a_warning(self):
+        self._write("01-journal/daily/2026/09/2026-10-19.md")
+        self.assertEqual(len(self._placement(kitlib.validate_okf(self.vault))), 1)
+
+    def test_a_day_note_in_its_month_folder_is_fine(self):
+        self._write("01-journal/daily/2026/10/2026-10-19.md")
+        self.assertEqual(self._placement(kitlib.validate_okf(self.vault)), [])
+
+    def test_only_bare_dates_under_the_daily_folder_are_day_notes(self):
+        for rel in ("01-journal/daily/2026-10-19-standup.md",   # a dated note, not a day note
+                    "01-journal/daily/2026-13-45.md",            # not a date
+                    "02-meetings/2026-10-19.md",                 # outside the daily folder
+                    "01-journal/monthly/2026-10.md"):            # a month note
+            self._write(rel)
+        self.assertEqual(self._placement(kitlib.validate_okf(self.vault)), [])
+
+    def test_the_daily_folder_comes_from_the_daily_notes_config(self):
+        cfg = self.vault / ".obsidian/daily-notes.json"
+        cfg.write_text('{"format": "[days]/YYYY/MM/YYYY-MM-DD", "folder": "journal"}',
+                       encoding="utf-8", newline="\n")
+        self._write("journal/days/2026-10-19.md")
+        self._write("journal/days/2026/10/2026-10-20.md")
+        found = self._placement(kitlib.validate_okf(self.vault))
+        self.assertEqual(len(found), 1, found)
+        self.assertIn("journal/days/2026/10/2026-10-19.md", found[0])

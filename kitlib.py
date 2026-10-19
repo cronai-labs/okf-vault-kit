@@ -69,6 +69,7 @@ MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
 WIKILINK_RE = re.compile(r"(?<!\!)\[\[([^\]\|#]+)(?:#[^\]\|]*)?(?:\|[^\]]*)?\]\]")
 BASE_EMBED_RE = re.compile(r"!\[\[([^\]#|]+\.base)(?:#([^\]|]+))?(?:\|[^\]]*)?\]\]")
 FOOTNOTE_DEF_RE = re.compile(r"^\[\^[^\]]+\]:", re.MULTILINE)
+DAY_NOTE_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")   # a day note is named for its date, nothing else
 
 
 # ---------------------------------------------------------------- stdio
@@ -361,7 +362,32 @@ def validate_okf(root: Path) -> Report:
             check_reserved(note, rep)
         elif not is_raw_root(note.rel):
             check_concept(note, rep, tdir)
+            check_day_note_placement(note, rep, Path(root))
     return rep
+
+
+def check_day_note_placement(note: Note, rep: Report, root: Path) -> None:
+    """Warn when a day note sits outside the folder `.obsidian/daily-notes.json` files it in.
+
+    A journal that keeps every day in one folder floods it within a year; the shipped format nests
+    days by year and month. Notes made with `Ctrl/Cmd + D` land in the right place, so what this
+    catches is a note filed or moved by hand, by a sync tool, or by an agent. A kit rule, not an
+    OKF one: a warning, which only `validate --strict` turns into a failure.
+    """
+    m = DAY_NOTE_NAME_RE.match(note.path.name)
+    daily = daily_notes_folder(root)
+    if not m or not daily:
+        return                    # at the vault root a bare date cannot be told apart from any other dated note
+    if not note.rel.startswith(f"{daily}/"):
+        return
+    try:
+        day = datetime.date.fromisoformat(m.group(1))
+    except ValueError:
+        return
+    expected = daily_note_path(root, day).relative_to(root).as_posix()
+    if note.rel != expected:
+        rep.warnings.append(f"{note.rel}: day note outside its year/month folder — the daily-notes config "
+                            f"files it at {expected}; move it there so one folder does not collect every day")
 
 
 # ---------------------------------------------------------------- links
@@ -506,6 +532,18 @@ def daily_note_path(root: Path, day) -> Path:
             out.append(fmt[i]); i += 1
     rel = "".join(out) + ".md"
     return Path(root) / folder / rel if folder else Path(root) / rel
+
+
+def daily_notes_folder(root: Path) -> str:
+    """The vault-relative folder that holds day notes: the configured folder plus the format's literal leading
+    directories (`01-journal` + `[daily]/YYYY/...` -> `01-journal/daily`). Empty when that is the vault root."""
+    cfg = obsidian_config(root, "daily-notes.json")
+    parts = [p for p in str(cfg.get("folder", "")).split("/") if p]
+    for segment in str(cfg.get("format", "YYYY-MM-DD")).split("/")[:-1]:
+        if not (segment.startswith("[") and segment.endswith("]") and segment.count("[") == 1):
+            break
+        parts.append(segment[1:-1])
+    return "/".join(parts)
 
 
 def month_note_path(root: Path, day) -> Path:
