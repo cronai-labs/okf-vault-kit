@@ -15,7 +15,7 @@ One page. If a rule is not here, it is not a rule.
 | Folder | What goes there |
 |---|---|
 | `00-home` | Home, dashboard, inbox, priorities, open actions. Maintained, not filed into. |
-| `01-journal` | `daily/YYYY/MM/` (auto, `Ctrl/Cmd + D`), `weekly/`, `quarterly/` |
+| `01-journal` | `daily/YYYY/MM/` (auto, `Ctrl/Cmd + D`), `weekly/`, `monthly/` (`YYYY-MM.md`), `quarterly/` — one folder per period type, so no folder collects every day |
 | `02-meetings` | One note per meeting worth remembering. `YYYY-MM-DD-topic.md` |
 | `03-projects` | One note per project; `projects.md` holds the one-liners |
 | `04-areas` | Standing responsibilities without an end date |
@@ -33,7 +33,7 @@ Frontmatter drives the dashboard and makes the vault an [OKF](https://github.com
 
 | Property | On | Values / format |
 |---|---|---|
-| `type` | every note | `daily` `weekly` `quarterly` `meeting` `project` `decision` `person` `team` `area` `concept` `runbook` `spec` `retro` `resource` `system` |
+| `type` | every note | `daily` `weekly` `monthly` `quarterly` `meeting` `project` `decision` `person` `team` `area` `concept` `runbook` `spec` `retro` `resource` `system` |
 | `title` | every note | display name (templates fill it) |
 | `description` | every note | **one sentence.** Powers every view, snippet and AI prompt |
 | `tags` | every note | list, lower-case |
@@ -58,11 +58,12 @@ Why two status-like fields: `state` is *your workflow*; `status` is the OKF *lif
 
 - Files: **kebab-case, no spaces** (`2026-09-11-search-relaunch-sync.md`). Links stay clean, shells stay happy, agents stay accurate. The `title` property carries the pretty name.
 - Dated notes start with `YYYY-MM-DD`. People: `firstname-lastname.md`. Decisions: `YYYY-MM-DD-what-was-decided.md`.
-- Daily notes are created by Obsidian — never by hand.
+- Daily notes are created by Obsidian — never by hand. `kit.py validate` warns about a day note outside its `daily/YYYY/MM/` folder.
+- Month notes: `01-journal/monthly/YYYY-MM.md`, from the monthly-review template.
 
 ## Tasks
 
-`- [ ] verb — owner, due YYYY-MM-DD`, written in the note where the task arose. [Open Actions](../00-home/open-actions.md) aggregates them live; the weekly review sweeps them. `state: waiting` on a note marks *the note* as something you chase.
+`- [ ] verb — owner, due YYYY-MM-DD`, written in the note where the task arose. [Open Actions](../00-home/open-actions.md) aggregates them live; the weekly review sweeps them. A month note shows the month's open and done tasks through a live query and never copies them: one task lives in one place. `state: waiting` on a note marks *the note* as something you chase.
 
 ## Links
 

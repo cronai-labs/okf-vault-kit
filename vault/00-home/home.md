@@ -16,6 +16,7 @@ sensitivity: internal
 | After a meeting that matters | one meeting note: outcomes, decisions, actions | [meeting template](../90-templates/meeting.md) |
 | When something is decided | one decision note, one line in the log | [decision template](../90-templates/decision.md) |
 | Friday, 25 min | weekly review: empty the inbox, sweep actions, update priorities | [weekly template](../90-templates/weekly-review.md) |
+| Month end, 20 min | the month's days and tasks at a glance, a short reflection | [monthly template](../90-templates/monthly-review.md) |
 | Quarterly | portfolio, people, strategy | [quarterly template](../90-templates/quarterly-review.md) |
 
 Everything else — the [Dashboard](dashboard.md), search, AI briefings — is a by-product of this loop.

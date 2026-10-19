@@ -22,7 +22,7 @@ collections:
     includeByDefault: true
     context:
       "/": "Working vault (OKF bundle)"
-      "/01-journal": "Daily, weekly and quarterly journal — raw material, chronological"
+      "/01-journal": "Daily, weekly, monthly and quarterly journal — raw material, chronological"
       "/02-meetings": "Meeting notes: outcomes, decisions, actions"
       "/03-projects": "Project notes with health, milestone, update log; projects.md = one-liners"
       "/05-people": "People notes (confidential): role, working style, 1:1 log"

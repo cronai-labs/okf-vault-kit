@@ -23,7 +23,7 @@ sensitivity: internal
 
 ## 3. The rhythm
 
-Daily capture · a meeting note when it matters · a decision note when something is decided · Friday review, 25 minutes · quarterly review. The [Home](../00-home/home.md) page has the table.
+Daily capture · a meeting note when it matters · a decision note when something is decided · Friday review, 25 minutes · monthly review at month end · quarterly review. The [Home](../00-home/home.md) page has the table.
 
 ## 4. Add the machines (when the rhythm holds)
 

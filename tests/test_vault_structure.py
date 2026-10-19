@@ -16,17 +16,18 @@ from tests.helpers import ROOT, VAULT, kitlib, temp_vault
 sys.path.insert(0, str(ROOT / "mcp"))
 import obsidian_bridge as ob
 
-EXPECTED_DIRS = ["00-home", "00-home/bases", "01-journal", "01-journal/daily", "01-journal/weekly", "01-journal/quarterly",
-                 "02-meetings", "03-projects", "04-areas", "05-people", "06-decisions", "07-knowledge",
+EXPECTED_DIRS = ["00-home", "00-home/bases", "01-journal", "01-journal/daily", "01-journal/weekly",
+                 "01-journal/monthly", "01-journal/quarterly", "02-meetings", "03-projects", "04-areas", "05-people", "06-decisions", "07-knowledge",
                  "08-resources/attachments", "09-archive", "90-templates", "99-system", ".obsidian"]
-EXPECTED_TEMPLATES = ["daily", "weekly-review", "quarterly-review", "meeting", "project", "decision", "person",
-                      "team", "area", "concept", "runbook", "spec", "retro"]
+EXPECTED_TEMPLATES = ["daily", "weekly-review", "monthly-review", "quarterly-review", "meeting", "project",
+                      "decision", "person", "team", "area", "concept", "runbook", "spec", "retro"]
 DUE_DATE_RE = re.compile(r"(due|decide by) (\d{4}-\d{2}-\d{2})")
 # Where a note made from each template is filed (conventions.md "Folders"). A retro has no folder of
 # its own, so both plausible homes are exercised.
 TEMPLATE_DESTINATIONS = {
     "daily": ["01-journal/daily/2026/09"], "weekly-review": ["01-journal/weekly"],
-    "quarterly-review": ["01-journal/quarterly"], "meeting": ["02-meetings"],
+    "monthly-review": ["01-journal/monthly"], "quarterly-review": ["01-journal/quarterly"],
+    "meeting": ["02-meetings"],
     "project": ["03-projects"], "area": ["04-areas"], "person": ["05-people"], "team": ["05-people"],
     "decision": ["06-decisions"], "concept": ["07-knowledge"], "runbook": ["07-knowledge"],
     "spec": ["07-knowledge"], "retro": ["01-journal/quarterly", "03-projects"],
@@ -66,6 +67,28 @@ class VaultStructure(unittest.TestCase):
         self.assertEqual(p, VAULT / "01-journal/daily/2026/09/2026-09-14.md")
         self.assertTrue(p.exists())
 
+    def test_month_note_path_matches_example_note(self):
+        import datetime as dt
+        p = kitlib.month_note_path(VAULT, dt.date(2026, 9, 14))
+        self.assertEqual(p, VAULT / "01-journal/monthly/2026-09.md")
+        self.assertTrue(p.exists())
+
+    def test_month_note_path_follows_the_daily_notes_folder(self):
+        """The journal folder is read from daily-notes.json, not assumed to be `01-journal`."""
+        import datetime as dt
+        v = temp_vault()
+        try:
+            cfg = v / ".obsidian/daily-notes.json"
+            data = json.loads(cfg.read_text(encoding="utf-8"))
+            data["folder"] = "journal"
+            cfg.write_text(json.dumps(data), encoding="utf-8", newline="\n")
+            self.assertEqual(kitlib.month_note_path(v, dt.date(2026, 1, 31)), v / "journal/monthly/2026-01.md")
+            self.assertEqual(kitlib.daily_note_path(v, dt.date(2026, 1, 31)).parent.parent.parent.parent,
+                             kitlib.month_note_path(v, dt.date(2026, 1, 31)).parent.parent,
+                             "day and month notes must share one journal folder")
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
     def test_templates_present_and_typed(self):
         for t in EXPECTED_TEMPLATES:
             path = VAULT / "90-templates" / f"{t}.md"
@@ -104,6 +127,28 @@ class VaultStructure(unittest.TestCase):
             self.assertEqual(errors, [], "\n".join(errors))
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
+
+    def test_monthly_review_queries_its_month_and_copies_no_tasks(self):
+        """A month note links the month's days and shows its tasks live; one task lives in one place."""
+        import datetime as dt
+        day = dt.date(2026, 9, 14)
+        text = (VAULT / "90-templates/monthly-review.md").read_text(encoding="utf-8")
+        body = kitlib.split_frontmatter(kitlib.render_template(text, "2026-09", day))[1]
+        month = kitlib.daily_note_path(VAULT, day).parent.relative_to(VAULT).as_posix()
+        queries = re.findall(r"```query\n(.*?)\n```", body, re.S)
+        self.assertIn(f'path:"{month}"', queries, "the Days section must list the month's day notes")
+        self.assertIn(f'task-todo:"" path:"{month}"', queries)
+        self.assertIn(f'task-done:"" path:"{month}"', queries)
+        outside = re.sub(r"```.*?```", "", body, flags=re.S)
+        self.assertNotRegex(outside, r"(?m)^\s*- \[[ xX]\]", "a month note must not carry copies of tasks")
+
+    def test_journal_views_include_the_month_notes(self):
+        journal = yaml.safe_load((VAULT / "00-home/bases/journal.base").read_text(encoding="utf-8"))
+        view = next((v for v in journal["views"] if v["name"] == "Monthly Reviews"), None)
+        self.assertIsNotNone(view, "journal.base needs a Monthly Reviews view")
+        self.assertIn('file.inFolder("01-journal/monthly")', view["filters"]["and"])
+        overview = (VAULT / "00-home/bases/overview.base").read_text(encoding="utf-8")
+        self.assertIn('\'type == "monthly"\'', overview, "the dashboard's Reviews view must show month notes")
 
     def test_templates_carry_no_relative_body_links(self):
         for name in EXPECTED_TEMPLATES:

@@ -22,6 +22,7 @@ classes:
   resource:  { extends: node }
   daily:     { extends: node, props: { date: { type: date, required: true } } }
   weekly:    { extends: daily }
+  monthly:   { extends: daily }
   quarterly: { extends: daily }
   retro:
     extends: node

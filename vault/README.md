@@ -23,7 +23,7 @@ The kit that ships this vault — search tooling (qmd), the Obsidian CLI, a loca
 | Folder | Purpose |
 |---|---|
 | `00-home` | Home, live dashboard, inbox, priorities, open actions |
-| `01-journal` | Daily notes (auto-filed by year/month), weekly and quarterly reviews |
+| `01-journal` | Daily notes (auto-filed by year/month), weekly, monthly and quarterly reviews |
 | `02-meetings` | One note per meeting worth remembering |
 | `03-projects` | One note per project or initiative |
 | `04-areas` | Standing responsibilities (a team, a product, a platform, a budget) |

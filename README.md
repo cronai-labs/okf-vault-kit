@@ -42,7 +42,7 @@ assert things about CI and the git checkout and skip cleanly when run from it.
 
 | Path | What |
 |---|---|
-| `vault/` | The template vault (and sample): OKF-conformant frontmatter, 13 templates, 3 Bases with 15 views, example notes, conventions, AI workflows, `99-system/ontology.yml`, `context.jsonld` |
+| `vault/` | The template vault (and sample): OKF-conformant frontmatter, 14 templates, 3 Bases with 16 views, example notes, conventions, AI workflows, `99-system/ontology.yml`, `context.jsonld` |
 | `kitproviders.py` | Swappable slots — `search` (qmd · naive), `llm` (any OpenAI-compatible endpoint), `embed`, `graph`; chosen per vault in `.kit/config.yml` |
 | `kit.py` · `kitlib.py` | Cross-platform CLI: `doctor`, `init`, `validate` (OKF + links + ontology), `index`, `log`, `mcp-config`, `llm smoke\|ask [--graph]`, `graph build\|export\|query\|neighbors\|path\|pack`, `reconcile`, `todos`, `minutes`, `proposals`, `test` |
 | `kitgraph.py` · `kitrecon.py` | The vault as a graph (ontology, derived facts, exports, SQLite) · reconciliation (hubs, todos, minutes) |

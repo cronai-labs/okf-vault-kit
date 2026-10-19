@@ -80,3 +80,22 @@ class ConformanceDecidesTheDefaultExitCode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AMisplacedDayNoteIsAHygieneFinding(unittest.TestCase):
+    """The year/month rule is this kit's, not the spec's: reported always, fatal only under --strict."""
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, ignore_errors=True)
+        note = self.vault / "01-journal" / "daily" / "2026-10-19.md"
+        note.write_text("---\ntype: daily\ndescription: probe\ndate: 2026-10-19\n---\n",
+                        encoding="utf-8", newline="\n")
+
+    def test_it_is_reported_and_does_not_fail_validate(self):
+        r = validate(self.vault)
+        self.assertIn("warn   01-journal/daily/2026-10-19.md: ", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout)
+
+    def test_strict_fails_on_it(self):
+        self.assertEqual(validate(self.vault, "--strict").returncode, 1)

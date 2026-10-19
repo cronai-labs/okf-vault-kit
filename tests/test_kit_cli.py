@@ -304,7 +304,7 @@ class KitCliGraphAndRecon(unittest.TestCase):
         try:
             r = run("graph", "build", "--vault", str(v)); self.assertEqual(r.returncode, 0, r.stderr); self.assertIn("0 finding(s)", r.stdout)
             self.assertTrue((v / ".kit/graph.sqlite").exists())
-            r = run("graph", "query", "select count(*) n from nodes", "--vault", str(v), "--json"); self.assertEqual(json.loads(r.stdout)[0]["n"], 27)   # 27: an open sample decision was added for the Open Decisions view (#10)
+            r = run("graph", "query", "select count(*) n from nodes", "--vault", str(v), "--json"); self.assertEqual(json.loads(r.stdout)[0]["n"], 28)   # 27: an open sample decision was added for the Open Decisions view (#10); 28: the sample month note
             r = run("graph", "query", "drop table nodes", "--vault", str(v)); self.assertEqual(r.returncode, 1)
             r = run("graph", "export", "--format", "nt", "--vault", str(v)); self.assertIn("<http://purl.org/dc/terms/title>", r.stdout)
             r = run("graph", "neighbors", "alex-example", "--pred", "owns", "--vault", str(v)); self.assertIn("—owns→", r.stdout)
