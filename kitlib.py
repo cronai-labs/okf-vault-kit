@@ -356,17 +356,18 @@ def validate_okf(root: Path) -> Report:
         rep.errors.append(f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
                           "search, the graph and todos; re-save it as UTF-8")
     tdir = template_folder(Path(root))[0]   # a broken config is check_links' finding
+    daily = daily_notes_folder(Path(root))
     for note in load_vault(Path(root)):
         rep.checked += 1
         if note.path.name in RESERVED_FILENAMES:
             check_reserved(note, rep)
         elif not is_raw_root(note.rel):
             check_concept(note, rep, tdir)
-            check_day_note_placement(note, rep, Path(root))
+            check_day_note_placement(note, rep, Path(root), daily)
     return rep
 
 
-def check_day_note_placement(note: Note, rep: Report, root: Path) -> None:
+def check_day_note_placement(note: Note, rep: Report, root: Path, daily: str) -> None:
     """Warn when a day note sits outside the folder `.obsidian/daily-notes.json` files it in.
 
     A journal that keeps every day in one folder floods it within a year; the shipped format nests
@@ -375,7 +376,6 @@ def check_day_note_placement(note: Note, rep: Report, root: Path) -> None:
     OKF one: a warning, which only `validate --strict` turns into a failure.
     """
     m = DAY_NOTE_NAME_RE.match(note.path.name)
-    daily = daily_notes_folder(root)
     if not m or not daily:
         return                    # at the vault root a bare date cannot be told apart from any other dated note
     if not note.rel.startswith(f"{daily}/"):
