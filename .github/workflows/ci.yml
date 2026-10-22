@@ -114,7 +114,8 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           BODY: ${{ github.event.pull_request.body }}
         run: |
-          pattern='^[[:space:]]*(co-authored-by:.*(claude|anthropic|copilot|openai|chatgpt|codex|gemini|cursor|aider|windsurf|devin)|.*generated (with|by) \[?(claude|copilot|chatgpt|codex|gemini|cursor|aider|windsurf|devin))'
+          tools='claude|anthropic|copilot|openai|chatgpt|codex|gemini|cursor|aider|windsurf|devin'
+          pattern="^[[:space:]]*(co-authored-by:.*($tools)|.*generated (with|by) \\[?($tools))"
           # Captured first, so a failed API call fails the step instead of
           # leaving nothing to check.
           commits="$(gh api --paginate "repos/$REPO/pulls/$PR/commits" \
