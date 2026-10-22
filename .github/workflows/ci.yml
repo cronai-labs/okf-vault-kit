@@ -83,8 +83,12 @@ jobs:
   # Conventional Commits are enforced on the PR title, because that is what a squash merge
   # writes as the subject — and the subject is what decides whether users get a release at all.
   # GitHub appends " (#123)" to it, so the pattern has to tolerate that suffix.
+  # The job also blocks tool and model attribution in the PR's commits and body.
   policy:
     runs-on: ubuntu-latest
+    # pull-requests: read lets the attribution check list the PR's commits.
+    permissions:
+      pull-requests: read
     steps:
       - name: the pull request title is a conventional commit
         if: github.event_name == 'pull_request'
@@ -99,6 +103,40 @@ jobs:
             echo "expected e.g. 'fix(bridge): stop the policy layer failing open'"
             exit 1
           fi
+      - name: no tool or model attribution
+        # Owner rule: no AI co-author trailer and no "Generated with" line.
+        # A branch commit's trailer or the PR body can reach main through the
+        # squash. Commits come from the API, so no checkout is needed.
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          pattern='^[[:space:]]*(co-authored-by:.*(claude|anthropic|copilot|openai|chatgpt|codex|gemini|cursor|aider|windsurf|devin)|.*generated (with|by) \[?(claude|copilot|chatgpt|codex|gemini|cursor|aider|windsurf|devin))'
+          # Captured first, so a failed API call fails the step instead of
+          # leaving nothing to check.
+          commits="$(gh api --paginate "repos/$REPO/pulls/$PR/commits" \
+            --jq '.[] | "\(.sha[0:7])\t\(.commit.message | @base64)"')"
+          hits=""
+          while IFS=$'\t' read -r sha msg; do
+            [ -n "$sha" ] || continue
+            m="$(printf '%s' "$msg" | base64 -d | grep -inE "$pattern" || true)"
+            if [ -n "$m" ]; then hits="${hits}commit ${sha}: ${m}"$'\n'; fi
+          done <<< "$commits"
+          # Fenced code blocks are blanked so a quoted example does not count.
+          b="$(printf '%s' "$BODY" \
+            | awk '/^[[:space:]]*```/ { f = !f; print ""; next } f { print ""; next } { print }' \
+            | grep -inE "$pattern" || true)"
+          if [ -n "$b" ]; then hits="${hits}PR body: ${b}"$'\n'; fi
+          if [ -n "$hits" ]; then
+            echo "::error::Tool or model attribution found:"
+            printf '%s' "$hits"
+            echo "Reword the commits (git rebase -i, then git push --force-with-lease) and edit the PR body."
+            exit 1
+          fi
+          echo "ok: no tool or model attribution"
       - if: github.event_name != 'pull_request'
         run: echo "not a pull request; the title policy applies at the PR"
 
