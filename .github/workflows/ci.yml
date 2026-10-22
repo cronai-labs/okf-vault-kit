@@ -31,6 +31,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Read-only by default. A job that needs more declares its own block, which replaces this one
+# entirely, so it must list contents: read again.
+permissions:
+  contents: read
+
 jobs:
   offline:
     strategy:
@@ -45,12 +50,13 @@ jobs:
       # 3.10 is out of support this October and below the floor; 3.15 is a release
       # candidate. Neither belongs here.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-24.04, macos-26, windows-2025]
         python: ["3.11", "3.14"]
         include:
-          - { os: ubuntu-latest, python: "3.12" }
-          - { os: ubuntu-latest, python: "3.13" }
+          - { os: ubuntu-24.04, python: "3.12" }
+          - { os: ubuntu-24.04, python: "3.13" }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       # No uv cache in any job. It holds kit.py's script environment, which records the absolute
@@ -62,30 +68,31 @@ jobs:
       - run: make check PY=${{ matrix.python }}
 
   qmd-e2e:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with: { python-version: "3.12", enable-cache: false }  # see the offline job
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6  # v2.2.0
-      # Fetching qmd depends on a registry we do not control, so only that step is advisory.
-      # Once qmd is installed, a failing end-to-end test is a real failure and fails the job.
-      - id: qmd
-        continue-on-error: true
+      # Fails closed: if qmd cannot be installed, the job fails. test_e2e_qmd.py skips itself
+      # when qmd is not on PATH, so a lane that carried on without it would report green
+      # having tested nothing. `qmd doctor` proves it is on PATH before the tests run.
+      - name: install qmd
         run: |
           bun install -g @tobilu/qmd
           qmd doctor
-      - if: steps.qmd.outcome == 'success'
-        run: make test-qmd PY=3.12
-      - if: steps.qmd.outcome != 'success'
-        run: echo "qmd could not be installed; the end-to-end lane did not run"
+      - run: make test-qmd PY=3.12
 
   # Conventional Commits are enforced on the PR title, because that is what a squash merge
   # writes as the subject — and the subject is what decides whether users get a release at all.
   # GitHub appends " (#123)" to it, so the pattern has to tolerate that suffix.
   policy:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with: { persist-credentials: false }
       - name: the pull request title is a conventional commit
         if: github.event_name == 'pull_request'
         env:
@@ -101,21 +108,43 @@ jobs:
           fi
       - if: github.event_name != 'pull_request'
         run: echo "not a pull request; the title policy applies at the PR"
+      # On every event: a tag or branch ref can be moved under us, a commit SHA cannot.
+      # Local actions (`uses: ./…`) are part of this commit and need no pin.
+      - name: Actions are pinned to a full commit SHA
+        run: |
+          unpinned="$(grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows \
+            | grep -vE 'uses:[[:space:]]*\./' \
+            | grep -vE '@[0-9a-f]{40}([[:space:]]|$)' || true)"
+          if [ -n "$unpinned" ]; then
+            echo "::error::Actions must be pinned to a 40-character commit SHA:"
+            echo "$unpinned"
+            exit 1
+          fi
+          echo "ok: every uses: is SHA-pinned"
 
   security:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions: { contents: read, security-events: write }
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with: { fetch-depth: 0 }      # gitleaks scans history, not just the tip
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
         with: { python-version: "3.12", enable-cache: false }  # see the offline job
-      - name: secrets, over the whole history
+      # The archive is checked against the SHA-256 published in the release's checksums file
+      # before anything is unpacked from it.
+      - name: install gitleaks (checksum-verified)
         run: |
-          v=8.28.0
-          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v$v/gitleaks_${v}_linux_x64.tar.gz" \
-            | tar -xz -C /usr/local/bin gitleaks
-          gitleaks detect --redact --no-banner --exit-code 1
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+      - name: secrets, over the whole history
+        run: '"$RUNNER_TEMP/gitleaks" detect --redact --no-banner --exit-code 1'
       - name: python SAST
         run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp -ll
       - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
@@ -127,7 +156,7 @@ jobs:
     # template vault -- that is vault conformance, which no general linter knows
     # about -- but YAML, Markdown, shell and workflow quality live here, at one
     # pinned version rather than whichever one a contributor has installed.
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -147,7 +176,8 @@ jobs:
           GITHUB_STATUS_REPORTER: false
 
   release:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884  # v10.3.0
@@ -177,7 +207,8 @@ jobs:
   ci-required:
     needs: [offline, qmd-e2e, policy, security, megalinter, release]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
       - name: Every dependency must have succeeded
         # Passed through env rather than interpolated into the script. Inlining
