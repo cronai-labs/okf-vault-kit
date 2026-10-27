@@ -118,9 +118,9 @@ jobs:
           gitleaks detect --redact --no-banner --exit-code 1
       - name: python SAST
         run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp -ll
-      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
         with: { languages: python }
-      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370  # v4.39.1
 
   megalinter:
     # The single lint gate. `make lint` still byte-compiles and validates the
