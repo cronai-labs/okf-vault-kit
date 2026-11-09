@@ -53,6 +53,14 @@ QMD_MASK = "{*.md,!(_*)/**/*.md}"   # every markdown file except the tool-privat
 DEFAULT_BASE_URL = os.environ.get("KIT_LLM_BASE_URL", "http://localhost:1234/v1")
 DEFAULT_MODEL = os.environ.get("KIT_LLM_MODEL", "")
 IS_WINDOWS = platform.system() == "Windows"
+VAULT_GITIGNORE = """# Per-machine kit state: graph, bridge audit log, proposals and config
+.kit/
+# Obsidian window layout and cache change between machines
+.obsidian/workspace*.json
+.obsidian/cache
+# Plugin settings can contain credentials
+.obsidian/plugins/*/data.json
+"""
 
 
 def _vault(arg: str | None) -> Path:
@@ -95,6 +103,33 @@ def _qmd() -> str | None:
     bare name is passed to subprocess.
     """
     return shutil.which("qmd")
+
+
+def _vault_git_status(vault: Path) -> tuple[str, str, str] | None:
+    git = _which("git")
+    if not git or not vault.is_dir():
+        return None
+    try:
+        if _run([git, "rev-parse", "--is-inside-work-tree"], cwd=vault).returncode:
+            return None
+        tracked = _run([git, "ls-files", "-z", "--", ".kit", ".obsidian/plugins"], cwd=vault)
+        if tracked.returncode:
+            return ("vault git", "-", "could not inspect tracked files")
+        paths = tracked.stdout.split("\0")
+        count = sum(1 for p in paths if p.startswith(".kit/") or
+                    (len(p.split("/")) == 4 and p.startswith(".obsidian/plugins/") and p.endswith("/data.json")))
+        if count:
+            return ("vault git", "-", (f"warning: {count} private state file(s) tracked; remove from the index with "
+                    "git rm -r --cached -- .kit and git rm --cached -- ':(glob).obsidian/plugins/*/data.json' "
+                    "as applicable; rewrite pushed history and rotate exposed keys"))
+        ignored = _run([git, "check-ignore", "--no-index", "-q", ".kit/probe"], cwd=vault)
+        if ignored.returncode == 1:
+            return ("vault git", "-", "warning: .kit/ is not ignored; add it to .gitignore before committing")
+        if ignored.returncode:
+            return ("vault git", "-", "could not inspect ignore rules")
+        return ("vault git", "-", ".kit/ ignored; no private state files tracked")
+    except OSError:
+        return ("vault git", "-", "could not inspect Git state")
 
 
 # ---------------------------------------------------------------- doctor
@@ -168,6 +203,9 @@ def cmd_doctor(args) -> int:
         # and cannot answer the one question it exists for: is my own vault healthy?
         sample = " — the kit's sample; pass --vault or set KIT_VAULT to describe yours" if vault == TEMPLATE_VAULT.resolve() else ""
         rows.append(("vault", str(vault), f"{rep.checked} notes, {len(rep.errors)} OKF error(s), {len(rep.warnings)} warning(s){sample}"))
+        git_status = _vault_git_status(vault)
+        if git_status:
+            rows.append(git_status)
     else:
         rows.append(("vault", str(vault), "not found — run `kit.py init`"))
     w = max(len(r[0]) for r in rows)
@@ -218,11 +256,28 @@ def _report(rows: list[tuple[str, str, str]], vault: Path) -> str:
 
 # ---------------------------------------------------------------- init
 
+def _ignore_template_state(directory: str, names: list[str]) -> set[str]:
+    relative = Path(directory).relative_to(TEMPLATE_VAULT)
+    if relative == Path("."):
+        return set(names) & {".kit", ".gitignore"}
+    if relative == Path(".obsidian"):
+        return {name for name in names if name == "cache" or (name.startswith("workspace") and name.endswith(".json"))}
+    if len(relative.parts) == 3 and relative.parts[:2] == (".obsidian", "plugins"):
+        return set(names) & {"data.json"}
+    return set()
+
+
 def cmd_init(args) -> int:
     target = Path(args.target).expanduser().resolve()
     if target.exists() and any(target.iterdir()) and not args.force:
         sys.exit(f"{target} exists and is not empty (use --force to overwrite files)")
-    shutil.copytree(TEMPLATE_VAULT, target, dirs_exist_ok=True)
+    shutil.copytree(TEMPLATE_VAULT, target, dirs_exist_ok=True, ignore=_ignore_template_state)
+    ignore_file = target / ".gitignore"
+    try:
+        with ignore_file.open("x", encoding="utf-8", newline="\n") as f:
+            f.write(VAULT_GITIGNORE)
+    except FileExistsError:
+        pass
     actor = args.actor
     if actor:
         if not kitlib.ACTOR.match(actor) or not actor.startswith("human:"):

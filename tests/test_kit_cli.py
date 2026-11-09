@@ -708,6 +708,81 @@ class InitRecordsItsChoices(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_init_ignores_private_state_and_preserves_existing_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "vault"
+            r = run("init", "--target", str(target), "--no-qmd")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            subprocess.run(["git", "init", "-q", str(target)], check=True)
+            for path in (".kit/config.yml", ".obsidian/workspace-mobile.json", ".obsidian/cache/x",
+                         ".obsidian/plugins/example/data.json"):
+                self.assertEqual(subprocess.run(["git", "check-ignore", "-q", path], cwd=target, check=False).returncode, 0, path)
+            ignore = target / ".gitignore"
+            with ignore.open("a", encoding="utf-8") as f:
+                f.write("!.obsidian/plugins/example/data.json\n")
+            self.assertEqual(subprocess.run(["git", "check-ignore", "-q", ".obsidian/plugins/example/data.json"],
+                                            cwd=target, check=False).returncode, 1)
+            self.assertEqual(subprocess.run(["git", "check-ignore", "-q", ".obsidian/plugins/other/data.json"],
+                                            cwd=target, check=False).returncode, 0)
+            original = b"# custom\r\ncustom-file\r\n"
+            ignore.write_bytes(original)
+            r = run("init", "--target", str(target), "--no-qmd", "--force")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(ignore.read_bytes(), original)
+
+    def test_init_does_not_copy_runtime_state(self):
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "template"
+            target = Path(tmp) / "target"
+            shutil.copytree(VAULT, template)
+            for name in (".kit/proposals/private.json", ".obsidian/workspace.json", ".obsidian/cache/x",
+                         ".obsidian/plugins/example/data.json", "data.json"):
+                path = template / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("private", encoding="utf-8")
+            args = mock.Mock(target=str(target), force=False, actor=None, collection=None, no_qmd=True)
+            with mock.patch.object(kit, "TEMPLATE_VAULT", template), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(kit.cmd_init(args), 0)
+            self.assertEqual({p.name for p in (target / ".kit").iterdir()}, {"config.yml"})
+            self.assertFalse((target / ".obsidian/workspace.json").exists())
+            self.assertFalse((target / ".obsidian/cache").exists())
+            self.assertFalse((target / ".obsidian/plugins/example/data.json").exists())
+            self.assertTrue((target / "data.json").exists())
+
+    @unittest.skipUnless(shutil.which("git"), "git not installed")
+    def test_doctor_warns_for_unignored_and_tracked_state_without_paths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "vault"
+            self.assertEqual(run("init", "--target", str(target), "--no-qmd").returncode, 0)
+            subprocess.run(["git", "init", "-q", str(target)], check=True)
+            (target / ".gitignore").write_text("", encoding="utf-8")
+            report = Path(tmp) / "report.txt"
+            args = ("doctor", "--vault", str(target), "--report", str(report), "--base-url", "http://127.0.0.1:9")
+            r = run(*args)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn(".kit/ is not ignored", r.stdout)
+            plugin = target / ".obsidian/plugins/private-name/data.json"
+            plugin.parent.mkdir(parents=True)
+            plugin.write_text("secret", encoding="utf-8")
+            subprocess.run(["git", "add", "--", ".kit/config.yml", ".obsidian/plugins/private-name/data.json"], cwd=target, check=True)
+            (target / ".gitignore").write_text(".kit/\n.obsidian/plugins/*/data.json\n", encoding="utf-8")
+            r = run(*args)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("2 private state file(s) tracked", r.stdout)
+            self.assertIn("git rm", r.stdout)
+            self.assertNotIn("private-name", report.read_text(encoding="utf-8"))
+            self.assertNotIn(str(target), report.read_text(encoding="utf-8"))
+
+    def test_git_diagnosis_is_optional(self):
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(kit, "_which", return_value=None):
+                self.assertIsNone(kit._vault_git_status(Path(tmp)))
+            if shutil.which("git"):
+                self.assertIsNone(kit._vault_git_status(Path(tmp)))
+
 
 class DoctorKeepsDiagnosing(unittest.TestCase):
     def test_an_unknown_search_provider_is_a_row_not_the_end(self):

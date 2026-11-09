@@ -65,7 +65,7 @@ Whatever you pick, note what it cannot cover: Obsidian and the model host stay n
 - Models: GGUF is a plain tensor container (no code execution, unlike pickle); download only from the publisher's Hugging Face organisation (`openbmb/…`, `Qwen/…`), and keep the cache volumes out of backups if size matters.
 - Community plugins are the largest untrusted surface in a vault — [plugins.md](plugins.md) has the approval routine; the template ships with none.
 - Data classes: `sensitivity: confidential` is the line the bridge enforces. Put people notes, HR-adjacent material and anything under NDA behind it, and never attach such notes to a hosted model. `personal` and `internal` are visible to the local model by design.
-- Every automated write leaves a trace: `log.md` (OKF) and `.kit/bridge-audit.jsonl` (the bridge). Keep the vault in git and you have the rest.
+- Every automated write leaves a trace: `log.md` (OKF) and `.kit/bridge-audit.jsonl` (the bridge). The audit log and proposals are per-machine and ignored by the `.gitignore` created by `init`; they can contain read and rejected-write content. Keep the vault in git for note history. Plugin settings are also ignored because they may contain credentials; re-include individual settings only after reviewing them. Existing tracked files remain tracked even after adding ignore rules: remove them from the index, rewrite any pushed history and rotate exposed keys.
 
 ## Checklist
 
