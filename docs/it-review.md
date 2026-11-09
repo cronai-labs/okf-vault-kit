@@ -53,7 +53,7 @@ starts it on stdin/stdout and it has no socket.
 
 | Path | What |
 |---|---|
-| the vault folder | your notes; `.kit/` inside it holds the graph, the audit log, any proposals and `config.yml` (the qmd collection name and provider choices for this vault) |
+| the vault folder | your notes; `.kit/` inside it holds the graph, the audit log, any proposals and `config.yml` (the qmd collection name and provider choices for this vault). These are per-machine and excluded from git by the ignore file created by `init`. Plugin settings are also excluded because they may contain credentials. |
 | `~/.lmstudio/mcp.json`, `%APPDATA%\Claude\…`, `~/.cursor/mcp.json` | only when you run `kit.py mcp-config --write`; the previous file is backed up alongside |
 | `~/.cache/qmd`, `~/.config/qmd` | qmd's index and models, if installed |
 

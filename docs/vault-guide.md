@@ -66,6 +66,6 @@ Daily (5 min) · after key meetings (5 min) · Friday weekly review (25 min, the
 ## Sync and safety
 
 - One machine at a time on synced folders (OneDrive, iCloud, Nextcloud); conflict copies appear as `… (conflicted copy).md`.
-- Git works well for engineers (`.obsidian/workspace.json` in `.gitignore`); OKF explicitly recommends git as the bundle distribution form.
+- Git works well for engineers; OKF explicitly recommends git as the bundle distribution form. `init` writes a `.gitignore` for per-machine kit state, workspace files and plugin settings; it leaves an existing file untouched. Plugin settings do not travel with the vault unless you explicitly re-include them, after checking for credentials.
 - `sensitivity: confidential` notes (people) should never be attached to a cloud model; the local model only sees what you let its tools read.
 - Obsidian's *File recovery* core plugin keeps snapshots; `09-archive` is excluded from views, and the qmd example config ignores it.
