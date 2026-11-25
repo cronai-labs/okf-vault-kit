@@ -5,6 +5,11 @@ All notable changes to OKF Vault Kit are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-25
+
+### Features
+
+- **Breaking** — **bridge:** The bridge and the local model, proven end to end (#115) ([8188235](https://github.com/cronai-labs/okf-vault-kit/commit/818823525be46100d0f90b41ff398d6ae062b11e))
 ## [0.2.0] - 2026-10-19
 
 ### Features
