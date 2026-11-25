@@ -54,9 +54,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bridge_policy  # mcp/bridge_policy.py
 import kitgraph
 import kitlib
+import kitproviders
 import kitrecon
 
-STOPWORDS = {"the", "and", "for", "with", "what", "why", "how", "who", "which", "when", "where", "did", "does", "was", "were", "are", "our", "this", "that", "from", "into", "about", "der", "die", "das", "und", "ist", "wie", "wer", "mit", "von", "für", "auf", "ein", "eine", "nicht", "wird"}
 
 class BridgeError(RuntimeError):
     pass
@@ -92,10 +92,13 @@ def _check_name(name: str) -> None:
 class FsBackend:
     """Operate on the vault directly. Safe defaults: never overwrite silently, stay inside the vault."""
 
-    def __init__(self, vault: Path):
+    def __init__(self, vault: Path, search_provider: Any = None):
         self.vault = Path(vault).expanduser().resolve()
         if not self.vault.is_dir():
             raise BridgeError(f"vault not found: {self.vault}")
+        # None: resolve the vault's search slot on every call (explicit > KIT_SEARCH_PROVIDER >
+        # .kit/config.yml > qmd if installed > naive), the same slot `kit.py llm ask` uses.
+        self._search_provider = search_provider
 
     # -- helpers
     def _resolve(self, file: str, must_exist: bool = True) -> Path:
@@ -133,21 +136,6 @@ class FsBackend:
             raise BridgeError(f"template not found: {tpl.name}")
         return tpl
 
-    def _notes(self) -> list[Any]:
-        """Every note we can actually read.
-
-        One file the bridge cannot decode — UTF-16 from PowerShell's `Out-File`, a stray binary —
-        must not take out search for the whole vault. Skipping it is also the safe direction: an
-        unreadable note stays invisible rather than half-parsed.
-        """
-        out = []
-        for p in kitlib.iter_markdown(self.vault):
-            try:
-                out.append(kitlib.parse_note(p, self.vault))
-            except (UnicodeDecodeError, OSError):
-                continue
-        return out
-
     def _text(self, path: Path) -> str:
         """The note's text, or a BridgeError naming it.
 
@@ -174,23 +162,36 @@ class FsBackend:
         return [r for r in rels if not folder or r.startswith(folder + "/") or r == folder]
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1 and t.lower() not in STOPWORDS]
-        if not terms:
-            return []
-        hits = []
-        for note in self._notes():
-            if note.rel.startswith("90-templates") or note.path.name in kitlib.RESERVED_FILENAMES:
-                continue
-            hay = (note.body + "\n" + json.dumps(note.frontmatter or {}, default=str)).lower()
-            title = str((note.frontmatter or {}).get("title", note.path.stem)).lower()
-            phrase = " ".join(terms)
-            score = sum(hay.count(t) for t in terms) + 5 * hay.count(phrase) + (10 if phrase in title else 0)
-            if score:
-                idx = min((hay.find(t) for t in terms if t in hay), default=0)
-                snippet = re.sub(r"\s+", " ", hay[max(0, idx - 80): idx + 160]).strip()
-                hits.append({"file": note.rel, "title": (note.frontmatter or {}).get("title", note.path.stem), "score": score, "snippet": snippet})
-        hits.sort(key=lambda h: -h["score"])
+        """The vault's search slot — qmd's hybrid search when installed and indexed, keyword otherwise.
+
+        Two fallbacks, as in `kit.py llm ask`: the slot picks naive when qmd is not installed, and an
+        installed provider that answers nothing (an unindexed vault, an errored qmd) falls back to
+        naive here. A hit is kept only when its file exists in this vault: a qmd collection named
+        like this vault's but indexing another folder must not put that folder's paths in front of
+        the model, and the policy layer can only judge files it can open.
+        """
+        try:
+            provider = self._search_provider or kitproviders.search_provider(self.vault)
+        except SystemExit as exc:              # an unknown provider name in config or env: a refusal, not an exit
+            raise BridgeError(f"search is misconfigured: {exc}") from exc
+        collection = kitproviders.collection_name(self.vault)
+        hits = self._usable(provider.query(self.vault, query, limit, collection))
+        if not hits and provider.name != kitproviders.NaiveSearch.name:
+            hits = self._usable(kitproviders.NaiveSearch().query(self.vault, query, limit, collection))
         return hits[:limit]
+
+    def _usable(self, hits: list[Any]) -> list[dict[str, Any]]:
+        out = []
+        for h in hits:
+            rel = kitproviders.hit_rel(h.file)
+            if not rel or rel.startswith(("90-templates/", "_")) or Path(rel).name in kitlib.RESERVED_FILENAMES:
+                continue
+            p = (self.vault / rel).resolve()
+            if self.vault not in p.parents or not p.is_file():
+                continue
+            snippet = re.sub(r"\s+", " ", h.snippet or "").strip()[:240]
+            out.append({"file": p.relative_to(self.vault).as_posix(), "title": h.title or p.stem, "score": h.score, "snippet": snippet})
+        return out
 
     def backlinks(self, file: str) -> list[str]:
         target = self._resolve(file)
@@ -548,7 +549,7 @@ def build_server(backend, read_only: bool = False):
 
     @mcp.tool(name="obsidian_search")
     def obsidian_search(query: str, limit: int = 10) -> str:
-        """Keyword search across the vault. Returns matching note paths with a short snippet. Use before reading."""
+        """Search the vault (hybrid semantic search when qmd is set up, keyword search otherwise). Returns matching note paths with a short snippet. Use before reading."""
         return _announced(backend, json.dumps(backend.search(query, limit), ensure_ascii=False, indent=1))
 
     @mcp.tool(name="obsidian_read_note")

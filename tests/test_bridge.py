@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.helpers import ROOT, kitlib, temp_vault
+from tests.helpers import ROOT, kitlib, kitproviders, temp_vault
 
 sys.path.insert(0, str(ROOT / "mcp"))
 import obsidian_bridge as ob
@@ -31,6 +31,32 @@ class FsBackend(unittest.TestCase):
         text = self.b.read_note("07-knowledge/hybrid-search")
         self.assertIn("type: concept", text)
         self.assertIn("03-projects/search-relaunch.md", self.b.backlinks("hybrid-search.md"))
+
+    def test_search_goes_through_the_configured_search_provider(self):
+        """#90: the bridge answered with its own term counting while the docs promised qmd."""
+        class Fake:
+            name = "fake"
+            def __init__(self, hits): self.hits, self.asked = hits, []
+            def available(self): return None
+            def query(self, vault, question, n, collection):
+                self.asked.append((question, n, collection)); return self.hits
+        H = kitproviders.Hit
+        fake = Fake([H("qmd://vault/07-knowledge/reindex-qmd.md", "Reindex qmd", "how to  reindex\n qmd", 0.9),
+                     H("03-projects/only-in-another-vault.md", "Elsewhere", "x", 0.8)])
+        b = ob.FsBackend(self.vault, search_provider=fake)
+        hits = b.search("reindex", 5)
+        self.assertEqual(fake.asked, [("reindex", 5, "vault")])
+        self.assertEqual([h["file"] for h in hits], ["07-knowledge/reindex-qmd.md"],
+                         "qmd:// paths are mapped, and a hit for a file this vault does not have is dropped")
+        self.assertEqual(hits[0]["snippet"], "how to reindex qmd")
+
+    def test_search_falls_back_to_keyword_search_when_the_provider_finds_nothing(self):
+        class Empty:
+            name = "qmd"
+            def available(self): return None
+            def query(self, *a): return []
+        hits = ob.FsBackend(self.vault, search_provider=Empty()).search("hybrid search", 5)
+        self.assertEqual(hits[0]["file"], "07-knowledge/hybrid-search.md")
 
     def test_read_by_unique_short_name(self):
         self.assertIn("Alex Example", self.b.read_note("alex-example"))

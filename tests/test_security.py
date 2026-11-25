@@ -56,6 +56,20 @@ class PolicyLayer(unittest.TestCase):
         shown = guarded(self.vault, hide_confidential=False)
         self.assertIn("type: person", shown.read_note("alex-example"))
 
+    def test_hidden_hits_do_not_use_up_the_search_limit(self):
+        """The backend applied `limit` before the policy filtered, so confidential notes that
+        ranked first left the model with fewer hits than it asked for — or none."""
+        ranked = ["05-people/alex-example.md", "05-people/sam-example.md",
+                  "07-knowledge/hybrid-search.md", "07-knowledge/reindex-qmd.md", "03-projects/search-relaunch.md"]
+
+        class Ranked:
+            def search(self, query, limit=10):
+                return [{"file": f, "title": f, "score": 1, "snippet": ""} for f in ranked[:limit]]
+
+        g = bp.Guarded(Ranked(), bp.Policy(audit_path=None), self.vault)
+        self.assertEqual([h["file"] for h in g.search("x", 2)], ["07-knowledge/hybrid-search.md", "07-knowledge/reindex-qmd.md"])
+        self.assertEqual(len(g.search("x", 10)), 3, "never more than exist")
+
     def test_confidential_hiding_survives_a_non_canonical_vault_path(self):
         """The bypass that made the test above red on macOS but green on Linux.
 

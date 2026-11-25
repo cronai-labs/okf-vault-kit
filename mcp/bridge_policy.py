@@ -264,9 +264,24 @@ class Guarded:
     def list_files(self, folder: str = "") -> list[str]:
         return self._guard("list_files", {"folder": folder}, lambda: [f for f in self.backend.list_files(folder) if not self._confidential(f)])
 
+    SEARCH_FETCH_CAP = 200
+
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        return self._guard("search", {"query": query, "limit": limit},
-                           lambda: [h for h in self.backend.search(query, limit) if not self._confidential(str(h.get("file", "")))])
+        """Visible hits, up to `limit` of them.
+
+        The backend applies its limit before this layer filters, so asking it for exactly `limit`
+        let confidential notes that ranked first use up the slots. Ask for more, doubling until
+        `limit` visible hits are found, the backend runs out, or the cap is reached.
+        """
+        def run():
+            fetch = max(limit, 1)
+            while True:
+                hits = self.backend.search(query, fetch)
+                visible = [h for h in hits if not self._confidential(str(h.get("file", "")))]
+                if len(visible) >= limit or len(hits) < fetch or fetch >= self.SEARCH_FETCH_CAP:
+                    return visible[:limit]
+                fetch = min(fetch * 2, self.SEARCH_FETCH_CAP)
+        return self._guard("search", {"query": query, "limit": limit}, run)
 
     def backlinks(self, file: str) -> list[str]:
         return self._guard("backlinks", {"file": file}, lambda: [f for f in self.backend.backlinks(file) if not self._confidential(f)])
