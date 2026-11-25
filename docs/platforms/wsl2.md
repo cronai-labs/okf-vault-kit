@@ -58,7 +58,7 @@ constraint of this lane. Two ways round it:
 ```bash
 # in WSL: serve the bridge over HTTP on loopback
 export KIT_BRIDGE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765 &
+uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765 &
 qmd mcp --http --port 8181
 ```
 

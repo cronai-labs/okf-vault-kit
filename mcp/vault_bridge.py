@@ -3,7 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = ["pyyaml>=6.0", "mcp>=2,<3"]
 # ///
-"""obsidian_bridge — an MCP server that lets a local model read and write an Obsidian vault.
+"""vault_bridge — an MCP server (`okf-vault`) that lets a local model read and write a notes vault:
+Markdown with OKF frontmatter, the layout Obsidian opens as a vault.
 
 Two interchangeable backends:
 
@@ -14,14 +15,14 @@ Two interchangeable backends:
 Run as an MCP server (stdio). With uv nothing needs installing (deps come from the inline metadata above);
 with plain Python, `pip install 'mcp>=2,<3' pyyaml` first (this bridge targets the 2.x server API):
 
-  uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault
-  python mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault
-  python mcp/obsidian_bridge.py --backend cli --vault-name "vault"
-  uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765   # as a service: http://127.0.0.1:8765/mcp
+  uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault
+  python mcp/vault_bridge.py --backend fs --vault ~/Notes/vault
+  python mcp/vault_bridge.py --backend cli --vault-name "vault"
+  uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765   # as a service: http://127.0.0.1:8765/mcp
 
 Self-test without MCP:
 
-  python mcp/obsidian_bridge.py --backend fs --vault ../vault --selftest
+  python mcp/vault_bridge.py --backend fs --vault ../vault --selftest
 
 Access control (see docs/security.md): --read-only, --deny-write/--allow-write folder prefixes, --show-confidential
 (hidden by default), --max-write-bytes, --max-writes-per-minute, --propose (writes become proposals for a human to
@@ -542,8 +543,8 @@ def build_server(backend, read_only: bool = False):
     from mcp.server.mcpserver.exceptions import ToolError
 
     backend = _Refusals(backend, ToolError)
-    mcp = MCPServer("obsidian-vault", version=kitlib.KIT_VERSION, instructions=(
-        "Read and write the user's Obsidian vault. Notes are Markdown with YAML frontmatter (OKF). "
+    mcp = MCPServer("okf-vault", version=kitlib.KIT_VERSION, instructions=(
+        "Read and write the user's notes vault. Notes are Markdown with YAML frontmatter (OKF). "
         "Search first, then read specific notes by path. Prefer append over overwrite. "
         "Tasks are written as `- [ ] verb — owner, due YYYY-MM-DD`."))
 
@@ -688,13 +689,13 @@ def main(argv=None) -> int:
         if token:
             import uvicorn
             app = bridge_policy.BearerAuth(server.streamable_http_app(host=args.host), token)
-            print(f"obsidian-vault MCP bridge on http://{args.host}:{args.port}/mcp — bearer token required"
+            print(f"okf-vault MCP bridge on http://{args.host}:{args.port}/mcp — bearer token required"
                   + (f": {token}" if args.token == "new" else ""), file=sys.stderr)
             uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
         else:
             if args.host not in ("127.0.0.1", "localhost", "::1"):
                 print("WARNING: HTTP bridge without --token on a non-loopback address — anyone who can reach it can edit the vault", file=sys.stderr)
-            print(f"obsidian-vault MCP bridge on http://{args.host}:{args.port}/mcp (streamable HTTP, no auth)", file=sys.stderr)
+            print(f"okf-vault MCP bridge on http://{args.host}:{args.port}/mcp (streamable HTTP, no auth)", file=sys.stderr)
             server.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         server.run()  # stdio transport

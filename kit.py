@@ -136,7 +136,7 @@ def cmd_doctor(args) -> int:
             rows.append(("mcp (python sdk)", _mcp_version,
                          "the bridge targets the 2.x API — pip install 'mcp>=2,<3'"))
     except importlib.metadata.PackageNotFoundError:
-        rows.append(("mcp (python sdk)", "-", "pip install 'mcp>=2,<3' — needed only for the Obsidian MCP bridge"))
+        rows.append(("mcp (python sdk)", "-", "pip install 'mcp>=2,<3' — needed only for the MCP bridge"))
     base = args.base_url or DEFAULT_BASE_URL
     proxies = kitproviders.proxy_vars()
     if proxies:
@@ -161,6 +161,9 @@ def cmd_doctor(args) -> int:
         provider_rows = [("search", "-", f"provider misconfigured: {exc}")]
     for slot, name, state in provider_rows:
         rows.append((f"  {slot}" if slot else "   ", name, state))
+    for client in _legacy_clients():
+        rows.append(("mcp client", client, (f"registers the bridge under its old name `{LEGACY_SERVER}` — "
+                     f"run `kit.py mcp-config --client {client} --vault <your vault> --write` to replace it")))
     vault = vault_for_cfg
     if vault.exists():
         rep = kitlib.validate_okf(vault)
@@ -341,6 +344,37 @@ def cmd_log(args) -> int:
 
 # ---------------------------------------------------------------- mcp-config
 
+MCP_CLIENTS = ("lmstudio", "claude-desktop", "cursor")
+LEGACY_SERVER = "obsidian-vault"      # the bridge's server name before 0.3.0; now "okf-vault"
+
+
+def _is_legacy_bridge(entry: Any) -> bool:
+    """Is this client entry the kit's own bridge under its pre-0.3.0 name?
+
+    Only ours: the old script name in its args, or the url `mcp-config --bridge-http` wrote. Other
+    projects ship servers called obsidian-vault too, and those are not ours to remove.
+    """
+    if not isinstance(entry, dict):
+        return False
+    if any(str(a).replace("\\", "/").endswith("mcp/obsidian_bridge.py") for a in entry.get("args") or []):
+        return True
+    return bool(re.fullmatch(r"http://127\.0\.0\.1:\d+/mcp", str(entry.get("url", ""))))
+
+
+def _legacy_clients() -> list[str]:
+    """Clients whose config still registers the kit's bridge under the old name."""
+    out = []
+    for client in MCP_CLIENTS:
+        path = _mcp_config_path(client)
+        try:
+            servers = json.loads(path.read_text(encoding="utf-8")).get("mcpServers", {}) if path.is_file() else {}
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(servers, dict) and _is_legacy_bridge(servers.get(LEGACY_SERVER)):
+            out.append(client)
+    return out
+
+
 def _mcp_config_path(client: str) -> Path:
     home = Path.home()
     if client == "lmstudio":
@@ -375,7 +409,7 @@ def cmd_mcp_config(args) -> int:
                             "--vault ~/Notes/vault.")
     else:
         template_warning = ""
-    bridge = ROOT / "mcp" / "obsidian_bridge.py"
+    bridge = ROOT / "mcp" / "vault_bridge.py"
     notes: list[str] = []
     servers: dict = {}
     # qmd's own MCP server has no policy layer: it indexes the whole vault, confidential notes
@@ -404,27 +438,27 @@ def cmd_mcp_config(args) -> int:
     uv = None if (args.no_uv or os.environ.get("KIT_NO_UV")) else _which("uv")
     if uv:
         # uv provisions pyyaml + mcp from the bridge's inline metadata; nothing to pip-install
-        servers["obsidian-vault"] = {"command": uv, "args": ["run", *bridge_args]}
+        servers["okf-vault"] = {"command": uv, "args": ["run", *bridge_args]}
     else:
-        servers["obsidian-vault"] = {"command": sys.executable, "args": bridge_args}
+        servers["okf-vault"] = {"command": sys.executable, "args": bridge_args}
     if args.backend == "cli" and args.vault_name:
-        servers["obsidian-vault"]["args"] += ["--vault-name", args.vault_name]
+        servers["okf-vault"]["args"] += ["--vault-name", args.vault_name]
     if args.bridge_http:
         if args.bridge_flags:
             # A url entry starts no process, so clients ignore `args` in it: the --read-only the
             # user asked for would silently not exist.
             sys.exit("--bridge-flags cannot reach an HTTP bridge: the client only connects to it. Pass the flags "
-                     "where the bridge is started, e.g. `uv run mcp/obsidian_bridge.py --http --vault … --read-only`.")
-        servers["obsidian-vault"] = {"url": f"http://127.0.0.1:{args.bridge_port}/mcp"}
+                     "where the bridge is started, e.g. `uv run mcp/vault_bridge.py --http --vault … --read-only`.")
+        servers["okf-vault"] = {"url": f"http://127.0.0.1:{args.bridge_port}/mcp"}
         if args.bridge_token:
-            servers["obsidian-vault"]["headers"] = {"Authorization": f"Bearer {args.bridge_token}"}
+            servers["okf-vault"]["headers"] = {"Authorization": f"Bearer {args.bridge_token}"}
             notes.append("# the client config holds the bearer token in plain text; with --write the kit makes it "
                          "readable by your account only (0600) on macOS and Linux (docs/security.md)")
         else:
             notes.append("# no Authorization header: neither --bridge-token nor KIT_BRIDGE_TOKEN is set, so this only "
                          "works against a bridge started without --token (docs/security.md)")
     if args.bridge_flags:
-        servers["obsidian-vault"].setdefault("args", []).extend(args.bridge_flags.split())
+        servers["okf-vault"].setdefault("args", []).extend(args.bridge_flags.split())
     cfg = {"mcpServers": servers}
     text = json.dumps(cfg, indent=2)
     path = _mcp_config_path(args.client)
@@ -451,7 +485,12 @@ def cmd_mcp_config(args) -> int:
         backup = path.with_suffix(path.suffix + ".bak")
         shutil.copy2(path, backup)
         print(f"backup: {backup}")
-    existing.setdefault("mcpServers", {}).update(servers)
+    registered = existing.setdefault("mcpServers", {})
+    if _is_legacy_bridge(registered.get(LEGACY_SERVER)):
+        # Left in place, the old entry spawns a script that no longer exists on every client start.
+        del registered[LEGACY_SERVER]
+        print(f"replaced the old `{LEGACY_SERVER}` entry with `okf-vault` (the bridge's name since 0.3.0)")
+    registered.update(servers)
     path.write_text(json.dumps(existing, indent=2), encoding="utf-8", newline="\n")
     if args.bridge_http and args.bridge_token and not IS_WINDOWS:
         # The token is the HTTP bridge's only authentication, and on a shared machine every local
@@ -815,14 +854,14 @@ def cmd_examples(args) -> int:
 def _bridge_modules():
     sys.path.insert(0, str(ROOT / "mcp"))
     import bridge_policy
-    import obsidian_bridge
-    return bridge_policy, obsidian_bridge
+    import vault_bridge
+    return bridge_policy, vault_bridge
 
 
 def cmd_proposals(args) -> int:
-    bridge_policy, obsidian_bridge = _bridge_modules()
+    bridge_policy, vault_bridge = _bridge_modules()
     try:
-        return _proposals(args, bridge_policy, obsidian_bridge)
+        return _proposals(args, bridge_policy, vault_bridge)
     except bridge_policy.PolicyError as exc:
         # Refusing a proposal at apply time is what the policy layer is for; docs/security.md
         # advertises this path, so it reports rather than crashes.
@@ -830,7 +869,7 @@ def cmd_proposals(args) -> int:
         return 1
 
 
-def _proposals(args, bridge_policy, obsidian_bridge) -> int:
+def _proposals(args, bridge_policy, vault_bridge) -> int:
     vault = _vault(args.vault)
     store = bridge_policy.ProposalStore(vault / kitgraph.KIT_DIR / "proposals")
     if args.action == "list":
@@ -845,7 +884,7 @@ def _proposals(args, bridge_policy, obsidian_bridge) -> int:
     if args.action == "show":
         _, rec = store.get(args.id); print(json.dumps(rec, indent=1, ensure_ascii=False)); return 0
     if args.action == "apply":
-        backend = obsidian_bridge.FsBackend(vault)
+        backend = vault_bridge.FsBackend(vault)
         out = store.apply(args.id, backend)
         kitlib.append_log(vault, f"Applied proposal {args.id} ({out})", "Update")
         print(f"applied {args.id}: {out}"); return 0
@@ -1074,13 +1113,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--kind", default="project"); p.add_argument("--llm", action="store_true", help="also ask the local model to structure the recap"); p.add_argument("--base-url"); p.add_argument("--model"); p.add_argument("--daily", action="store_true", help="link the note from today's daily note")
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_minutes)
     p = sub.add_parser("log", help="append an entry to log.md"); p.add_argument("message"); p.add_argument("--vault"); p.add_argument("--kind", default="Update", help="Update | Creation | Deprecation"); p.set_defaults(fn=cmd_log)
-    p = sub.add_parser("mcp-config", help="print or write an mcp.json for qmd + the Obsidian bridge")
+    p = sub.add_parser("mcp-config", help="print or write a client's MCP config that registers the vault bridge (okf-vault)")
     p.add_argument("--client", choices=["lmstudio", "claude-desktop", "cursor"], default="lmstudio"); p.add_argument("--vault")
     p.add_argument("--backend", choices=["fs", "cli"], default="fs", help="bridge backend: fs (direct files, headless) or cli (official Obsidian CLI, app running)")
     p.add_argument("--vault-name", help="Obsidian vault name for the cli backend"); p.add_argument("--with-qmd-mcp", action="store_true", help="also register qmd's own MCP server — it has NO policy layer and exposes confidential notes (off by default)")
     p.add_argument("--qmd-http", action="store_true", help="when registering qmd (--with-qmd-mcp), use its HTTP transport on :8181 instead of stdio")
     p.add_argument("--no-uv", action="store_true", help="launch the bridge with this Python instead of `uv run` (also KIT_NO_UV=1)")
-    p.add_argument("--bridge-http", action="store_true", help="point the client at an already running `obsidian_bridge.py --http` instead of spawning it"); p.add_argument("--bridge-port", type=int, default=8765)
+    p.add_argument("--bridge-http", action="store_true", help="point the client at an already running `vault_bridge.py --http` instead of spawning it"); p.add_argument("--bridge-port", type=int, default=8765)
     p.add_argument("--bridge-token", default=os.environ.get("KIT_BRIDGE_TOKEN", ""),
                    help="bearer token the running HTTP bridge expects (sent as an Authorization header); defaults to "
                         "KIT_BRIDGE_TOKEN — prefer the variable, a token in argv lands in shell history and `ps`")

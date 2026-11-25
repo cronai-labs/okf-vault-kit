@@ -41,7 +41,7 @@ Remember the parts the layer does not cover: it cannot judge *content*. A model 
 
   ```bash
   export KIT_BRIDGE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-  uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault --http &
+  uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault --http &
   uv run kit.py mcp-config --bridge-http --vault ~/Notes/vault --write
   ```
 

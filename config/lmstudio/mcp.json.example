@@ -4,9 +4,9 @@
       "command": "qmd",
       "args": ["mcp"]
     },
-    "obsidian-vault": {
+    "okf-vault": {
       "command": "uv",
-      "args": ["run", "/ABSOLUTE/PATH/okf-vault-kit/mcp/obsidian_bridge.py", "--backend", "fs", "--vault", "/ABSOLUTE/PATH/Notes/vault"]
+      "args": ["run", "/ABSOLUTE/PATH/okf-vault-kit/mcp/vault_bridge.py", "--backend", "fs", "--vault", "/ABSOLUTE/PATH/Notes/vault"]
     }
   }
 }

@@ -293,7 +293,7 @@ class SuiteBootstrap(unittest.TestCase):
     Sorting imports is enough to reorder it, which is how this was found.
     """
 
-    BRIDGE_IMPORT = re.compile(r"(?m)^import (?:obsidian_bridge|bridge_policy)\b")
+    BRIDGE_IMPORT = re.compile(r"(?m)^import (?:vault_bridge|bridge_policy)\b")
     PATH_INSERT = re.compile(r'(?m)^sys\.path\.insert\(0, str\(ROOT / "mcp"\)\)')
 
     def test_bridge_importers_put_mcp_on_the_path_first(self):

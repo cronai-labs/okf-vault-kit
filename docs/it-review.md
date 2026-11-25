@@ -42,7 +42,7 @@ Nothing, unless you start it. Three optional services, all loopback by default:
 |---|---|---|---|
 | Model endpoint (LM Studio / llama-server / Ollama) | 1234 | optional API token | you |
 | qmd MCP server (`qmd mcp --http`) | 8181 | **none** — keep it on loopback | you |
-| Vault MCP bridge (`obsidian_bridge.py --http`) | 8765 | bearer token (`--token`) | you |
+| Vault MCP bridge (`vault_bridge.py --http`) | 8765 | bearer token (`--token`) | you |
 
 The bridge does not bind a non-loopback address quietly: started with `--http` and no `--token`, it
 warns when `--host` is anything other than `127.0.0.1`/`localhost`/`::1`. With a token, every request

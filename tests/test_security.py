@@ -16,7 +16,7 @@ from tests.helpers import ROOT, VAULT, kitlib, temp_vault
 
 sys.path.insert(0, str(ROOT / "mcp"))
 import bridge_policy as bp
-import obsidian_bridge as ob
+import vault_bridge as ob
 
 KIT = [sys.executable, str(ROOT / "kit.py")]
 
@@ -126,14 +126,14 @@ class PolicyLayer(unittest.TestCase):
         self.assertFalse(audit[-1]["ok"]); self.assertIn("denied", audit[-1]["detail"])
 
     def test_bridge_flags_selftest(self):
-        r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(self.vault),
+        r = subprocess.run([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(self.vault),
                             "--read-only", "--propose", "--allow-write", "02-meetings", "--no-audit", "--selftest"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("policy: read-only; propose; confidential hidden", r.stdout)
 
     def test_cli_backend_without_a_vault_refuses_to_start(self):
         """`confidential hidden` in the banner has to mean the check can run."""
-        r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "cli", "--vault-name", "v", "--selftest"],
+        r = subprocess.run([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "cli", "--vault-name", "v", "--selftest"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 1)
         self.assertIn("confidential hiding needs the vault", r.stderr)
@@ -350,9 +350,9 @@ class BearerAuth(unittest.TestCase):
     def test_mcp_config_with_token(self):
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-token", "tok"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         cfg = json.loads(r.stdout.split("\n# would be written")[0])
-        self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer tok"})
+        self.assertEqual(cfg["mcpServers"]["okf-vault"]["headers"], {"Authorization": "Bearer tok"})
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-flags", "--read-only --propose"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(__import__("os").environ, KIT_NO_UV="1"), check=False)
-        self.assertIn("--read-only", json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["obsidian-vault"]["args"])
+        self.assertIn("--read-only", json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["okf-vault"]["args"])
 
     def test_mcp_config_reads_the_token_from_the_environment(self):
         """A token on the command line sits in shell history and in `ps`; the variable does not."""
@@ -360,11 +360,11 @@ class BearerAuth(unittest.TestCase):
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http"], capture_output=True, text=True,
                            encoding="utf-8", errors="replace", env=env, check=False)
         cfg = json.loads(r.stdout.split("\n# would be written")[0])
-        self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer from-env"})
+        self.assertEqual(cfg["mcpServers"]["okf-vault"]["headers"], {"Authorization": "Bearer from-env"})
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-token", "flag"], capture_output=True,
                            text=True, encoding="utf-8", errors="replace", env=env, check=False)
         cfg = json.loads(r.stdout.split("\n# would be written")[0])
-        self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer flag"}, "the flag overrides the variable")
+        self.assertEqual(cfg["mcpServers"]["okf-vault"]["headers"], {"Authorization": "Bearer flag"}, "the flag overrides the variable")
 
     def test_mcp_config_says_when_an_http_bridge_gets_no_auth_header(self):
         env = {k: v for k, v in os.environ.items() if k != "KIT_BRIDGE_TOKEN"}

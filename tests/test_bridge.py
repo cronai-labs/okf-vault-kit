@@ -11,7 +11,7 @@ from pathlib import Path
 from tests.helpers import ROOT, kitlib, kitproviders, temp_vault
 
 sys.path.insert(0, str(ROOT / "mcp"))
-import obsidian_bridge as ob
+import vault_bridge as ob
 
 IS_WIN = sys.platform.startswith("win")
 
@@ -236,7 +236,7 @@ class BridgeProcess(unittest.TestCase):
     def test_selftest_runs(self):
         vault = temp_vault()
         try:
-            r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(vault), "--selftest"],
+            r = subprocess.run([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault), "--selftest"],
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("selftest OK", r.stdout)
@@ -274,7 +274,7 @@ class BridgeProcess(unittest.TestCase):
         vault = temp_vault()
 
         async def go():
-            params = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(vault)])
+            params = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault)])
             async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
                 await s.initialize()
                 tools = {t.name for t in (await s.list_tools()).tools}

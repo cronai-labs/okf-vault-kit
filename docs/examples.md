@@ -73,7 +73,7 @@ Attach `00-home/priorities.md`, `03-projects/projects.md`, `06-decisions/decisio
 ## 8. Check a vault without opening Obsidian
 
 ```bash
-python mcp/obsidian_bridge.py --backend fs --vault ./vault --selftest
+python mcp/vault_bridge.py --backend fs --vault ./vault --selftest
 uv run kit.py index --vault ./vault && uv run kit.py validate --vault ./vault --strict
 ```
 

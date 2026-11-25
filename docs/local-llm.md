@@ -40,7 +40,7 @@ Everything below works with any of them; the kit reads `KIT_LLM_BASE_URL` (defau
    uv run kit.py mcp-config --client lmstudio --write     # writes ~/.lmstudio/mcp.json (backup kept)
    ```
 
-   Restart LM Studio → open a chat → *Program* tab in the right sidebar → toggle **qmd** and **obsidian-vault** on. LM Studio shows a confirmation dialog per tool call; choose *always allow* for `query`, `get`, `obsidian_search`, `obsidian_read_note`, and keep asking for writes. The bridge adds its own guard rails (confidential notes hidden, people/system folders read-only, size and rate limits; `--propose` for a human-applied queue) — [security.md](security.md). Paste the system prompt from [`config/lmstudio/system-prompt.md`](../config/lmstudio/system-prompt.md) (`Cmd/Ctrl+Shift+E` opens the system-prompt editor).
+   Restart LM Studio → open a chat → *Program* tab in the right sidebar → toggle **qmd** and **okf-vault** on. LM Studio shows a confirmation dialog per tool call; choose *always allow* for `query`, `get`, `obsidian_search`, `obsidian_read_note`, and keep asking for writes. The bridge adds its own guard rails (confidential notes hidden, people/system folders read-only, size and rate limits; `--propose` for a human-applied queue) — [security.md](security.md). Paste the system prompt from [`config/lmstudio/system-prompt.md`](../config/lmstudio/system-prompt.md) (`Cmd/Ctrl+Shift+E` opens the system-prompt editor).
 6. **Prompts that work with a 2B model** — retrieval-grounded, one task at a time, explicit output shape:
    > Use the qmd query tool to find notes about the search relaunch. Then answer in five bullets: what is due, what is at risk, who owns what. Cite note paths.
 

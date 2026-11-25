@@ -223,8 +223,8 @@ class KitCli(unittest.TestCase):
         # resolved path when qmd is installed: the MCP client spawns this, and on Windows a
         # bare name does not find a .cmd shim
         self.assertEqual(Path(qmd["command"]).stem, "qmd")
-        srv = cfg["mcpServers"]["obsidian-vault"]
-        self.assertTrue(any(a.endswith("obsidian_bridge.py") for a in srv["args"]))
+        srv = cfg["mcpServers"]["okf-vault"]
+        self.assertTrue(any(a.endswith("vault_bridge.py") for a in srv["args"]))
         self.assertIn("--backend", srv["args"])
         self.assertEqual(srv["command"], sys.executable, "KIT_NO_UV should force the plain-Python launcher")
 
@@ -240,10 +240,10 @@ class KitCli(unittest.TestCase):
             env["PATH"] = str(tmp) + os.pathsep + env.get("PATH", "")
             r = run("mcp-config", "--client", "lmstudio", "--vault", str(VAULT), env=env)
             self.assertEqual(r.returncode, 0, r.stderr)
-            srv = json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["obsidian-vault"]
+            srv = json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["okf-vault"]
             self.assertTrue(srv["command"].startswith(str(tmp)), srv)
             self.assertEqual(srv["args"][0], "run")
-            self.assertTrue(srv["args"][1].endswith("obsidian_bridge.py"))
+            self.assertTrue(srv["args"][1].endswith("vault_bridge.py"))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -265,6 +265,45 @@ class KitCli(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
             shutil.rmtree(v.parent, ignore_errors=True)
+
+    LEGACY = {"command": "uv", "args": ["run", "/old/kit/mcp/obsidian_bridge.py", "--backend", "fs", "--vault", "/old/vault"]}
+    FOREIGN = {"command": "npx", "args": ["-y", "some-obsidian-mcp"]}
+
+    def test_mcp_config_write_replaces_the_kits_old_obsidian_vault_entry(self):
+        """The server was renamed okf-vault; an old entry left beside it spawns a script that no
+        longer exists on every client start. One that is not ours keeps its name and stays."""
+        for old, kept in ((self.LEGACY, False), (self.FOREIGN, True)):
+            with self.subTest(kept=kept):
+                tmp = Path(tempfile.mkdtemp(prefix="okf-mcp-"))
+                v = temp_vault()
+                try:
+                    env = dict(os.environ, HOME=str(tmp), USERPROFILE=str(tmp))
+                    cfg_path = tmp / ".lmstudio" / "mcp.json"
+                    cfg_path.parent.mkdir(parents=True)
+                    cfg_path.write_text(json.dumps({"mcpServers": {"obsidian-vault": old}}), encoding="utf-8")
+                    r = run("mcp-config", "--client", "lmstudio", "--vault", str(v), "--write", env=env)
+                    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                    servers = json.loads(cfg_path.read_text(encoding="utf-8"))["mcpServers"]
+                    self.assertIn("okf-vault", servers)
+                    self.assertEqual("obsidian-vault" in servers, kept)
+                    self.assertEqual("replaced the old `obsidian-vault` entry" in r.stdout, not kept)
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    shutil.rmtree(v.parent, ignore_errors=True)
+
+    def test_doctor_reports_a_client_config_still_naming_the_old_bridge(self):
+        tmp = Path(tempfile.mkdtemp(prefix="okf-mcp-"))
+        try:
+            env = dict(os.environ, HOME=str(tmp), USERPROFILE=str(tmp))
+            cfg_path = tmp / ".cursor" / "mcp.json"
+            cfg_path.parent.mkdir(parents=True)
+            cfg_path.write_text(json.dumps({"mcpServers": {"obsidian-vault": self.LEGACY}}), encoding="utf-8")
+            r = run("doctor", "--vault", str(VAULT), "--base-url", "http://127.0.0.1:9", env=env)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("mcp client", r.stdout)
+            self.assertIn("kit.py mcp-config --client cursor", r.stdout)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_doctor_runs(self):
         r = run("doctor", "--vault", str(VAULT), "--base-url", "http://127.0.0.1:9")

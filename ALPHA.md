@@ -97,8 +97,8 @@ rm -rf ~/.cache/qmd ~/.config/qmd    # qmd's models and index
 rm -rf ~/.lmstudio/models            # the models you downloaded; uninstalling LM Studio leaves them
 ```
 
-Delete the `qmd` and `obsidian-vault` entries that `kit.py mcp-config --write` added to
-`~/.lmstudio/mcp.json` (if the file already existed, the original is next to it as `mcp.json.bak`).
+Delete the `qmd` and `okf-vault` entries (`obsidian-vault` before 0.3.0) that `kit.py mcp-config --write`
+added to `~/.lmstudio/mcp.json` (if the file already existed, the original is next to it as `mcp.json.bak`).
 Left in place they point at a bridge script that is no longer there, and LM Studio tries to spawn it
 on every start.
 
