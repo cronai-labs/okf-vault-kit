@@ -1,4 +1,4 @@
-"""The Obsidian MCP bridge: fs backend on a temp vault, cli backend against a stub `obsidian` binary."""
+"""The vault MCP bridge (okf-vault): fs backend on a temp vault, cli backend against a stub `obsidian` binary."""
 import datetime as dt
 import json
 import os
@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tests.helpers import ROOT, kitlib, kitproviders, temp_vault
 
@@ -51,6 +52,22 @@ class FsBackend(unittest.TestCase):
         self.assertEqual([h["file"] for h in hits], ["07-knowledge/reindex-qmd.md"],
                          "qmd:// paths are mapped, and a hit for a file this vault does not have is dropped")
         self.assertEqual(hits[0]["snippet"], "how to reindex qmd")
+
+    def test_search_hides_what_every_other_reader_hides(self):
+        """qmd indexes whatever its mask matches. A note in a nested `_`-folder or a dot folder is
+        invisible to list, read and the graph, and search must not be the one tool that shows it."""
+        for rel in ("03-projects/_drafts/secret-plan.md", ".obsidian/plugin-notes.md", "07-knowledge/visible.md"):
+            (self.vault / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.vault / rel).write_text("---\ntype: concept\n---\n# x\n", encoding="utf-8")
+
+        class Indexed:
+            name = "qmd"
+            def available(self): return None
+            def query(self, vault, question, n, collection):
+                return [kitproviders.Hit(f"qmd://vault/{r}", r, "x", 1.0) for r in
+                        ("03-projects/_drafts/secret-plan.md", ".obsidian/plugin-notes.md", "07-knowledge/visible.md")]
+        hits = ob.FsBackend(self.vault, search_provider=Indexed()).search("x", 10)
+        self.assertEqual([h["file"] for h in hits], ["07-knowledge/visible.md"])
 
     def test_search_falls_back_to_keyword_search_when_the_provider_finds_nothing(self):
         class Empty:
@@ -276,7 +293,8 @@ class BridgeProcess(unittest.TestCase):
         vault = temp_vault()
 
         async def go():
-            params = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault)])
+            params = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault)],
+                                           env=dict(os.environ))
             async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
                 await s.initialize()
                 tools = {t.name for t in (await s.list_tools()).tools}
@@ -330,7 +348,8 @@ def _stdio_session(vault: Path, *flags: str, calls=()):
     from mcp import ClientSession, StdioServerParameters
 
     async def go():
-        params = StdioServerParameters(command=sys.executable,
+        # env: stdio_client passes only a whitelist, and the offline suite's provider pin must reach the child
+        params = StdioServerParameters(command=sys.executable, env=dict(os.environ),
                                        args=[str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault), *flags])
         async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
             await s.initialize()
@@ -409,6 +428,12 @@ class HttpTransport(unittest.TestCase):
 
     def setUp(self):
         _need_sdk(self)
+        # loopback must never go to a proxy: on a managed machine with HTTP_PROXY set, both the
+        # probe and the SDK's client would send 127.0.0.1 to it (tests/helpers.py, llm_reachable)
+        loopback = "127.0.0.1,localhost"
+        patcher = mock.patch.dict(os.environ, {"NO_PROXY": loopback, "no_proxy": loopback})
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.vault = temp_vault()
         import socket
         with socket.socket() as s:

@@ -100,6 +100,13 @@ class Status(unittest.TestCase):
 class ConfigThatSomeoneHalfEdited(unittest.TestCase):
     """`providers:` with nothing under it is one deleted line away from the documented sample."""
 
+    def setUp(self):
+        # These read the vault's config, which the offline suite's KIT_SEARCH_PROVIDER pin outranks.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("KIT_SEARCH_PROVIDER", None)
+
     def vault_with(self, config: str) -> Path:
         v = temp_vault()
         (v / ".kit").mkdir(exist_ok=True)

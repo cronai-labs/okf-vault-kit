@@ -11,8 +11,8 @@ sensitivity: internal
 Three moving parts, all on your machine:
 
 1. **This vault** — Markdown with frontmatter; the source of truth.
-2. **qmd** — indexes the vault; answers `search` / `vsearch` / `query`; exposes the same as MCP tools.
-3. **A local LLM** in LM Studio (or Unsloth Desktop / Ollama) — chats with you, calls qmd through MCP, and serves an OpenAI-compatible endpoint for scripts.
+2. **qmd** — indexes the vault; answers `search` / `vsearch` / `query` in a terminal, and is what the kit's bridge searches with.
+3. **A local LLM** in LM Studio (or Unsloth Desktop / Ollama) — chats with you, reads and writes the vault through the kit's bridge (`okf-vault`, over MCP), and serves an OpenAI-compatible endpoint for scripts.
 
 Setup lives in the kit's `docs/local-llm.md`. This page is the *how to use it*.
 
@@ -25,7 +25,7 @@ A model only knows what it is given. Attach the briefing pack (Priorities, Proje
 **1. Morning briefing.** *Attach* `00-home/priorities.md`, `03-projects/projects.md`, `06-decisions/decision-log.md`.
 > Using only the attached files, give me a five-bullet briefing for today: what is due, what is at risk, what I am waiting on, and one thing I should decide this week. Quote the file each bullet comes from.
 
-**2. Find and summarise.** *With qmd tools enabled.*
+**2. Find and summarise.** *With the okf-vault tools enabled.*
 > Search the vault for everything about `<topic>`; list the notes you found with their paths, then summarise the current state in five sentences and flag contradictions between notes.
 
 **3. Meeting prep.**

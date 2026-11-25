@@ -17,7 +17,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.helpers import ROOT, env_flag, has_tool, temp_vault
+from tests.helpers import ROOT, env_flag, has_tool, kitlib, temp_vault
 
 FIXTURE = ROOT / "tests/fixtures/qmd-bench.json"
 
@@ -46,8 +46,16 @@ class QmdEndToEnd(unittest.TestCase):
                 (cache / "models").symlink_to(REAL_MODELS, target_is_directory=True)
         _ISOLATED.update(XDG_CONFIG_HOME=str(cls.xdg / "config"), XDG_CACHE_HOME=str(cls.xdg / "cache"))
         cls.real_config_before = REAL_CONFIG.read_text(encoding="utf-8") if REAL_CONFIG.exists() else None
+        # A note whose name has capitals and spaces: if qmd reports paths in another spelling,
+        # the bridge's existence check would drop every such hit without a word.
+        (cls.vault / "07-knowledge" / "Ranking Notes.md").write_text(
+            "---\ntype: concept\ntitle: Ranking notes\ndescription: Why the pilot ranks by zebrafish order.\n---\n"
+            "# Ranking notes\n\nThe pilot ranks results in zebrafish order, a placeholder name for the tie-break rule.\n",
+            encoding="utf-8")
         try:
-            r = qmd("collection", "add", ".", "--name", "kit-e2e", "--mask", "**/*.md", cwd=cls.vault)
+            # The absolute path, never ".": qmd resolves "." from $PWD, which subprocess's cwd= does
+            # not change, so "." indexed the repository the suite was started from, not the vault.
+            r = qmd("collection", "add", str(cls.vault), "--name", "kit-e2e", "--mask", "**/*.md", cwd=cls.vault)
             assert r.returncode == 0, r.stdout + r.stderr
             qmd("context", "add", "qmd://kit-e2e", "OKF vault kit template: journal, meetings, projects, decisions, knowledge", cwd=cls.vault)
             r = qmd("update", cwd=cls.vault)
@@ -79,6 +87,49 @@ class QmdEndToEnd(unittest.TestCase):
         hits = json.loads(r.stdout)
         files = [h.get("file", "") for h in hits]
         self.assertTrue(any(f.endswith("07-knowledge/hybrid-search.md") for f in files), files)
+
+    def test_the_bridge_searches_through_qmd(self):
+        """#90 on a real index: the bridge's search goes to qmd, and qmd's paths survive its checks.
+
+        Asserted separately: that qmd itself answered (so a green result is not the keyword
+        fallback), and that every hit it returned is still there after the bridge's filtering.
+        """
+        import sys
+        import time
+        from unittest import mock
+
+        import kitproviders
+        sys.path.insert(0, str(ROOT / "mcp"))
+        import vault_bridge
+
+        class Recording(kitproviders.QmdSearch):
+            answered: list = []
+
+            def query(self, *a):
+                hits = super().query(*a)
+                type(self).answered.extend(hits)
+                return hits
+
+        (self.vault / ".kit").mkdir(exist_ok=True)
+        (self.vault / ".kit" / "config.yml").write_text("collection: kit-e2e\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {**_ISOLATED, "NO_COLOR": "1"}):
+            backend = vault_bridge.FsBackend(self.vault, search_provider=Recording())
+            for question, want in (("hybrid search reciprocal rank fusion", "07-knowledge/hybrid-search.md"),
+                                   ("zebrafish order tie-break", "07-knowledge/Ranking Notes.md")):
+                with self.subTest(question=question):
+                    Recording.answered.clear()
+                    started = time.monotonic()
+                    hits = backend.search(question, 5)
+                    took = time.monotonic() - started
+                    self.assertTrue(Recording.answered, "qmd answered nothing, so this was the keyword fallback")
+                    expected = [h for h in Recording.answered        # the bridge never serves templates or index.md/log.md
+                                if not kitproviders.hit_rel(h.file).startswith("90-templates/")
+                                and Path(kitproviders.hit_rel(h.file)).name not in kitlib.RESERVED_FILENAMES]
+                    self.assertEqual(len(hits), len(expected),
+                                     f"the bridge dropped qmd hits: qmd {[h.file for h in Recording.answered]}, "
+                                     f"bridge {[h['file'] for h in hits]}")
+                    self.assertIn(want, [h["file"] for h in hits])
+                    print(f"\n  bridge search via qmd: {took:.1f}s for {question!r}")
 
     def test_get_by_path(self):
         r = qmd("get", "07-knowledge/reindex-qmd.md", "--no-line-numbers", cwd=self.vault)

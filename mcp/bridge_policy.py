@@ -264,23 +264,20 @@ class Guarded:
     def list_files(self, folder: str = "") -> list[str]:
         return self._guard("list_files", {"folder": folder}, lambda: [f for f in self.backend.list_files(folder) if not self._confidential(f)])
 
-    SEARCH_FETCH_CAP = 200
+    SEARCH_FETCH_CAP = 100
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        """Visible hits, up to `limit` of them.
+        """Visible hits, up to `limit` of them, from one backend search.
 
         The backend applies its limit before this layer filters, so asking it for exactly `limit`
-        let confidential notes that ranked first use up the slots. Ask for more, doubling until
-        `limit` visible hits are found, the backend runs out, or the cap is reached.
+        let confidential notes that ranked first use up the slots. It is asked once for three times
+        as many (capped), never again in a loop: each backend search can be a qmd spawn that may
+        run into its timeout, and a tool call that waits for several of them never answers.
         """
         def run():
-            fetch = max(limit, 1)
-            while True:
-                hits = self.backend.search(query, fetch)
-                visible = [h for h in hits if not self._confidential(str(h.get("file", "")))]
-                if len(visible) >= limit or len(hits) < fetch or fetch >= self.SEARCH_FETCH_CAP:
-                    return visible[:limit]
-                fetch = min(fetch * 2, self.SEARCH_FETCH_CAP)
+            fetch = min(max(limit, 1) * 3 + 10, self.SEARCH_FETCH_CAP)
+            hits = self.backend.search(query, fetch)
+            return [h for h in hits if not self._confidential(str(h.get("file", "")))][:limit]
         return self._guard("search", {"query": query, "limit": limit}, run)
 
     def backlinks(self, file: str) -> list[str]:

@@ -63,11 +63,15 @@ class PolicyLayer(unittest.TestCase):
                   "07-knowledge/hybrid-search.md", "07-knowledge/reindex-qmd.md", "03-projects/search-relaunch.md"]
 
         class Ranked:
+            calls = 0
+
             def search(self, query, limit=10):
+                type(self).calls += 1
                 return [{"file": f, "title": f, "score": 1, "snippet": ""} for f in ranked[:limit]]
 
         g = bp.Guarded(Ranked(), bp.Policy(audit_path=None), self.vault)
         self.assertEqual([h["file"] for h in g.search("x", 2)], ["07-knowledge/hybrid-search.md", "07-knowledge/reindex-qmd.md"])
+        self.assertEqual(Ranked.calls, 1, "one backend search per tool call: each can be a qmd spawn that may run into its timeout")
         self.assertEqual(len(g.search("x", 10)), 3, "never more than exist")
 
     def test_confidential_hiding_survives_a_non_canonical_vault_path(self):

@@ -672,7 +672,9 @@ class DoctorReport(unittest.TestCase):
             (v / ".kit/config.yml").write_text(f"providers:\n  search: /Users/{getpass.getuser()}/secret-project/mysearch\n",
                                                encoding="utf-8", newline="\n")
             out = Path(v.parent) / "doctor.txt"
-            r = run("doctor", "--vault", str(v), "--report", str(out))
+            # without the offline suite's pin: the vault config is under test, and the variable outranks it
+            env = {k: val for k, val in os.environ.items() if k != "KIT_SEARCH_PROVIDER"}
+            r = run("doctor", "--vault", str(v), "--report", str(out), env=env)
             self.assertEqual(r.returncode, 0, r.stderr[-400:])
             text = out.read_text(encoding="utf-8")
             # Assert the behaviour, not the phrasing. The layer below (#26) made doctor survive a

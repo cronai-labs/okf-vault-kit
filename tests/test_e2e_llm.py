@@ -119,7 +119,7 @@ class LocalLlmEndToEnd(unittest.TestCase):
         trace: list[tuple[str, bool, str]] = []
 
         async def go() -> str:
-            params = StdioServerParameters(command=sys.executable, args=[
+            params = StdioServerParameters(command=sys.executable, env=dict(os.environ), args=[
                 str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault), "--read-only", "--no-audit"])
             async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
                 await s.initialize()

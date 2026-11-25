@@ -182,16 +182,20 @@ class FsBackend:
         return hits[:limit]
 
     def _usable(self, hits: list[Any]) -> list[dict[str, Any]]:
+        """Hits for notes the other read tools can see, and only those.
+
+        The visible set is `iter_markdown`'s, the walk list, read and the graph use: no `_`-folder
+        at any depth, no dot folder the kit owns, no templates. qmd indexes whatever its mask
+        matched, so search must not be the one tool that surfaces a note the user hid.
+        """
+        visible = {p.relative_to(self.vault).as_posix() for p in kitlib.iter_markdown(self.vault, include_templates=False)}
         out = []
         for h in hits:
             rel = kitproviders.hit_rel(h.file)
-            if not rel or rel.startswith(("90-templates/", "_")) or Path(rel).name in kitlib.RESERVED_FILENAMES:
-                continue
-            p = (self.vault / rel).resolve()
-            if self.vault not in p.parents or not p.is_file():
+            if rel not in visible or Path(rel).name in kitlib.RESERVED_FILENAMES:
                 continue
             snippet = re.sub(r"\s+", " ", h.snippet or "").strip()[:240]
-            out.append({"file": p.relative_to(self.vault).as_posix(), "title": h.title or p.stem, "score": h.score, "snippet": snippet})
+            out.append({"file": rel, "title": h.title or Path(rel).stem, "score": h.score, "snippet": snippet})
         return out
 
     def backlinks(self, file: str) -> list[str]:

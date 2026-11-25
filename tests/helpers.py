@@ -17,9 +17,15 @@ sys.path.insert(0, str(ROOT / "mcp"))
 import kitlib  # noqa: E402
 import kitproviders  # noqa: E402
 
+# The offline suite must not answer from the machine's own qmd index. Since the bridge searches
+# through the provider slot, a tester who followed the quickstart has a collection named `vault`,
+# and every search test would rank their notes, not the sample's. qmd is exercised on purpose by
+# test_e2e_qmd.py, which passes the provider explicitly. setdefault: an explicit choice wins.
+os.environ.setdefault("KIT_SEARCH_PROVIDER", "naive")
+
 # kitlib is re-exported: every test module imports it from here rather than repeating the sys.path
 # bootstrap above. Listing the surface explicitly is what says so.
-__all__ = ["DOCS", "ROOT", "VAULT", "env_flag", "has_tool", "kitlib", "llm_base_url",
+__all__ = ["DOCS", "ROOT", "VAULT", "env_flag", "has_tool", "kitlib", "kitproviders", "llm_base_url",
            "llm_reachable", "temp_vault"]
 
 
