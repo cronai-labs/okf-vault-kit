@@ -410,6 +410,11 @@ def cmd_mcp_config(args) -> int:
     if args.backend == "cli" and args.vault_name:
         servers["obsidian-vault"]["args"] += ["--vault-name", args.vault_name]
     if args.bridge_http:
+        if args.bridge_flags:
+            # A url entry starts no process, so clients ignore `args` in it: the --read-only the
+            # user asked for would silently not exist.
+            sys.exit("--bridge-flags cannot reach an HTTP bridge: the client only connects to it. Pass the flags "
+                     "where the bridge is started, e.g. `uv run mcp/obsidian_bridge.py --http --vault … --read-only`.")
         servers["obsidian-vault"] = {"url": f"http://127.0.0.1:{args.bridge_port}/mcp"}
         if args.bridge_token:
             servers["obsidian-vault"]["headers"] = {"Authorization": f"Bearer {args.bridge_token}"}

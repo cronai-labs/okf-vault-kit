@@ -651,8 +651,12 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     tpl_text = kitlib.read_text(tpl) if tpl.exists() else None
     if tpl.exists() and tpl_text is None:
         m.skipped.append(f"{TEMPLATE_DIR}/meeting.md (not valid UTF-8; the note was written from the built-in shape)")
-    body = kitlib.render_template(tpl_text, title, date) if tpl_text is not None else f"---\ntype: meeting\ntitle: {title}\n---\n# {title}\n"
-    raw, rest = kitlib.split_frontmatter(body)
+    # The title is model- or user-chosen, so it never goes through YAML syntax: a `"`, `\` or `:`
+    # in it broke `title: "{{title}}"` and the built-in shape alike. The frontmatter is rendered
+    # with a placeholder and the real title is set below as a value; only the body gets the text.
+    raw_tpl, rest_tpl = kitlib.split_frontmatter(tpl_text) if tpl_text is not None else ("type: meeting", "# {{title}}\n")
+    raw = kitlib.render_template(raw_tpl, "untitled", date) if raw_tpl else ""
+    rest = kitlib.render_template(rest_tpl, title, date)
     import yaml
     fm = yaml.safe_load(raw) if raw else {}
     fm = fm or {}

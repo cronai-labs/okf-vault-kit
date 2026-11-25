@@ -73,6 +73,13 @@ class FsBackend(unittest.TestCase):
         self.b.set_property(rel, "state", "done")
         self.assertEqual(kitlib.validate_okf(self.vault).errors, [])
 
+    def test_list_files_accepts_the_folder_spellings_a_model_writes(self):
+        want = self.b.list_files("05-people")
+        self.assertTrue(want)
+        for spelling in ("./05-people", "05-people/", "05-people\\", "/05-people", " 05-people "):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(self.b.list_files(spelling), want)
+
     def test_list_files_with_prefix(self):
         files = self.b.list_files("07-knowledge")
         self.assertTrue(files and all(f.startswith("07-knowledge/") for f in files))
@@ -299,6 +306,32 @@ class GraphTools(unittest.TestCase):
         self.b.graph()
         self.b.set_property("03-projects/search-relaunch.md", "health", "red")
         self.assertIn("health: red", self.b.graph_context("search-relaunch"))
+
+    def test_graph_cache_forgets_a_note_that_was_moved_away_or_deleted(self):
+        """A move or a delete raises no mtime, so an mtime-only cache kept serving the old note.
+
+        Moving a note into a `_`-folder is how a user hides it; the graph tools must stop
+        answering about it at once, not after some other note happens to change.
+        """
+        sql = "select count(*) from nodes where path = '07-knowledge/reindex-qmd.md'"
+        self.assertEqual(self.b.graph_query(sql)["rows"], [[1]])
+        (self.vault / "_private").mkdir()
+        shutil.move(str(self.vault / "07-knowledge/reindex-qmd.md"), str(self.vault / "_private/reindex-qmd.md"))
+        self.assertEqual(self.b.graph_query(sql)["rows"], [[0]], "moved into a `_`-folder, still in the graph")
+        sql2 = "select count(*) from nodes where path = '07-knowledge/hybrid-search.md'"
+        self.assertEqual(self.b.graph_query(sql2)["rows"], [[1]])
+        (self.vault / "07-knowledge/hybrid-search.md").unlink()
+        self.assertEqual(self.b.graph_query(sql2)["rows"], [[0]], "deleted, still in the graph")
+
+    def test_minutes_title_with_yaml_specials_is_filed(self):
+        """The model chooses the title; quotes, a backslash or a colon must not break the YAML."""
+        for i, title in enumerate(('Review "beta" launch', "Path C:\\qmd fix", "Plan: Q4 and beyond")):
+            with self.subTest(title=title):
+                res = self.b.file_minutes("Decision: ship it", title, f"2026-09-2{i}")
+                note = kitlib.parse_note(self.vault / res["path"], self.vault)
+                self.assertIsNotNone(note.frontmatter, note.fm_error)
+                self.assertEqual(note.frontmatter["title"], title)
+                self.assertIn(f"# {title}", note.body)
 
     def test_todos_and_minutes_tools(self):
         t = self.b.todos()

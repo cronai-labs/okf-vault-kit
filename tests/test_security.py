@@ -338,3 +338,12 @@ class BearerAuth(unittest.TestCase):
         self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer tok"})
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-flags", "--read-only --propose"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(__import__("os").environ, KIT_NO_UV="1"), check=False)
         self.assertIn("--read-only", json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["obsidian-vault"]["args"])
+
+    def test_mcp_config_refuses_bridge_flags_for_an_http_bridge(self):
+        """A url entry starts no process, so flags in it are ignored by every client — the
+        `--read-only` the user asked for would silently not exist. Refuse, and say where they go."""
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-flags", "--read-only"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("--bridge-flags", r.stderr)
+        self.assertNotIn('"args"', r.stdout)

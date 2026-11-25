@@ -166,11 +166,12 @@ class FsBackend:
         return self._text(self._resolve(file))
 
     def list_files(self, folder: str = "") -> list[str]:
+        folder = _folder_prefix(folder)
         base = self.vault / folder if folder else self.vault
         if self.vault not in base.resolve().parents and base.resolve() != self.vault:
             raise BridgeError("folder escapes the vault")
-        return [p.relative_to(self.vault).as_posix() for p in kitlib.iter_markdown(base if base.exists() else self.vault)
-                if p.relative_to(self.vault).as_posix().startswith(folder)]
+        rels = (p.relative_to(self.vault).as_posix() for p in kitlib.iter_markdown(base if base.exists() else self.vault))
+        return [r for r in rels if not folder or r.startswith(folder + "/") or r == folder]
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1 and t.lower() not in STOPWORDS]
@@ -265,15 +266,24 @@ class FsBackend:
         self._skipped_cache = (sig, out)
         return out
 
-    # -- graph side (rebuilt when any note changes)
-    _graph_cache: tuple[float, kitgraph.Graph] | None = None
+    # -- graph side (rebuilt when any note changes, appears or goes)
+    _graph_cache: tuple[Any, kitgraph.Graph] | None = None
+
+    def _note_set_signature(self) -> Any:
+        """Which notes exist and when each last changed.
+
+        The newest mtime alone misses a move and a delete — neither raises any mtime — and moving
+        a note into a `_`-folder is how a user hides it. Keying on the path set as well means the
+        graph tools stop answering about such a note on the very next call.
+        """
+        return frozenset((p.relative_to(self.vault).as_posix(), p.stat().st_mtime_ns) for p in kitlib.iter_markdown(self.vault))
 
     def graph(self) -> kitgraph.Graph:
-        latest = max((p.stat().st_mtime for p in kitlib.iter_markdown(self.vault)), default=0.0)
-        if self._graph_cache and self._graph_cache[0] >= latest:
+        sig = self._note_set_signature()
+        if self._graph_cache and self._graph_cache[0] == sig:
             return self._graph_cache[1]
         g = kitgraph.build_graph(self.vault)
-        self._graph_cache = (latest, g)
+        self._graph_cache = (sig, g)
         return g
 
     def graph_neighbors(self, node: str, depth: int = 1, preds: list[str] | None = None) -> list[dict[str, Any]]:
@@ -321,6 +331,18 @@ class FsBackend:
         return {"path": m.path, "people": m.people, "project": m.project, "unresolved": m.unresolved,
                 "actions": m.actions, "decisions": m.decisions, "outcomes": m.outcomes,
                 "also_written": also, "skipped": list(m.skipped)}
+
+
+def _folder_prefix(folder: str) -> str:
+    """A folder as the model writes it, as the vault-relative POSIX prefix the listing compares.
+
+    Models write `./05-people`, `05-people/`, `/05-people` or, on Windows, `05-people\\`; each
+    used to match nothing and came back as an empty folder the model then reported as empty.
+    """
+    f = (folder or "").strip().replace("\\", "/")
+    while f.startswith("./"):
+        f = f[2:]
+    return f.strip("/")
 
 
 def _one_line(text: str) -> str:
@@ -405,7 +427,8 @@ class CliBackend:
     def list_files(self, folder: str = "") -> list[str]:
         out = self._run("files")
         files = [l.strip() for l in out.splitlines() if l.strip()]
-        return [f for f in files if f.startswith(folder)] if folder else files
+        folder = _folder_prefix(folder)
+        return [f for f in files if f.startswith(folder + "/") or f == folder] if folder else files
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         out = self._run("search", {"query": query, "limit": limit})
