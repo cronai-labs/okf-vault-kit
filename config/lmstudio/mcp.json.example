@@ -1,9 +1,5 @@
 {
   "mcpServers": {
-    "qmd": {
-      "command": "qmd",
-      "args": ["mcp"]
-    },
     "okf-vault": {
       "command": "uv",
       "args": ["run", "/ABSOLUTE/PATH/okf-vault-kit/mcp/vault_bridge.py", "--backend", "fs", "--vault", "/ABSOLUTE/PATH/Notes/vault"]

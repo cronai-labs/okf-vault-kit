@@ -60,7 +60,8 @@ notes. A vault filled with test data tells neither of us anything.
   first index — [docs/models.md](docs/models.md).
 - A 2B model is a 2B model. It is good at "find this and summarise it", unreliable at reasoning
   across many notes. Use `--graph` for anything involving owners, dates or relations.
-- The MCP SDK is pinned to v1; the 2.x API landed recently and we are not migrating mid-alpha.
+- The MCP SDK is pinned to the 2.x line (`mcp>=2,<3`). A 3.x release would rename the server API
+  again, so moving to it is deliberate work, never a bot's bump.
 - Windows native is the fallback lane. If you have WSL2, use it —
   [docs/platforms/wsl2.md](docs/platforms/wsl2.md).
 

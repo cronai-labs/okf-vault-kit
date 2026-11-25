@@ -46,4 +46,4 @@ That isolation rests on qmd honouring `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`, which 
 
 ## CI
 
-`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.12 through `astral-sh/setup-uv`, plus an optional job that installs qmd via `oven-sh/setup-bun` and runs `test_e2e_qmd.py` (keyword tier only — no model downloads). Endpoint tests never run in CI.
+`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.14, and on ubuntu also with 3.12 and 3.13, through `astral-sh/setup-uv`. A `qmd-e2e` job installs qmd via `oven-sh/setup-bun` and runs `test_e2e_qmd.py` (keyword tier only — no model downloads); only its install step is advisory, and the job is one of the checks `ci-required` waits for. Endpoint tests never run in CI.
