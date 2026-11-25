@@ -26,7 +26,7 @@ python -m pytest tests -q                       # if you prefer pytest (needs py
 
 That isolation rests on qmd honouring `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`, which was checked on macOS and is unverified on native Windows — and qmd also picks up a project-local `.qmd/` by walking up from the working directory. The canary that asserts your real index was left alone only watches the XDG location, so on Windows treat a green e2e run as weaker evidence and check `qmd collection list` afterwards.
 
-Last real-model run, 2026-11-25, `minicpm5-2b` in LM Studio on macOS with `KIT_E2E_TOOLS=1`: the five endpoint tests of `test_e2e_llm.py` passed in one run, and the bridge-driving test passed 3 runs out of 3 on its own.
+Last real-model run, 2026-11-25, `minicpm5-2b` in LM Studio on macOS with `KIT_E2E_TOOLS=1`: all six tests of `test_e2e_llm.py`, the bridge-driving one included, passed in each of three consecutive runs. The bridge-driving test checks that the model called a bridge tool, got a note back and answered — not whether the answer is right; that needs an eval, not a unit test.
 
 ## Switches
 

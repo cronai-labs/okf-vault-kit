@@ -255,7 +255,7 @@ class Guarded:
         def run():
             rel = self._resolve_rel(file)
             if rel == _UNRESOLVED:
-                raise PolicyError(f"`{file}` does not resolve to one note in the vault; use obsidian_search for the path (policy)")
+                raise PolicyError(f"`{file}` does not resolve to one note in the vault; use vault_search for the path (policy)")
             if self._confidential(rel):
                 raise PolicyError(f"`{rel}` is marked confidential and is not available to agents (policy)")
             return self.backend.read_note(file)
@@ -287,7 +287,7 @@ class Guarded:
         def run():
             g = self._graph_view()
             if not kitgraph.resolve_id(g, node):
-                raise PolicyError(f"no visible note matches {node!r}; use obsidian_search to find its path")
+                raise PolicyError(f"no visible note matches {node!r}; use vault_search to find its path")
             return [{"src": s, "pred": p, "dst": d, "depth": dd} for s, p, d, dd in kitgraph.neighbors(g, node, depth, preds)]
         return self._guard("graph_neighbors", {"node": node, "depth": depth}, run)
 

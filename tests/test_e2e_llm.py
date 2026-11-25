@@ -83,13 +83,13 @@ class LocalLlmEndToEnd(unittest.TestCase):
 
     @unittest.skipUnless(env_flag("KIT_E2E_TOOLS"), "set KIT_E2E_TOOLS=1 to test tool calling")
     def test_tool_call_emitted(self):
-        tools = [{"type": "function", "function": {"name": "obsidian_search", "description": "Search the user's notes",
+        tools = [{"type": "function", "function": {"name": "vault_search", "description": "Search the user's notes",
                   "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}]
         data = chat({"model": self.model, "max_tokens": budget(200), "temperature": 0, "tools": tools, "tool_choice": "auto",
                      "messages": [{"role": "user", "content": "Search my notes for the search relaunch latency risk."}]})
         msg = data["choices"][0]["message"]
         self.assertTrue(msg.get("tool_calls"), f"expected a tool call, got: {msg}")
-        self.assertEqual(msg["tool_calls"][0]["function"]["name"], "obsidian_search")
+        self.assertEqual(msg["tool_calls"][0]["function"]["name"], "vault_search")
 
     @unittest.skipUnless(env_flag("KIT_E2E_TOOLS"), "set KIT_E2E_TOOLS=1 to test tool calling")
     def test_the_model_drives_the_real_bridge(self):

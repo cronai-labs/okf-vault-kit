@@ -262,12 +262,13 @@ class BridgeProcess(unittest.TestCase):
         finally:
             shutil.rmtree(vault.parent, ignore_errors=True)
 
-    # The tool surface is the contract: every client config `kit.py mcp-config` has ever written
-    # names these, so a rename or a dropped tool breaks a machine we cannot reach.
-    TOOLS = {"obsidian_search", "obsidian_read_note", "obsidian_list_files", "obsidian_backlinks",
+    # The tool surface is the contract: client allow-lists and system prompts name these, so a
+    # rename or a dropped tool breaks a machine we cannot reach. The obsidian_* → vault_* rename
+    # in 0.3.0 was deliberate and rides the same breaking release as the okf-vault server name.
+    TOOLS = {"vault_search", "vault_read_note", "vault_list_files", "vault_backlinks",
              "graph_context", "graph_neighbors", "graph_path", "graph_query", "vault_todos",
-             "obsidian_create_note", "obsidian_append_note", "obsidian_daily_append",
-             "obsidian_set_property", "file_meeting_minutes"}
+             "vault_create_note", "vault_append_note", "vault_daily_append",
+             "vault_set_property", "file_meeting_minutes"}
 
     def test_a_real_stdio_session_serves_every_tool_and_still_refuses(self):
         """The whole bridge over the wire: 14 tools, a read, a write, and three refusals.
@@ -300,10 +301,10 @@ class BridgeProcess(unittest.TestCase):
                 tools = {t.name for t in (await s.list_tools()).tools}
                 out = {}
                 for label, name, args in (
-                        ("read", "obsidian_read_note", {"file": "07-knowledge/hybrid-search"}),
-                        ("write", "obsidian_create_note", {"name": "03-projects/over-the-wire", "content": "written by the session"}),
-                        ("confidential", "obsidian_read_note", {"file": "05-people/alex-example"}),
-                        ("denied", "obsidian_create_note", {"name": "05-people/nope", "content": "x"}),
+                        ("read", "vault_read_note", {"file": "07-knowledge/hybrid-search"}),
+                        ("write", "vault_create_note", {"name": "03-projects/over-the-wire", "content": "written by the session"}),
+                        ("confidential", "vault_read_note", {"file": "05-people/alex-example"}),
+                        ("denied", "vault_create_note", {"name": "05-people/nope", "content": "x"}),
                         ("write_sql", "graph_query", {"sql": "delete from nodes"})):
                     res = await s.call_tool(name, args)
                     out[label] = (bool(res.is_error), res.content[0].text)
@@ -368,7 +369,7 @@ class EveryToolOverTheWire(unittest.TestCase):
     The direct-call tests prove the logic; this proves the wiring a client actually crosses —
     argument names, types and JSON encoding as the SDK derives them from the signatures.
     """
-    READ_TOOLS = {"obsidian_search", "obsidian_read_note", "obsidian_list_files", "obsidian_backlinks",
+    READ_TOOLS = {"vault_search", "vault_read_note", "vault_list_files", "vault_backlinks",
                   "graph_context", "graph_neighbors", "graph_path", "graph_query", "vault_todos"}
 
     def setUp(self):
@@ -380,19 +381,19 @@ class EveryToolOverTheWire(unittest.TestCase):
 
     def test_every_tool_answers(self):
         calls = (
-            ("search", "obsidian_search", {"query": "hybrid search", "limit": 3}),
-            ("read", "obsidian_read_note", {"file": "07-knowledge/hybrid-search"}),
-            ("list", "obsidian_list_files", {"folder": "./07-knowledge"}),
-            ("backlinks", "obsidian_backlinks", {"file": "07-knowledge/hybrid-search"}),
+            ("search", "vault_search", {"query": "hybrid search", "limit": 3}),
+            ("read", "vault_read_note", {"file": "07-knowledge/hybrid-search"}),
+            ("list", "vault_list_files", {"folder": "./07-knowledge"}),
+            ("backlinks", "vault_backlinks", {"file": "07-knowledge/hybrid-search"}),
             ("context", "graph_context", {"note": "search-relaunch"}),
             ("neighbors", "graph_neighbors", {"note": "search-relaunch", "predicates": "links_to"}),
             ("path", "graph_path", {"a": "hybrid-search", "b": "search-relaunch"}),
             ("query", "graph_query", {"sql": "select count(*) as n from nodes"}),
             ("todos", "vault_todos", {}),
-            ("create", "obsidian_create_note", {"name": "03-projects/wire-note", "content": "first line"}),
-            ("append", "obsidian_append_note", {"file": "03-projects/wire-note", "content": "second line"}),
-            ("property", "obsidian_set_property", {"file": "03-projects/wire-note", "name": "state", "value": "active"}),
-            ("daily", "obsidian_daily_append", {"content": "- logged over the wire"}),
+            ("create", "vault_create_note", {"name": "03-projects/wire-note", "content": "first line"}),
+            ("append", "vault_append_note", {"file": "03-projects/wire-note", "content": "second line"}),
+            ("property", "vault_set_property", {"file": "03-projects/wire-note", "name": "state", "value": "active"}),
+            ("daily", "vault_daily_append", {"content": "- logged over the wire"}),
             ("minutes", "file_meeting_minutes", {"text": "Decision: ship it", "title": 'Wire "sync": done', "date": "2026-09-21"}),
         )
         tools, out = _stdio_session(self.vault, calls=calls)
@@ -415,7 +416,7 @@ class EveryToolOverTheWire(unittest.TestCase):
 
     def test_propose_mode_records_a_write_over_the_wire_instead_of_making_it(self):
         _, out = _stdio_session(self.vault, "--propose", calls=(
-            ("create", "obsidian_create_note", {"name": "03-projects/proposed", "content": "x"}),))
+            ("create", "vault_create_note", {"name": "03-projects/proposed", "content": "x"}),))
         is_error, text = out["create"]
         self.assertFalse(is_error, text)
         self.assertTrue(text.startswith("proposed:"), text)
@@ -486,7 +487,7 @@ class HttpTransport(unittest.TestCase):
                     streamable_http_client(self.url, http_client=http) as streams, \
                     ClientSession(streams[0], streams[1]) as s:
                 await s.initialize()
-                res = await s.call_tool("obsidian_read_note", {"file": "07-knowledge/hybrid-search"})
+                res = await s.call_tool("vault_read_note", {"file": "07-knowledge/hybrid-search"})
                 return bool(res.is_error), res.content[0].text
         is_error, text = asyncio.run(go())
         self.assertFalse(is_error, text)

@@ -44,9 +44,9 @@ Without qmd installed the command falls back to a term-frequency search over the
 
 1. Paste a meeting recap into `02-meetings/2026-09-11-search-relaunch-sync.md` under *Recap*.
 2. In LM Studio (tools on), prompt:
-   > Read `02-meetings/2026-09-11-search-relaunch-sync.md` with obsidian_read_note. From the Recap section, extract Outcomes, Decisions and Actions in the note's format; actions as `- [ ] verb — owner, due YYYY-MM-DD`. Show me the text; do not write yet.
+   > Read `02-meetings/2026-09-11-search-relaunch-sync.md` with vault_read_note. From the Recap section, extract Outcomes, Decisions and Actions in the note's format; actions as `- [ ] verb — owner, due YYYY-MM-DD`. Show me the text; do not write yet.
 3. Review, then:
-   > Append exactly that text under a heading `## Distilled` using obsidian_append_note.
+   > Append exactly that text under a heading `## Distilled` using vault_append_note.
 
 LM Studio shows the append call with its arguments before executing. The bridge only appends; it never rewrites the note.
 

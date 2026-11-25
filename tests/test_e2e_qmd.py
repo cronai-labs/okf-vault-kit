@@ -131,6 +131,39 @@ class QmdEndToEnd(unittest.TestCase):
                     self.assertIn(want, [h["file"] for h in hits])
                     print(f"\n  bridge search via qmd: {took:.1f}s for {question!r}")
 
+    def test_confidential_notes_stay_hidden_when_qmd_finds_them(self):
+        """The reason the bridge exists. qmd's index holds every note, confidential ones included;
+        the policy layer must drop them from the bridge's answer. Asserted both halves: qmd did
+        return the confidential note (else this proves nothing), and the bridge did not pass it on."""
+        import sys
+        from unittest import mock
+
+        import kitproviders
+        sys.path.insert(0, str(ROOT / "mcp"))
+        import bridge_policy
+        import vault_bridge
+
+        class Recording(kitproviders.QmdSearch):
+            answered: list = []
+
+            def query(self, *a):
+                hits = super().query(*a)
+                type(self).answered.extend(hits)
+                return hits
+
+        secret = "05-people/alex-example.md"
+        (self.vault / ".kit").mkdir(exist_ok=True)
+        (self.vault / ".kit" / "config.yml").write_text("collection: kit-e2e\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {**_ISOLATED, "NO_COLOR": "1"}):
+            guarded = bridge_policy.Guarded(vault_bridge.FsBackend(self.vault, search_provider=Recording()),
+                                            bridge_policy.Policy(audit_path=None), self.vault)
+            Recording.answered.clear()
+            hits = guarded.search("Alex Example delegated authority libraries", 5)
+        self.assertIn(secret, [kitproviders.hit_rel(h.file) for h in Recording.answered],
+                      "qmd did not return the confidential note, so this run cannot show the filter")
+        self.assertNotIn(secret, [h["file"] for h in hits])
+        self.assertNotIn("Delegated authority", json.dumps(hits), "no snippet of it either")
+
     def test_get_by_path(self):
         r = qmd("get", "07-knowledge/reindex-qmd.md", "--no-line-numbers", cwd=self.vault)
         self.assertEqual(r.returncode, 0, r.stderr)

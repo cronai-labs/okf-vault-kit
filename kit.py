@@ -416,7 +416,7 @@ def cmd_mcp_config(args) -> int:
     # included, and answers `query`/`get` straight from that index. Registering it alongside the
     # bridge would hand the model a second door into exactly what the bridge hides, and
     # `qmd collection add` takes no ignore list, so there is no mask that fixes it. The bridge's
-    # own `obsidian_search` serves search and does honour the policy. Opt in knowingly or not at all.
+    # own `vault_search` serves search and does honour the policy. Opt in knowingly or not at all.
     if args.with_qmd_mcp:
         if args.qmd_http:
             servers["qmd"] = {"url": "http://localhost:8181/mcp"}
@@ -432,7 +432,7 @@ def cmd_mcp_config(args) -> int:
                      "confidential-hiding does not hold for the tools it exposes. Drop --with-qmd-mcp to remove it.")
     else:
         notes.append("# qmd's MCP server is not registered: it has no policy layer and would expose the confidential "
-                     "notes the bridge hides (docs/security.md). Search still works — the bridge's obsidian_search "
+                     "notes the bridge hides (docs/security.md). Search still works — the bridge's vault_search "
                      "uses the same qmd index and applies the policy. Pass --with-qmd-mcp to register it anyway.")
     bridge_args = [str(bridge), "--backend", args.backend, "--vault", str(vault)]
     uv = None if (args.no_uv or os.environ.get("KIT_NO_UV")) else _which("uv")

@@ -30,10 +30,10 @@ apply), --audit PATH / --no-audit (JSONL log of every tool call), --token TOKEN 
 
 Tool surface (identical for both backends), 14 tools:
 
-  read   obsidian_search, obsidian_read_note, obsidian_list_files, obsidian_backlinks,
+  read   vault_search, vault_read_note, vault_list_files, vault_backlinks,
          graph_context, graph_neighbors, graph_path, graph_query, vault_todos
-  write  obsidian_create_note, obsidian_append_note, obsidian_daily_append,
-         obsidian_set_property, file_meeting_minutes   (not registered under --read-only)
+  write  vault_create_note, vault_append_note, vault_daily_append,
+         vault_set_property, file_meeting_minutes   (not registered under --read-only)
 """
 from __future__ import annotations
 
@@ -118,7 +118,7 @@ class FsBackend:
             return matches[0]
         if must_exist:
             hint = ", ".join(m.relative_to(self.vault).as_posix() for m in matches[:5]) or "no similar file"
-            raise BridgeError(f"note not found: {file} ({hint}). Use obsidian_search or obsidian_list_files to find the path.")
+            raise BridgeError(f"note not found: {file} ({hint}). Use vault_search or vault_list_files to find the path.")
         return cand
 
     def _resolve_template(self, template: str) -> Path:
@@ -218,7 +218,7 @@ class FsBackend:
         _check_name(name)
         path = self._resolve(name, must_exist=False)
         if path.exists() and not overwrite:
-            raise BridgeError(f"{path.relative_to(self.vault).as_posix()} exists — pass overwrite=true or use obsidian_append_note")
+            raise BridgeError(f"{path.relative_to(self.vault).as_posix()} exists — pass overwrite=true or use vault_append_note")
         body = content
         if template:
             tpl = self._resolve_template(template)
@@ -295,7 +295,7 @@ class FsBackend:
     def graph_neighbors(self, node: str, depth: int = 1, preds: list[str] | None = None) -> list[dict[str, Any]]:
         g = self.graph()
         if not kitgraph.resolve_id(g, node):
-            raise BridgeError(f"no note matches {node!r}; use obsidian_search to find its path")
+            raise BridgeError(f"no note matches {node!r}; use vault_search to find its path")
         return [{"src": s, "pred": p, "dst": d, "depth": dd} for s, p, d, dd in kitgraph.neighbors(g, node, depth, preds)]
 
     def graph_path(self, a: str, b: str) -> list[dict[str, str]]:
@@ -552,23 +552,23 @@ def build_server(backend, read_only: bool = False):
         "Search first, then read specific notes by path. Prefer append over overwrite. "
         "Tasks are written as `- [ ] verb — owner, due YYYY-MM-DD`."))
 
-    @mcp.tool(name="obsidian_search")
-    def obsidian_search(query: str, limit: int = 10) -> str:
+    @mcp.tool(name="vault_search")
+    def vault_search(query: str, limit: int = 10) -> str:
         """Search the vault (hybrid semantic search when qmd is set up, keyword search otherwise). Returns matching note paths with a short snippet. Use before reading."""
         return _announced(backend, json.dumps(backend.search(query, limit), ensure_ascii=False, indent=1))
 
-    @mcp.tool(name="obsidian_read_note")
-    def obsidian_read_note(file: str) -> str:
+    @mcp.tool(name="vault_read_note")
+    def vault_read_note(file: str) -> str:
         """Return the full text of one note. `file` is a vault-relative path (with or without .md) or a unique note name."""
         return backend.read_note(file)
 
-    @mcp.tool(name="obsidian_list_files")
-    def obsidian_list_files(folder: str = "") -> str:
+    @mcp.tool(name="vault_list_files")
+    def vault_list_files(folder: str = "") -> str:
         """List markdown files, optionally under a folder prefix such as `03-projects`."""
         return _announced(backend, "\n".join(backend.list_files(folder)))
 
-    @mcp.tool(name="obsidian_backlinks")
-    def obsidian_backlinks(file: str) -> str:
+    @mcp.tool(name="vault_backlinks")
+    def vault_backlinks(file: str) -> str:
         """Notes that link to the given note — the dossier view for a project, person or decision."""
         return "\n".join(backend.backlinks(file))
 
@@ -601,23 +601,23 @@ def build_server(backend, read_only: bool = False):
     if read_only:
         return mcp
 
-    @mcp.tool(name="obsidian_create_note")
-    def obsidian_create_note(name: str, content: str = "", template: str = "", overwrite: bool = False) -> str:
+    @mcp.tool(name="vault_create_note")
+    def vault_create_note(name: str, content: str = "", template: str = "", overwrite: bool = False) -> str:
         """Create a note at a vault-relative path (e.g. `02-meetings/2026-09-14-sync`). Optional template name from 90-templates (e.g. `meeting`). Fails if the note exists unless overwrite=true."""
         return backend.create_note(name, content, template or None, overwrite)
 
-    @mcp.tool(name="obsidian_append_note")
-    def obsidian_append_note(file: str, content: str) -> str:
+    @mcp.tool(name="vault_append_note")
+    def vault_append_note(file: str, content: str) -> str:
         """Append text to the end of an existing note. Safe, non-destructive."""
         return backend.append_note(file, content)
 
-    @mcp.tool(name="obsidian_daily_append")
-    def obsidian_daily_append(content: str) -> str:
+    @mcp.tool(name="vault_daily_append")
+    def vault_daily_append(content: str) -> str:
         """Append a line to today's daily note (created from the daily template if missing)."""
         return backend.daily_append(content)
 
-    @mcp.tool(name="obsidian_set_property")
-    def obsidian_set_property(file: str, name: str, value: str) -> str:
+    @mcp.tool(name="vault_set_property")
+    def vault_set_property(file: str, name: str, value: str) -> str:
         """Set one frontmatter property on a note, e.g. state=done, health=green, description=..."""
         return backend.set_property(file, name, value)
 
@@ -667,7 +667,7 @@ def main(argv=None) -> int:
     pol.add_argument("--allow-write", help="comma-separated folder prefixes that are the only writable ones")
     pol.add_argument("--show-confidential", action="store_true", help="expose notes with sensitivity: confidential (hidden by default)")
     pol.add_argument("--max-write-bytes", type=int, default=20_000); pol.add_argument("--max-writes-per-minute", type=int, default=20)
-    pol.add_argument("--allow-overwrite", action="store_true", help="let the model pass overwrite=true on obsidian_create_note (denied by default: it blanks an existing note)")
+    pol.add_argument("--allow-overwrite", action="store_true", help="let the model pass overwrite=true on vault_create_note (denied by default: it blanks an existing note)")
     pol.add_argument("--propose", action="store_true", help="writes become proposals in .kit/proposals/ (kit.py proposals apply)")
     pol.add_argument("--audit", help="JSONL audit log path (default <vault>/.kit/bridge-audit.jsonl)"); pol.add_argument("--no-audit", action="store_true")
     args = ap.parse_args(argv)
