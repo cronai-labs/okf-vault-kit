@@ -22,7 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 """
 
-# One line per change: subject, scope, and a short SHA that links to the commit.
+# One line per change: subject, scope, and a short SHA that links to the commit. A breaking
+# change (`type!:` or a BREAKING CHANGE footer) is marked, since the subject alone does not
+# say so and a tester's client config may have to change.
 #
 # `commit.message` is the SUBJECT. It must never become `commit.body`: the working
 # model sets squash_merge_commit_message=PR_BODY, so every squash commit on main
@@ -47,7 +49,7 @@ body = """
 {%- for group, commits in commits | group_by(attribute="group") %}
 ### {{ group | striptags | trim | upper_first }}
 {% for commit in commits %}
-- {% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/cronai-labs/okf-vault-kit/commit/{{ commit.id }}))\
+- {% if commit.breaking %}**Breaking** — {% endif %}{% if commit.scope %}**{{ commit.scope }}:** {% endif %}{{ commit.message | upper_first }} ([{{ commit.id | truncate(length=7, end="") }}](https://github.com/cronai-labs/okf-vault-kit/commit/{{ commit.id }}))\
 {% endfor %}
 {% endfor %}
 """
