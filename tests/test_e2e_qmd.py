@@ -27,6 +27,15 @@ REAL_MODELS = Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache")) / "
 _ISOLATED: dict[str, str] = {}
 
 
+def _query_models_present() -> bool:
+    """`qmd query` (what the kit's search provider calls) needs qmd's expansion and rerank models.
+    CI's qmd job is keyword-only and downloads none, so there it answers nothing."""
+    return REAL_MODELS.is_dir() and any(REAL_MODELS.glob("*.gguf"))
+
+
+NEEDS_QUERY_MODELS = "qmd's models are not in the cache, so `qmd query` answers nothing (CI runs the keyword tier only)"
+
+
 def qmd(*args, cwd: Path, timeout: int = 900) -> subprocess.CompletedProcess:
     env = dict(os.environ, NO_COLOR="1", QMD_TRUST_LOCAL_CONFIG="1", **_ISOLATED)
     return subprocess.run(["qmd", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, env=env, check=False)
@@ -88,6 +97,7 @@ class QmdEndToEnd(unittest.TestCase):
         files = [h.get("file", "") for h in hits]
         self.assertTrue(any(f.endswith("07-knowledge/hybrid-search.md") for f in files), files)
 
+    @unittest.skipUnless(_query_models_present(), NEEDS_QUERY_MODELS)
     def test_the_bridge_searches_through_qmd(self):
         """#90 on a real index: the bridge's search goes to qmd, and qmd's paths survive its checks.
 
@@ -131,6 +141,7 @@ class QmdEndToEnd(unittest.TestCase):
                     self.assertIn(want, [h["file"] for h in hits])
                     print(f"\n  bridge search via qmd: {took:.1f}s for {question!r}")
 
+    @unittest.skipUnless(_query_models_present(), NEEDS_QUERY_MODELS)
     def test_confidential_notes_stay_hidden_when_qmd_finds_them(self):
         """The reason the bridge exists. qmd's index holds every note, confidential ones included;
         the policy layer must drop them from the bridge's answer. Asserted both halves: qmd did
