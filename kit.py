@@ -418,6 +418,11 @@ def cmd_mcp_config(args) -> int:
         servers["obsidian-vault"] = {"url": f"http://127.0.0.1:{args.bridge_port}/mcp"}
         if args.bridge_token:
             servers["obsidian-vault"]["headers"] = {"Authorization": f"Bearer {args.bridge_token}"}
+            notes.append("# the client config holds the bearer token in plain text; with --write the kit makes it "
+                         "readable by your account only (0600) on macOS and Linux (docs/security.md)")
+        else:
+            notes.append("# no Authorization header: neither --bridge-token nor KIT_BRIDGE_TOKEN is set, so this only "
+                         "works against a bridge started without --token (docs/security.md)")
     if args.bridge_flags:
         servers["obsidian-vault"].setdefault("args", []).extend(args.bridge_flags.split())
     cfg = {"mcpServers": servers}
@@ -448,6 +453,13 @@ def cmd_mcp_config(args) -> int:
         print(f"backup: {backup}")
     existing.setdefault("mcpServers", {}).update(servers)
     path.write_text(json.dumps(existing, indent=2), encoding="utf-8", newline="\n")
+    if args.bridge_http and args.bridge_token and not IS_WINDOWS:
+        # The token is the HTTP bridge's only authentication, and on a shared machine every local
+        # account reaches the loopback port: a 0644 config hands it to them. The backup may hold an
+        # earlier token. Windows profile ACLs already keep other standard users out.
+        for f in (path, path.with_suffix(path.suffix + ".bak")):
+            if f.exists():
+                f.chmod(0o600)
     print(f"wrote {path} — restart the client so it picks up the servers")
     print(f"  vault served: {vault}")
     for note in notes:
@@ -1069,7 +1081,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--qmd-http", action="store_true", help="when registering qmd (--with-qmd-mcp), use its HTTP transport on :8181 instead of stdio")
     p.add_argument("--no-uv", action="store_true", help="launch the bridge with this Python instead of `uv run` (also KIT_NO_UV=1)")
     p.add_argument("--bridge-http", action="store_true", help="point the client at an already running `obsidian_bridge.py --http` instead of spawning it"); p.add_argument("--bridge-port", type=int, default=8765)
-    p.add_argument("--bridge-token", help="bearer token the running HTTP bridge expects (sent as an Authorization header)")
+    p.add_argument("--bridge-token", default=os.environ.get("KIT_BRIDGE_TOKEN", ""),
+                   help="bearer token the running HTTP bridge expects (sent as an Authorization header); defaults to "
+                        "KIT_BRIDGE_TOKEN — prefer the variable, a token in argv lands in shell history and `ps`")
     p.add_argument("--bridge-flags", help="extra bridge flags for the spawned server, e.g. \"--read-only\" or \"--propose --allow-write 02-meetings,01-journal\"")
     p.add_argument("--write", action="store_true"); p.set_defaults(fn=cmd_mcp_config)
     llm = sub.add_parser("llm", help="talk to the local model endpoint"); lsub = llm.add_subparsers(dest="llm_cmd", required=True)

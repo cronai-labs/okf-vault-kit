@@ -57,13 +57,14 @@ constraint of this lane. Two ways round it:
 
 ```bash
 # in WSL: serve the bridge over HTTP on loopback
-uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765 --token new
+export KIT_BRIDGE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765 &
 qmd mcp --http --port 8181
 ```
 
 ```bash
-# then print the config for the Windows-side client — no --write here
-uv run kit.py mcp-config --qmd-http --bridge-http --bridge-token <token> --vault ~/Notes/vault
+# then, in the same shell, print the config for the Windows-side client — no --write here
+uv run kit.py mcp-config --qmd-http --bridge-http --vault ~/Notes/vault
 ```
 
 `--write` would put the file in the WSL home (`~/.lmstudio/mcp.json`), which LM Studio running on

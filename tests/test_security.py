@@ -8,6 +8,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -338,6 +339,45 @@ class BearerAuth(unittest.TestCase):
         self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer tok"})
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-flags", "--read-only --propose"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(__import__("os").environ, KIT_NO_UV="1"), check=False)
         self.assertIn("--read-only", json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["obsidian-vault"]["args"])
+
+    def test_mcp_config_reads_the_token_from_the_environment(self):
+        """A token on the command line sits in shell history and in `ps`; the variable does not."""
+        env = dict(os.environ, KIT_BRIDGE_TOKEN="from-env")
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env, check=False)
+        cfg = json.loads(r.stdout.split("\n# would be written")[0])
+        self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer from-env"})
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-token", "flag"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", env=env, check=False)
+        cfg = json.loads(r.stdout.split("\n# would be written")[0])
+        self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer flag"}, "the flag overrides the variable")
+
+    def test_mcp_config_says_when_an_http_bridge_gets_no_auth_header(self):
+        env = {k: v for k, v in os.environ.items() if k != "KIT_BRIDGE_TOKEN"}
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env, check=False)
+        self.assertNotIn("headers", r.stdout.split("\n# would be written")[0])
+        self.assertIn("no Authorization header", r.stdout)
+
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX file modes; Windows profile ACLs keep other users out")
+    def test_mcp_config_writes_a_config_holding_a_token_0600_and_its_backup_too(self):
+        home = Path(tempfile.mkdtemp())
+        try:
+            env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), KIT_BRIDGE_TOKEN="s3cret", KIT_NO_UV="1")
+            v = home / "vault"
+            shutil.copytree(VAULT, v)
+            cfg = home / ".cursor/mcp.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text("{}", encoding="utf-8")
+            cfg.chmod(0o644)
+            r = subprocess.run(KIT + ["mcp-config", "--client", "cursor", "--vault", str(v), "--bridge-http", "--write"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=False)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("Bearer s3cret", cfg.read_text(encoding="utf-8"))
+            for f in (cfg, cfg.with_suffix(".json.bak")):
+                self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600, f"{f.name} must not be readable by other accounts")
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
 
     def test_mcp_config_refuses_bridge_flags_for_an_http_bridge(self):
         """A url entry starts no process, so flags in it are ignored by every client — the

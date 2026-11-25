@@ -54,7 +54,7 @@ starts it on stdin/stdout and it has no socket.
 | Path | What |
 |---|---|
 | the vault folder | your notes; `.kit/` inside it holds the graph, the audit log, any proposals and `config.yml` (the qmd collection name and provider choices for this vault) |
-| `~/.lmstudio/mcp.json`, `%APPDATA%\Claude\…`, `~/.cursor/mcp.json` | only when you run `kit.py mcp-config --write`; the previous file is backed up alongside |
+| `~/.lmstudio/mcp.json`, `%APPDATA%\Claude\…`, `~/.cursor/mcp.json` | only when you run `kit.py mcp-config --write`; the previous file is backed up alongside. With `--bridge-http` and a token, the bearer token is stored there in plain text, and the kit sets the file and its backup to `0600` on macOS and Linux; the default stdio setup stores no token |
 | `~/.cache/qmd`, `~/.config/qmd` | qmd's index and models, if installed |
 
 Nothing is written to system locations. Nothing needs administrator rights at runtime; only the
