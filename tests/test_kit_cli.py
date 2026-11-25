@@ -5,6 +5,7 @@ import http.server
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -287,6 +288,32 @@ class KitCli(unittest.TestCase):
                     self.assertIn("okf-vault", servers)
                     self.assertEqual("obsidian-vault" in servers, kept)
                     self.assertEqual("replaced the old `obsidian-vault` entry" in r.stdout, not kept)
+                finally:
+                    shutil.rmtree(tmp, ignore_errors=True)
+                    shutil.rmtree(v.parent, ignore_errors=True)
+
+    def test_mcp_config_writes_each_clients_own_file(self):
+        """Claude Desktop and Cursor keep their config in different places per OS; the entry is the same."""
+        import platform
+        for client in ("claude-desktop", "cursor"):
+            with self.subTest(client=client):
+                tmp = Path(tempfile.mkdtemp(prefix="okf-mcp-"))
+                v = temp_vault()
+                try:
+                    env = dict(os.environ, HOME=str(tmp), USERPROFILE=str(tmp), APPDATA=str(tmp / "AppData"), KIT_NO_UV="1")
+                    if client == "cursor":
+                        want = tmp / ".cursor" / "mcp.json"
+                    elif platform.system() == "Darwin":
+                        want = tmp / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+                    elif sys.platform.startswith("win"):
+                        want = tmp / "AppData" / "Claude" / "claude_desktop_config.json"
+                    else:
+                        want = tmp / ".config" / "Claude" / "claude_desktop_config.json"
+                    r = run("mcp-config", "--client", client, "--vault", str(v), "--write", env=env)
+                    self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+                    srv = json.loads(want.read_text(encoding="utf-8"))["mcpServers"]["okf-vault"]
+                    self.assertTrue(srv["args"][0].endswith("vault_bridge.py"), srv)
+                    self.assertEqual(srv["args"][srv["args"].index("--vault") + 1], str(v.resolve()))
                 finally:
                     shutil.rmtree(tmp, ignore_errors=True)
                     shutil.rmtree(v.parent, ignore_errors=True)
@@ -906,6 +933,79 @@ class ReasoningModelsPassTheSmokeTest(unittest.TestCase):
         self.assertIn("budget thinking", r.stdout)
         self.assertIn("Sources found:", r.stdout, "the retrieval half worked and must still be shown")
         self.assertNotIn(Thinks.THINKING, r.stdout)
+
+class Answers(Thinks):
+    """A model that answers: grounded prose for `llm ask`, JSON (or not) for `minutes --llm`.
+
+    Records every request body, so a test can read the prompt the kit actually sent.
+    """
+
+    seen: list = []
+    minutes_reply = ""
+
+    def do_POST(self):
+        body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+        type(self).seen.append(body)
+        system = body["messages"][0]["content"]
+        content = self.minutes_reply if "structured minutes" in system else "We chose qmd because it searches on-device [1]."
+        self._send(200, {"choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": content}}]})
+
+
+class LlmHappyPaths(unittest.TestCase):
+    """What a working endpoint gives back: the answer and its sources, the model's structure in
+    the minutes — and only what the policy allows in the prompt."""
+
+    def setUp(self):
+        Answers.seen = []
+        srv = HTTPServer(("127.0.0.1", 0), Answers)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        self.base = f"http://127.0.0.1:{srv.server_port}/v1"
+        self.env = dict(os.environ, KIT_SEARCH_PROVIDER="naive")
+
+    def prompt(self) -> str:
+        return "\n".join(m["content"] for m in Answers.seen[-1]["messages"])
+
+    def test_ask_prints_the_answer_and_its_sources(self):
+        r = run("llm", "ask", "why did we choose qmd", "--vault", str(VAULT), "--base-url", self.base, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("We chose qmd because it searches on-device [1].", r.stdout)
+        sources = re.findall(r"^  \[\d+\] (\S+)$", r.stdout.split("Sources:", 1)[1], re.M)
+        self.assertTrue(sources, r.stdout)
+        self.assertIn(sources[0], self.prompt(), "the top source is what the model was given")
+
+    def test_ask_with_graph_keeps_a_confidential_body_out_of_the_prompt(self):
+        r = run("llm", "ask", "who leads the search relaunch and what may they decide", "--graph",
+                "--vault", str(VAULT), "--base-url", self.base, env=self.env)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn("Delegated authority", self.prompt(), "05-people/alex-example.md is confidential")
+
+    def minutes(self, reply: str):
+        Answers.minutes_reply = reply
+        v = temp_vault()
+        self.addCleanup(shutil.rmtree, v.parent, True)
+        recap = v.parent / "recap.txt"
+        recap.write_text("We talked through the pilot and agreed to ship on Friday.", encoding="utf-8")
+        r = run("minutes", str(recap), "--title", "Pilot sync", "--date", "2026-09-22", "--vault", str(v),
+                "--llm", "--base-url", self.base, env=self.env)
+        return r, v / "02-meetings/2026-09-22-pilot-sync.md"
+
+    def test_minutes_llm_adds_the_models_actions_and_decisions(self):
+        r, note = self.minutes(json.dumps({"outcomes": ["pilot is on track"], "decisions": ["ship on Friday"],
+                                           "actions": [{"text": "Write the release notes", "owner": "Sam", "due": "2026-09-25"}]}))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        text = note.read_text(encoding="utf-8")
+        self.assertIn("- [ ] Write the release notes — Sam, due 2026-09-25", text)
+        self.assertIn("ship on Friday", text)
+
+    def test_minutes_llm_files_the_recap_when_the_model_answers_prose(self):
+        r, note = self.minutes("Sure! Here are the minutes: the pilot ships Friday.")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("LLM structuring skipped", r.stdout)
+        self.assertTrue(note.exists(), "the recap is filed without the model's structure")
+        self.assertNotIn("Traceback", r.stderr)
+
 
 class KitCliRootInbox(unittest.TestCase):
     """Quick capture: `init` lays down a raw root `Inbox.md` that the vault stays valid with."""

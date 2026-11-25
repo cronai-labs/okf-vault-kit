@@ -1,5 +1,7 @@
 """The Obsidian MCP bridge: fs backend on a temp vault, cli backend against a stub `obsidian` binary."""
 import datetime as dt
+import json
+import os
 import shutil
 import stat
 import subprocess
@@ -307,6 +309,163 @@ class BridgeProcess(unittest.TestCase):
                               f"{label}: a refusal the model cannot read is one it will retry")
         finally:
             shutil.rmtree(vault.parent, ignore_errors=True)
+
+
+def _need_sdk(case: unittest.TestCase) -> None:
+    import importlib.metadata
+    try:
+        version = importlib.metadata.version("mcp")
+    except importlib.metadata.PackageNotFoundError:
+        case.skipTest("mcp python sdk not installed (pip install 'mcp>=2,<3')")
+    if version.split(".")[0] != "2":
+        case.skipTest(f"mcp {version} installed; the bridge targets the 2.x API")
+
+
+def _stdio_session(vault: Path, *flags: str, calls=()):
+    """Start the bridge over stdio, list its tools, run `calls`; return (tool names, {label: (is_error, text)})."""
+    import asyncio
+
+    from mcp.client.stdio import stdio_client
+
+    from mcp import ClientSession, StdioServerParameters
+
+    async def go():
+        params = StdioServerParameters(command=sys.executable,
+                                       args=[str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault), *flags])
+        async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
+            await s.initialize()
+            tools = {t.name for t in (await s.list_tools()).tools}
+            out = {}
+            for label, name, args in calls:
+                res = await s.call_tool(name, args)
+                out[label] = (bool(res.is_error), "".join(getattr(c, "text", "") for c in res.content))
+            return tools, out
+    return asyncio.run(go())
+
+
+class EveryToolOverTheWire(unittest.TestCase):
+    """Each of the 14 tools called through a real stdio session, not only listed.
+
+    The direct-call tests prove the logic; this proves the wiring a client actually crosses —
+    argument names, types and JSON encoding as the SDK derives them from the signatures.
+    """
+    READ_TOOLS = {"obsidian_search", "obsidian_read_note", "obsidian_list_files", "obsidian_backlinks",
+                  "graph_context", "graph_neighbors", "graph_path", "graph_query", "vault_todos"}
+
+    def setUp(self):
+        _need_sdk(self)
+        self.vault = temp_vault()
+
+    def tearDown(self):
+        shutil.rmtree(self.vault.parent, ignore_errors=True)
+
+    def test_every_tool_answers(self):
+        calls = (
+            ("search", "obsidian_search", {"query": "hybrid search", "limit": 3}),
+            ("read", "obsidian_read_note", {"file": "07-knowledge/hybrid-search"}),
+            ("list", "obsidian_list_files", {"folder": "./07-knowledge"}),
+            ("backlinks", "obsidian_backlinks", {"file": "07-knowledge/hybrid-search"}),
+            ("context", "graph_context", {"note": "search-relaunch"}),
+            ("neighbors", "graph_neighbors", {"note": "search-relaunch", "predicates": "links_to"}),
+            ("path", "graph_path", {"a": "hybrid-search", "b": "search-relaunch"}),
+            ("query", "graph_query", {"sql": "select count(*) as n from nodes"}),
+            ("todos", "vault_todos", {}),
+            ("create", "obsidian_create_note", {"name": "03-projects/wire-note", "content": "first line"}),
+            ("append", "obsidian_append_note", {"file": "03-projects/wire-note", "content": "second line"}),
+            ("property", "obsidian_set_property", {"file": "03-projects/wire-note", "name": "state", "value": "active"}),
+            ("daily", "obsidian_daily_append", {"content": "- logged over the wire"}),
+            ("minutes", "file_meeting_minutes", {"text": "Decision: ship it", "title": 'Wire "sync": done', "date": "2026-09-21"}),
+        )
+        tools, out = _stdio_session(self.vault, calls=calls)
+        self.assertEqual(len(tools), 14)
+        self.assertEqual({name for _, name, _ in calls}, tools, "every registered tool is called once")
+        for label, (is_error, text) in out.items():
+            self.assertFalse(is_error, f"{label}: {text}")
+        self.assertEqual(json.loads(out["search"][1])[0]["file"], "07-knowledge/hybrid-search.md")
+        self.assertIn("07-knowledge/hybrid-search.md", out["list"][1])
+        self.assertIn("health", out["context"][1])
+        self.assertGreater(json.loads(out["query"][1])["rows"][0][0], 10)
+        self.assertGreater(json.loads(out["todos"][1])["open"], 0)
+        note = (self.vault / "03-projects/wire-note.md").read_text(encoding="utf-8")
+        self.assertIn("first line", note); self.assertIn("second line", note); self.assertIn("state: active", note)
+        self.assertEqual(json.loads(out["minutes"][1])["path"], "02-meetings/2026-09-21-wire-sync-done.md")
+
+    def test_read_only_serves_nine_tools_and_no_write(self):
+        tools, _ = _stdio_session(self.vault, "--read-only")
+        self.assertEqual(tools, self.READ_TOOLS)
+
+    def test_propose_mode_records_a_write_over_the_wire_instead_of_making_it(self):
+        _, out = _stdio_session(self.vault, "--propose", calls=(
+            ("create", "obsidian_create_note", {"name": "03-projects/proposed", "content": "x"}),))
+        is_error, text = out["create"]
+        self.assertFalse(is_error, text)
+        self.assertTrue(text.startswith("proposed:"), text)
+        self.assertFalse((self.vault / "03-projects/proposed.md").exists())
+        self.assertTrue(list((self.vault / ".kit/proposals").glob("*")), "the proposal is on disk for a human")
+
+
+class HttpTransport(unittest.TestCase):
+    """`--http --token`: refused without the token, served with it — over a real socket."""
+
+    def setUp(self):
+        _need_sdk(self)
+        self.vault = temp_vault()
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0)); self.port = s.getsockname()[1]
+        env = dict(os.environ, KIT_BRIDGE_TOKEN="wire-token")
+        self.proc = subprocess.Popen([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(self.vault),
+                                      "--http", "--port", str(self.port), "--no-audit"],
+                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.url = f"http://127.0.0.1:{self.port}/mcp"
+        import time
+        import urllib.error
+        import urllib.request
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(self.url, timeout=0.5)
+            except urllib.error.HTTPError:
+                break                                  # it answers: any HTTP status means it is up
+            except OSError:
+                if self.proc.poll() is not None:
+                    self.fail(f"bridge exited: {self.proc.stderr.read().decode(errors='replace')}")
+                time.sleep(0.1)
+        else:
+            self.fail("bridge did not start listening")
+
+    def tearDown(self):
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.proc.stderr.close()
+        shutil.rmtree(self.vault.parent, ignore_errors=True)
+
+    def test_no_token_is_401_and_the_token_gets_a_session(self):
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(self.url, data=b"{}", method="POST", headers={"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+
+        import asyncio
+
+        from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+
+        from mcp import ClientSession
+
+        async def go():
+            async with create_mcp_http_client(headers={"Authorization": "Bearer wire-token"}) as http, \
+                    streamable_http_client(self.url, http_client=http) as streams, \
+                    ClientSession(streams[0], streams[1]) as s:
+                await s.initialize()
+                res = await s.call_tool("obsidian_read_note", {"file": "07-knowledge/hybrid-search"})
+                return bool(res.is_error), res.content[0].text
+        is_error, text = asyncio.run(go())
+        self.assertFalse(is_error, text)
+        self.assertIn("Hybrid search", text)
 
 
 class GraphTools(unittest.TestCase):
