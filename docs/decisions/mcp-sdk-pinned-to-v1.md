@@ -1,7 +1,7 @@
 ---
 type: decision
-title: The MCP bridge stays on the v1 SDK until the 2.x migration is deliberate work
-description: Pinned `mcp>=1.2,<2` because 2.x renamed FastMCP to MCPServer; superseded on 2026-09-16 when the bridge was migrated to `mcp>=2,<3`.
+title: "Superseded: the MCP bridge stayed on the v1 SDK until the 2.x migration (now pinned to 2.x)"
+description: Pinned `mcp>=1.2,<2` because 2.x renamed FastMCP to MCPServer; superseded on 2026-09-16 when the bridge was migrated to `mcp>=2,<3`, which is the pin today.
 tags: [mcp, dependencies, ci]
 sources:
   - { name: "the CI failure an unpinned resolve caused, and the fix for it", credibility: verified-firsthand }

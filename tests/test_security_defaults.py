@@ -16,7 +16,7 @@ from tests.helpers import ROOT, VAULT, temp_vault
 sys.path.insert(0, str(ROOT / "mcp"))
 import bridge_policy as bp
 import kit
-import obsidian_bridge as ob
+import vault_bridge as ob
 
 KIT = [sys.executable, str(ROOT / "kit.py")]
 
@@ -43,7 +43,7 @@ class QmdIsNotASecondDoor(unittest.TestCase):
         cfg, out = self._config()
         self.assertNotIn("qmd", cfg["mcpServers"],
                          "a second, unguarded door into the notes the bridge hides")
-        self.assertIn("obsidian-vault", cfg["mcpServers"], "search must still be available")
+        self.assertIn("okf-vault", cfg["mcpServers"], "search must still be available")
         self.assertIn("--with-qmd-mcp", out, "the omission has to be explained, not silent")
 
     def test_opting_in_says_what_it_costs(self):

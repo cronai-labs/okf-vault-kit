@@ -122,11 +122,11 @@ uv run kit.py llm smoke | llm ask [--graph]
 uv run kit.py graph build | export | query | neighbors | path | pack
 uv run kit.py reconcile | todos | minutes | proposals list|show|apply|reject
 uv run kit.py examples remove [--dry-run]                                # delete the sample notes and repair what referred to them
-uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault          # MCP server, headless
-uv run mcp/obsidian_bridge.py --backend cli --vault-name "vault"          # MCP server via official CLI
+uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault          # MCP server, headless
+uv run mcp/vault_bridge.py --backend cli --vault-name "vault"          # MCP server via official CLI
 ```
 
-The bridge exposes `obsidian_search`, `obsidian_read_note`, `obsidian_list_files`, `obsidian_backlinks`, `graph_context`, `graph_neighbors`, `graph_path`, `graph_query`, `vault_todos` and — unless it is started with `--read-only` — `obsidian_create_note`, `obsidian_append_note`, `obsidian_daily_append`, `obsidian_set_property`, `file_meeting_minutes`. The `fs` backend refuses paths outside the vault, and overwriting an existing note is denied by the policy layer unless the bridge is started with `--allow-overwrite`; the `cli` backend delegates to the official CLI. `kit.py mcp-config` registers it as `uv run …` when uv is on PATH (override with `--no-uv`). With `--http --port 8765` the bridge serves MCP over streamable HTTP at `http://127.0.0.1:8765/mcp`, which is what a client that cannot spawn a local process needs — an MCP client on Windows talking to a bridge inside WSL, for instance; `mcp-config --bridge-http` points clients at it.
+The bridge exposes `vault_search`, `vault_read_note`, `vault_list_files`, `vault_backlinks`, `graph_context`, `graph_neighbors`, `graph_path`, `graph_query`, `vault_todos` and — unless it is started with `--read-only` — `vault_create_note`, `vault_append_note`, `vault_daily_append`, `vault_set_property`, `file_meeting_minutes`. The `fs` backend refuses paths outside the vault, and overwriting an existing note is denied by the policy layer unless the bridge is started with `--allow-overwrite`; the `cli` backend delegates to the official CLI. `kit.py mcp-config` registers it as `uv run …` when uv is on PATH (override with `--no-uv`). With `--http --port 8765` the bridge serves MCP over streamable HTTP at `http://127.0.0.1:8765/mcp`, which is what a client that cannot spawn a local process needs — an MCP client on Windows talking to a bridge inside WSL, for instance; `mcp-config --bridge-http` points clients at it.
 
 ## Supporting tools
 

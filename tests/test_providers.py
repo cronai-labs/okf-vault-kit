@@ -100,6 +100,13 @@ class Status(unittest.TestCase):
 class ConfigThatSomeoneHalfEdited(unittest.TestCase):
     """`providers:` with nothing under it is one deleted line away from the documented sample."""
 
+    def setUp(self):
+        # These read the vault's config, which the offline suite's KIT_SEARCH_PROVIDER pin outranks.
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("KIT_SEARCH_PROVIDER", None)
+
     def vault_with(self, config: str) -> Path:
         v = temp_vault()
         (v / ".kit").mkdir(exist_ok=True)
@@ -178,11 +185,12 @@ class QmdIsNotAllowedToHang(unittest.TestCase):
         with mock.patch.object(kp.QmdSearch, "binary", return_value="qmd"), \
              mock.patch.object(kp.subprocess, "run", fake_run), \
              mock.patch.dict(os.environ, {"KIT_QMD_TIMEOUT": "1"}), \
-             contextlib.redirect_stdout(out):
+             contextlib.redirect_stderr(out), contextlib.redirect_stdout(io.StringIO()) as stdout:
             hits = kp.QmdSearch().query(Path(VAULT), "anything", 5, "vault")
         self.assertEqual(hits, [], "an empty result is what makes the naive fallback engage")
         self.assertEqual(seen.get("timeout"), 1.0)
         self.assertIn("falling back", out.getvalue())
+        self.assertEqual(stdout.getvalue(), "", "stdout is the MCP channel when the bridge runs this")
 
     def test_a_bad_timeout_value_does_not_break_the_command(self):
         with mock.patch.dict(os.environ, {"KIT_QMD_TIMEOUT": "soon"}):

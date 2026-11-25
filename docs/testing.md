@@ -15,16 +15,18 @@ python -m pytest tests -q                       # if you prefer pytest (needs py
 | `test_vault_structure.py` | folders, `.obsidian/*.json`, daily-note and month-note path computation, 14 templates, bookmarks, Bases files parse and every embedded view exists | nothing |
 | `test_okf_conformance.py` | OKF v0.2 rules on the template vault; validator catches missing `type`, wrong `status`, bad timestamps/actors; `index.md` and `log.md` shape; index is up to date | nothing |
 | `test_links.py` | every markdown link, wikilink and base embed resolves; code blocks ignored | nothing |
-| `test_kit_cli.py` | `kit.py` end-to-end via subprocess: validate, index determinism, init + personalisation, log, mcp-config (print and merge-write), doctor, llm ask fallback | nothing |
-| `test_bridge.py` | MCP bridge `fs` backend on a temp vault (search, read, create-from-template, append, daily append, set property, path-escape guard); `cli` backend against a stub `obsidian` binary (argument grammar); `--selftest`; real MCP stdio session (14 tools, a read, a write, and three policy refusals) | `uv run --with 'mcp>=2,<3'` (or `pip install 'mcp>=2,<3'`) for the last one; the v1 SDK skips it, the bridge targets the 2.x API |
+| `test_kit_cli.py` | `kit.py` end-to-end via subprocess: validate, index determinism, init + personalisation, log, mcp-config (print and merge-write for every client, the old `obsidian-vault` entry replaced, the token from `KIT_BRIDGE_TOKEN` and its 0600 file mode), doctor, llm ask fallback; `llm ask` and `minutes --llm` against a stub endpoint (answer and sources, a confidential body kept out of the prompt, JSON and prose replies) | nothing |
+| `test_bridge.py` | MCP bridge `fs` backend on a temp vault (search, read, create-from-template, append, daily append, set property, path-escape guard); `cli` backend against a stub `obsidian` binary (argument grammar); `--selftest`; real MCP stdio sessions: every one of the 14 tools called over the wire, a `--read-only` server serving 9, a write turned into a proposal, three policy refusals; the `--http` transport over a real socket (401 without the token, a session with it) | `uv run --with 'mcp>=2,<3'` (or `pip install 'mcp>=2,<3'`) for the last one; the v1 SDK skips it, the bridge targets the 2.x API |
 | `test_graph.py` | ontology loading/inheritance/aliases; template graph is clean; injected faults produce the right findings; resolver methods; derived facts (trust, stale → at-risk propagation, transitive supersedes, state conflicts); JSON determinism; N-Triples well-formedness and vocabulary mapping; JSON-LD shape; SQLite views and recursive CTEs; artifacts on disk | nothing |
 | `test_reconcile.py` | hub drift/missing rows detected and applied (free text and escaped pipes preserved, newest-first register, rows with spaces in the filename round-trip); superseded state written back without reformatting the rest of the frontmatter; back-dated log entries stay newest-first; task parsing; duplicates, done/open conflicts, `--sync-done` owner and recurring guards; digest validity; entity detection; minutes extraction and end-to-end filing (frontmatter, sections, log, daily link, no overwrite) | nothing |
 | `test_security.py` | policy layer (deny/allow lists, read-only tool surface, confidential hiding across read/search/list/todos/graph, size and rate limits, propose mode, audit log); `proposals` CLI list/apply/reject; bearer-token check and ASGI middleware | nothing |
 | `test_docs.py` | docs exist, relative links resolve, H1 present, README indexes docs, CLI commands mentioned exist, every declared and documented `mcp` pin matches `pyproject.toml`, `tools.md` lists every tool the bridge registers | nothing |
-| `test_e2e_qmd.py` | qmd indexes a temp copy of the vault with `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` redirected into a temp directory, so your own collections and index database are never touched (the GGUF models are symlinked from the real cache rather than downloaded again); keyword search finds the concept note, `get` works; vector/hybrid query and `bench` behind flags | `qmd` on PATH |
-| `test_e2e_llm.py` | endpoint lists models, follows a one-line instruction, answers a grounded question from a decision note, `kit.py llm smoke`; tool-call emission behind a flag | a running OpenAI-compatible endpoint |
+| `test_e2e_qmd.py` | qmd indexes a temp copy of the vault with `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` redirected into a temp directory, so your own collections and index database are never touched (the GGUF models are symlinked from the real cache rather than downloaded again); keyword search finds the concept note, `get` works; the bridge searching through qmd and still hiding a confidential note qmd returns (needs qmd's models in the cache, so CI skips it); vector/hybrid query and `bench` behind flags | `qmd` on PATH |
+| `test_e2e_llm.py` | endpoint lists models, follows a one-line instruction, answers a grounded question from a decision note, `kit.py llm smoke`; behind `KIT_E2E_TOOLS=1`: tool-call emission, and the model driving the real bridge (its own `list_tools` schemas over stdio, the calls it emits run against the bridge, then a text answer) | a running OpenAI-compatible endpoint |
 
 That isolation rests on qmd honouring `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`, which was checked on macOS and is unverified on native Windows — and qmd also picks up a project-local `.qmd/` by walking up from the working directory. The canary that asserts your real index was left alone only watches the XDG location, so on Windows treat a green e2e run as weaker evidence and check `qmd collection list` afterwards.
+
+Last real-model run, 2026-11-25, `minicpm5-2b` in LM Studio on macOS with `KIT_E2E_TOOLS=1`: all six tests of `test_e2e_llm.py`, the bridge-driving one included, passed in each of three consecutive runs. The bridge-driving test checks that the model called a bridge tool, got a note back and answered — not whether the answer is right; that needs an eval, not a unit test.
 
 ## Switches
 
@@ -35,7 +37,7 @@ That isolation rests on qmd honouring `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`, which 
 | `KIT_LLM_API_KEY` | bearer token if the server requires one |
 | `KIT_E2E_EMBED=1` | run `qmd embed` + vector + hybrid queries (downloads models once, minutes on CPU) |
 | `KIT_E2E_BENCH=1` | run `qmd bench` with `tests/fixtures/qmd-bench.json` |
-| `KIT_E2E_TOOLS=1` | assert the model emits an OpenAI-style tool call |
+| `KIT_E2E_TOOLS=1` | assert the model emits an OpenAI-style tool call, and that it can drive the bridge's real tools to an answer |
 | `KIT_VAULT` | default vault path for `kit.py` commands |
 
 ## What is deliberately not automated
@@ -46,4 +48,4 @@ That isolation rests on qmd honouring `XDG_CONFIG_HOME`/`XDG_CACHE_HOME`, which 
 
 ## CI
 
-`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.12 through `astral-sh/setup-uv`, plus an optional job that installs qmd via `oven-sh/setup-bun` and runs `test_e2e_qmd.py` (keyword tier only — no model downloads). Endpoint tests never run in CI.
+`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.14, and on ubuntu also with 3.12 and 3.13, through `astral-sh/setup-uv`. A `qmd-e2e` job installs qmd via `oven-sh/setup-bun` and runs `test_e2e_qmd.py` (keyword tier only — no model downloads); only its install step is advisory, and the job is one of the checks `ci-required` waits for. Endpoint tests never run in CI.

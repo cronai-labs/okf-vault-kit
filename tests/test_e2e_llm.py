@@ -83,10 +83,69 @@ class LocalLlmEndToEnd(unittest.TestCase):
 
     @unittest.skipUnless(env_flag("KIT_E2E_TOOLS"), "set KIT_E2E_TOOLS=1 to test tool calling")
     def test_tool_call_emitted(self):
-        tools = [{"type": "function", "function": {"name": "obsidian_search", "description": "Search the user's notes",
+        tools = [{"type": "function", "function": {"name": "vault_search", "description": "Search the user's notes",
                   "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}}}]
         data = chat({"model": self.model, "max_tokens": budget(200), "temperature": 0, "tools": tools, "tool_choice": "auto",
                      "messages": [{"role": "user", "content": "Search my notes for the search relaunch latency risk."}]})
         msg = data["choices"][0]["message"]
         self.assertTrue(msg.get("tool_calls"), f"expected a tool call, got: {msg}")
-        self.assertEqual(msg["tool_calls"][0]["function"]["name"], "obsidian_search")
+        self.assertEqual(msg["tool_calls"][0]["function"]["name"], "vault_search")
+
+    @unittest.skipUnless(env_flag("KIT_E2E_TOOLS"), "set KIT_E2E_TOOLS=1 to test tool calling")
+    def test_the_model_drives_the_real_bridge(self):
+        """The seam no other test crosses: the bridge's own tool schemas, as `list_tools` serves
+        them over stdio, handed to the model; the calls it emits run against the bridge; the
+        results go back; the model answers.
+
+        Asserted: the model called at least one bridge tool, the bridge served a note path back,
+        and the model then answered in text. Not asserted: its wording or which tool it picked.
+        """
+        import importlib.metadata
+        try:
+            if importlib.metadata.version("mcp").split(".")[0] != "2":
+                self.skipTest("the bridge targets the mcp 2.x SDK")
+        except importlib.metadata.PackageNotFoundError:
+            self.skipTest("mcp python sdk not installed")
+        import asyncio
+        import shutil
+
+        from mcp.client.stdio import stdio_client
+
+        from mcp import ClientSession, StdioServerParameters
+        from tests.helpers import temp_vault
+
+        vault = temp_vault()
+        self.addCleanup(shutil.rmtree, vault.parent, True)
+        trace: list[tuple[str, bool, str]] = []
+
+        async def go() -> str:
+            params = StdioServerParameters(command=sys.executable, env=dict(os.environ), args=[
+                str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault), "--read-only", "--no-audit"])
+            async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
+                await s.initialize()
+                tools = [{"type": "function", "function": {"name": t.name, "description": t.description or "",
+                                                           "parameters": t.input_schema}} for t in (await s.list_tools()).tools]
+                messages = [
+                    {"role": "system", "content": "You answer questions about the user's notes. Use the tools to look things "
+                                                  "up before answering, then answer in one or two sentences and cite the note path."},
+                    {"role": "user", "content": "Why did we adopt qmd for local search? Look it up in my notes."}]
+                for _ in range(4):
+                    msg = chat({"model": self.model, "max_tokens": budget(400), "temperature": 0, "tools": tools,
+                                "tool_choice": "auto", "messages": messages})["choices"][0]["message"]
+                    calls = msg.get("tool_calls") or []
+                    if not calls:
+                        return (msg.get("content") or "").strip()
+                    messages.append({"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls})
+                    for call in calls:
+                        fn = call["function"]
+                        res = await s.call_tool(fn["name"], json.loads(fn.get("arguments") or "{}"))
+                        text = "".join(getattr(c, "text", "") for c in res.content)
+                        trace.append((fn["name"], bool(res.is_error), text))
+                        messages.append({"role": "tool", "tool_call_id": call.get("id", ""), "content": text})
+                return ""
+
+        answer = asyncio.run(go())
+        self.assertTrue(trace, "the model never called a bridge tool")
+        self.assertTrue(any(not err and ".md" in text for _, err, text in trace),
+                        f"no bridge call returned a note path: {[(n, e, t[:120]) for n, e, t in trace]}")
+        self.assertTrue(answer, f"no final answer after {len(trace)} tool call(s): {[n for n, _, _ in trace]}")

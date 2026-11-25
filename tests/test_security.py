@@ -8,6 +8,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from tests.helpers import ROOT, VAULT, kitlib, temp_vault
 
 sys.path.insert(0, str(ROOT / "mcp"))
 import bridge_policy as bp
-import obsidian_bridge as ob
+import vault_bridge as ob
 
 KIT = [sys.executable, str(ROOT / "kit.py")]
 
@@ -54,6 +55,24 @@ class PolicyLayer(unittest.TestCase):
         self.assertIn("Alex Example", g.read_note("03-projects/search-relaunch.md"), "internal notes stay readable")
         shown = guarded(self.vault, hide_confidential=False)
         self.assertIn("type: person", shown.read_note("alex-example"))
+
+    def test_hidden_hits_do_not_use_up_the_search_limit(self):
+        """The backend applied `limit` before the policy filtered, so confidential notes that
+        ranked first left the model with fewer hits than it asked for — or none."""
+        ranked = ["05-people/alex-example.md", "05-people/sam-example.md",
+                  "07-knowledge/hybrid-search.md", "07-knowledge/reindex-qmd.md", "03-projects/search-relaunch.md"]
+
+        class Ranked:
+            calls = 0
+
+            def search(self, query, limit=10):
+                type(self).calls += 1
+                return [{"file": f, "title": f, "score": 1, "snippet": ""} for f in ranked[:limit]]
+
+        g = bp.Guarded(Ranked(), bp.Policy(audit_path=None), self.vault)
+        self.assertEqual([h["file"] for h in g.search("x", 2)], ["07-knowledge/hybrid-search.md", "07-knowledge/reindex-qmd.md"])
+        self.assertEqual(Ranked.calls, 1, "one backend search per tool call: each can be a qmd spawn that may run into its timeout")
+        self.assertEqual(len(g.search("x", 10)), 3, "never more than exist")
 
     def test_confidential_hiding_survives_a_non_canonical_vault_path(self):
         """The bypass that made the test above red on macOS but green on Linux.
@@ -111,14 +130,14 @@ class PolicyLayer(unittest.TestCase):
         self.assertFalse(audit[-1]["ok"]); self.assertIn("denied", audit[-1]["detail"])
 
     def test_bridge_flags_selftest(self):
-        r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(self.vault),
+        r = subprocess.run([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(self.vault),
                             "--read-only", "--propose", "--allow-write", "02-meetings", "--no-audit", "--selftest"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("policy: read-only; propose; confidential hidden", r.stdout)
 
     def test_cli_backend_without_a_vault_refuses_to_start(self):
         """`confidential hidden` in the banner has to mean the check can run."""
-        r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "cli", "--vault-name", "v", "--selftest"],
+        r = subprocess.run([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "cli", "--vault-name", "v", "--selftest"],
                            capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         self.assertEqual(r.returncode, 1)
         self.assertIn("confidential hiding needs the vault", r.stderr)
@@ -335,6 +354,54 @@ class BearerAuth(unittest.TestCase):
     def test_mcp_config_with_token(self):
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-token", "tok"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
         cfg = json.loads(r.stdout.split("\n# would be written")[0])
-        self.assertEqual(cfg["mcpServers"]["obsidian-vault"]["headers"], {"Authorization": "Bearer tok"})
+        self.assertEqual(cfg["mcpServers"]["okf-vault"]["headers"], {"Authorization": "Bearer tok"})
         r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-flags", "--read-only --propose"], capture_output=True, text=True, encoding="utf-8", errors="replace", env=dict(__import__("os").environ, KIT_NO_UV="1"), check=False)
-        self.assertIn("--read-only", json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["obsidian-vault"]["args"])
+        self.assertIn("--read-only", json.loads(r.stdout.split("\n# would be written")[0])["mcpServers"]["okf-vault"]["args"])
+
+    def test_mcp_config_reads_the_token_from_the_environment(self):
+        """A token on the command line sits in shell history and in `ps`; the variable does not."""
+        env = dict(os.environ, KIT_BRIDGE_TOKEN="from-env")
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env, check=False)
+        cfg = json.loads(r.stdout.split("\n# would be written")[0])
+        self.assertEqual(cfg["mcpServers"]["okf-vault"]["headers"], {"Authorization": "Bearer from-env"})
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-token", "flag"], capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", env=env, check=False)
+        cfg = json.loads(r.stdout.split("\n# would be written")[0])
+        self.assertEqual(cfg["mcpServers"]["okf-vault"]["headers"], {"Authorization": "Bearer flag"}, "the flag overrides the variable")
+
+    def test_mcp_config_says_when_an_http_bridge_gets_no_auth_header(self):
+        env = {k: v for k, v in os.environ.items() if k != "KIT_BRIDGE_TOKEN"}
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http"], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env, check=False)
+        self.assertNotIn("headers", r.stdout.split("\n# would be written")[0])
+        self.assertIn("no Authorization header", r.stdout)
+
+    @unittest.skipIf(sys.platform.startswith("win"), "POSIX file modes; Windows profile ACLs keep other users out")
+    def test_mcp_config_writes_a_config_holding_a_token_0600_and_its_backup_too(self):
+        home = Path(tempfile.mkdtemp())
+        try:
+            env = dict(os.environ, HOME=str(home), USERPROFILE=str(home), KIT_BRIDGE_TOKEN="s3cret", KIT_NO_UV="1")
+            v = home / "vault"
+            shutil.copytree(VAULT, v)
+            cfg = home / ".cursor/mcp.json"
+            cfg.parent.mkdir(parents=True)
+            cfg.write_text("{}", encoding="utf-8")
+            cfg.chmod(0o644)
+            r = subprocess.run(KIT + ["mcp-config", "--client", "cursor", "--vault", str(v), "--bridge-http", "--write"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=False)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("Bearer s3cret", cfg.read_text(encoding="utf-8"))
+            for f in (cfg, cfg.with_suffix(".json.bak")):
+                self.assertEqual(stat.S_IMODE(f.stat().st_mode), 0o600, f"{f.name} must not be readable by other accounts")
+        finally:
+            shutil.rmtree(home, ignore_errors=True)
+
+    def test_mcp_config_refuses_bridge_flags_for_an_http_bridge(self):
+        """A url entry starts no process, so flags in it are ignored by every client — the
+        `--read-only` the user asked for would silently not exist. Refuse, and say where they go."""
+        r = subprocess.run(KIT + ["mcp-config", "--vault", str(VAULT), "--bridge-http", "--bridge-flags", "--read-only"],
+                           capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("--bridge-flags", r.stderr)
+        self.assertNotIn('"args"', r.stdout)

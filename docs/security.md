@@ -37,7 +37,15 @@ Remember the parts the layer does not cover: it cannot judge *content*. A model 
 ## 2. Network
 
 - Both tool servers bind `127.0.0.1` by default; the bridge warns when started on another address without a token.
-- Bridge over HTTP: `--token <secret>` (or `KIT_BRIDGE_TOKEN`; `--token new` prints a fresh one). Requests without `Authorization: Bearer <secret>` get 401. Clients: `kit.py mcp-config --bridge-http --bridge-token <secret>` writes the header into `mcp.json`.
+- Bridge over HTTP: the token comes from `KIT_BRIDGE_TOKEN` (or `--token`; `--token new` prints a fresh one). Requests without `Authorization: Bearer <secret>` get 401. Keep the token off the command line, where shell history and `ps` show it — generate it straight into the variable and run the bridge and `mcp-config` in the same shell:
+
+  ```bash
+  export KIT_BRIDGE_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
+  uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault --http &
+  uv run kit.py mcp-config --bridge-http --vault ~/Notes/vault --write
+  ```
+
+- Where the token is stored: `mcp-config --bridge-http` writes it in plain text into the client's config (`Authorization` header); most clients have no way to reference a variable there. On macOS and Linux the kit sets that file and its `.bak` to `0600` when it writes a token. A client that rewrites its own config may reset the mode. The default stdio registration needs no token at all.
 - The bridge's HTTP app is told the address it was started on and answers `421` to a request whose `Host` header names anything else, so a page open in a browser cannot reach a loopback bridge through a name that resolves to `127.0.0.1`. `--host` is what configures it; the bearer token is checked in front of it either way.
 - qmd's HTTP server has no auth: keep it on loopback or put Caddy/nginx with a token in front.
 - LM Studio's server can require an API token (`LM_API_TOKEN` in its settings); `KIT_LLM_API_KEY` passes it. Ollama has none — treat it like qmd.

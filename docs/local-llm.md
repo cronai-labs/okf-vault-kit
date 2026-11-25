@@ -40,13 +40,13 @@ Everything below works with any of them; the kit reads `KIT_LLM_BASE_URL` (defau
    uv run kit.py mcp-config --client lmstudio --write     # writes ~/.lmstudio/mcp.json (backup kept)
    ```
 
-   Restart LM Studio → open a chat → *Program* tab in the right sidebar → toggle **qmd** and **obsidian-vault** on. LM Studio shows a confirmation dialog per tool call; choose *always allow* for `query`, `get`, `obsidian_search`, `obsidian_read_note`, and keep asking for writes. The bridge adds its own guard rails (confidential notes hidden, people/system folders read-only, size and rate limits; `--propose` for a human-applied queue) — [security.md](security.md). Paste the system prompt from [`config/lmstudio/system-prompt.md`](../config/lmstudio/system-prompt.md) (`Cmd/Ctrl+Shift+E` opens the system-prompt editor).
+   Restart LM Studio → open a chat → *Program* tab in the right sidebar → toggle **okf-vault** on. LM Studio shows a confirmation dialog per tool call; choose *always allow* for `vault_search`, `vault_read_note`, and keep asking for writes. qmd's own MCP server is not registered: the bridge's `vault_search` already uses qmd when it is installed and indexed, and applies the policy that qmd's server lacks. The bridge adds its own guard rails (confidential notes hidden, people/system folders read-only, size and rate limits; `--propose` for a human-applied queue) — [security.md](security.md). Paste the system prompt from [`config/lmstudio/system-prompt.md`](../config/lmstudio/system-prompt.md) (`Cmd/Ctrl+Shift+E` opens the system-prompt editor).
 6. **Prompts that work with a 2B model** — retrieval-grounded, one task at a time, explicit output shape:
-   > Use the qmd query tool to find notes about the search relaunch. Then answer in five bullets: what is due, what is at risk, who owns what. Cite note paths.
+   > Use vault_search to find notes about the search relaunch. Then answer in five bullets: what is due, what is at risk, who owns what. Cite note paths.
 
-   > Read `03-projects/search-relaunch.md` with obsidian_read_note. Draft the next update-log line for today from the latest actions. Do not write anything yet; show me the line.
+   > Read `03-projects/search-relaunch.md` with vault_read_note. Draft the next update-log line for today from the latest actions. Do not write anything yet; show me the line.
 
-   > Append this to today's daily note: "- benchmark scheduled for Tuesday — see search relaunch". Use obsidian_daily_append.
+   > Append this to today's daily note: "- benchmark scheduled for Tuesday — see search relaunch". Use vault_daily_append.
 
    > Use graph_context on the search relaunch, then tell me who owns it, which decisions it depends on, and whether anything it relies on is stale.
 
@@ -63,7 +63,7 @@ Everything below works with any of them; the kit reads `KIT_LLM_BASE_URL` (defau
 
 1. Download the native app (macOS `.dmg`, Windows `.exe`, Linux `.deb`/AppImage) from `unsloth.ai` or GitHub Releases; or `curl -fsSL https://unsloth.ai/install.sh | sh` (Windows: `irm https://unsloth.ai/install.ps1 | iex`) for the web UI variant, then `unsloth studio`.
 2. *Model hub* → search `MiniCPM5-2B` → choose the GGUF quantisation that fits the device → download → chat.
-3. Tools: Unsloth supports MCP servers and tool calling with permission prompts; register the same two servers as above (the kit's `mcp-config` output is plain Cursor-style JSON you can paste).
+3. Tools: Unsloth supports MCP servers and tool calling with permission prompts; register the same `okf-vault` server as above (the kit's `mcp-config` output is plain Cursor-style JSON you can paste).
 4. Endpoint: Unsloth exposes an OpenAI-compatible API; set `KIT_LLM_BASE_URL` accordingly. `unsloth start claude` / `codex` connects coding agents to the loaded model.
 5. Caution: the *Remote access* feature publishes the app through a Cloudflare HTTPS tunnel. Convenient, but it is a US-operated relay in front of your notes — keep it off if data residency matters to you.
 

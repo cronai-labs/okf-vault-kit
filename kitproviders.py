@@ -28,6 +28,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -216,8 +217,10 @@ class QmdSearch:
         except subprocess.TimeoutExpired:
             # qmd downloads its rerank model on first use; on a blocked network that never finishes,
             # and an unbounded wait here means no output, no fallback and nothing to read.
+            # stderr: the MCP bridge calls this too, and under the stdio transport stdout is the
+            # protocol channel — a stray line there breaks the client's session.
             print(f"qmd did not answer within {timeout:g}s — falling back to plain search "
-                  f"(set KIT_QMD_TIMEOUT to change)")
+                  f"(set KIT_QMD_TIMEOUT to change)", file=sys.stderr)
             return []
         except OSError:
             return []

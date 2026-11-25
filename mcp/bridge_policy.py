@@ -255,7 +255,7 @@ class Guarded:
         def run():
             rel = self._resolve_rel(file)
             if rel == _UNRESOLVED:
-                raise PolicyError(f"`{file}` does not resolve to one note in the vault; use obsidian_search for the path (policy)")
+                raise PolicyError(f"`{file}` does not resolve to one note in the vault; use vault_search for the path (policy)")
             if self._confidential(rel):
                 raise PolicyError(f"`{rel}` is marked confidential and is not available to agents (policy)")
             return self.backend.read_note(file)
@@ -264,9 +264,21 @@ class Guarded:
     def list_files(self, folder: str = "") -> list[str]:
         return self._guard("list_files", {"folder": folder}, lambda: [f for f in self.backend.list_files(folder) if not self._confidential(f)])
 
+    SEARCH_FETCH_CAP = 100
+
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        return self._guard("search", {"query": query, "limit": limit},
-                           lambda: [h for h in self.backend.search(query, limit) if not self._confidential(str(h.get("file", "")))])
+        """Visible hits, up to `limit` of them, from one backend search.
+
+        The backend applies its limit before this layer filters, so asking it for exactly `limit`
+        let confidential notes that ranked first use up the slots. It is asked once for three times
+        as many (capped), never again in a loop: each backend search can be a qmd spawn that may
+        run into its timeout, and a tool call that waits for several of them never answers.
+        """
+        def run():
+            fetch = min(max(limit, 1) * 3 + 10, self.SEARCH_FETCH_CAP)
+            hits = self.backend.search(query, fetch)
+            return [h for h in hits if not self._confidential(str(h.get("file", "")))][:limit]
+        return self._guard("search", {"query": query, "limit": limit}, run)
 
     def backlinks(self, file: str) -> list[str]:
         return self._guard("backlinks", {"file": file}, lambda: [f for f in self.backend.backlinks(file) if not self._confidential(f)])
@@ -275,7 +287,7 @@ class Guarded:
         def run():
             g = self._graph_view()
             if not kitgraph.resolve_id(g, node):
-                raise PolicyError(f"no visible note matches {node!r}; use obsidian_search to find its path")
+                raise PolicyError(f"no visible note matches {node!r}; use vault_search to find its path")
             return [{"src": s, "pred": p, "dst": d, "depth": dd} for s, p, d, dd in kitgraph.neighbors(g, node, depth, preds)]
         return self._guard("graph_neighbors", {"node": node, "depth": depth}, run)
 

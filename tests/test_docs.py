@@ -68,7 +68,7 @@ class Docs(unittest.TestCase):
         """
         spec = self.mcp_spec()
         found = []
-        for path in self.docs() + [ROOT / "ALPHA.md", ROOT / "kit.py", ROOT / "mcp/obsidian_bridge.py"]:
+        for path in self.docs() + [ROOT / "ALPHA.md", ROOT / "kit.py", ROOT / "mcp/vault_bridge.py"]:
             for m in MCP_INSTALL.finditer(path.read_text(encoding="utf-8")):
                 found.append((path.relative_to(ROOT), m.group(1)))
         self.assertTrue(found, "no documented mcp install command found — did the wording change?")
@@ -86,7 +86,7 @@ class Docs(unittest.TestCase):
         sites = {
             "requirements.txt": r"(?m)^#\s*(mcp\S+)\s*$",
             "Makefile": r"(?m)^MCP\s*\?=\s*(\S+)\s*$",
-            "mcp/obsidian_bridge.py": r'(?m)^# dependencies = \[.*?"(mcp[^"]+)"',
+            "mcp/vault_bridge.py": r'(?m)^# dependencies = \[.*?"(mcp[^"]+)"',
             "testkit/testkit.py": r'"--with", "(mcp[^"]+)"',
         }
         for name, pattern in sites.items():
@@ -109,7 +109,7 @@ class Docs(unittest.TestCase):
 
     def test_tools_doc_lists_every_bridge_tool(self):
         names = re.findall(r'@mcp\.tool\(name="([^"]+)"\)',
-                           (ROOT / "mcp/obsidian_bridge.py").read_text(encoding="utf-8"))
+                           (ROOT / "mcp/vault_bridge.py").read_text(encoding="utf-8"))
         self.assertGreater(len(names), 8, "no tool registrations found in the bridge")
         tools = (DOCS / "tools.md").read_text(encoding="utf-8")
         for name in names:

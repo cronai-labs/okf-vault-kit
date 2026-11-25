@@ -288,7 +288,7 @@ root, vault = sys.argv[1], sys.argv[2]
 
 async def go():
     params = StdioServerParameters(command=sys.executable,
-                                   args=[str(Path(root) / "mcp" / "obsidian_bridge.py"),
+                                   args=[str(Path(root) / "mcp" / "vault_bridge.py"),
                                          "--backend", "fs", "--vault", vault])
     async with stdio_client(params) as (r, w):
         async with ClientSession(r, w) as s:

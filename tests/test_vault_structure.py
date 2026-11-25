@@ -14,7 +14,7 @@ from tests.helpers import ROOT, VAULT, kitlib, temp_vault
 # The bridge lives in mcp/, which is on sys.path only once this module puts it there — relying on
 # whichever test module imported it first is an ordering the runner is free to change.
 sys.path.insert(0, str(ROOT / "mcp"))
-import obsidian_bridge as ob
+import vault_bridge as ob
 
 EXPECTED_DIRS = ["00-home", "00-home/bases", "01-journal", "01-journal/daily", "01-journal/weekly",
                  "01-journal/monthly", "01-journal/quarterly", "02-meetings", "03-projects", "04-areas", "05-people", "06-decisions", "07-knowledge",

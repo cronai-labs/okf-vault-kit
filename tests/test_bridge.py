@@ -1,5 +1,7 @@
-"""The Obsidian MCP bridge: fs backend on a temp vault, cli backend against a stub `obsidian` binary."""
+"""The vault MCP bridge (okf-vault): fs backend on a temp vault, cli backend against a stub `obsidian` binary."""
 import datetime as dt
+import json
+import os
 import shutil
 import stat
 import subprocess
@@ -7,11 +9,12 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from tests.helpers import ROOT, kitlib, temp_vault
+from tests.helpers import ROOT, kitlib, kitproviders, temp_vault
 
 sys.path.insert(0, str(ROOT / "mcp"))
-import obsidian_bridge as ob
+import vault_bridge as ob
 
 IS_WIN = sys.platform.startswith("win")
 
@@ -31,6 +34,48 @@ class FsBackend(unittest.TestCase):
         text = self.b.read_note("07-knowledge/hybrid-search")
         self.assertIn("type: concept", text)
         self.assertIn("03-projects/search-relaunch.md", self.b.backlinks("hybrid-search.md"))
+
+    def test_search_goes_through_the_configured_search_provider(self):
+        """#90: the bridge answered with its own term counting while the docs promised qmd."""
+        class Fake:
+            name = "fake"
+            def __init__(self, hits): self.hits, self.asked = hits, []
+            def available(self): return None
+            def query(self, vault, question, n, collection):
+                self.asked.append((question, n, collection)); return self.hits
+        H = kitproviders.Hit
+        fake = Fake([H("qmd://vault/07-knowledge/reindex-qmd.md", "Reindex qmd", "how to  reindex\n qmd", 0.9),
+                     H("03-projects/only-in-another-vault.md", "Elsewhere", "x", 0.8)])
+        b = ob.FsBackend(self.vault, search_provider=fake)
+        hits = b.search("reindex", 5)
+        self.assertEqual(fake.asked, [("reindex", 5, "vault")])
+        self.assertEqual([h["file"] for h in hits], ["07-knowledge/reindex-qmd.md"],
+                         "qmd:// paths are mapped, and a hit for a file this vault does not have is dropped")
+        self.assertEqual(hits[0]["snippet"], "how to reindex qmd")
+
+    def test_search_hides_what_every_other_reader_hides(self):
+        """qmd indexes whatever its mask matches. A note in a nested `_`-folder or a dot folder is
+        invisible to list, read and the graph, and search must not be the one tool that shows it."""
+        for rel in ("03-projects/_drafts/secret-plan.md", ".obsidian/plugin-notes.md", "07-knowledge/visible.md"):
+            (self.vault / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.vault / rel).write_text("---\ntype: concept\n---\n# x\n", encoding="utf-8")
+
+        class Indexed:
+            name = "qmd"
+            def available(self): return None
+            def query(self, vault, question, n, collection):
+                return [kitproviders.Hit(f"qmd://vault/{r}", r, "x", 1.0) for r in
+                        ("03-projects/_drafts/secret-plan.md", ".obsidian/plugin-notes.md", "07-knowledge/visible.md")]
+        hits = ob.FsBackend(self.vault, search_provider=Indexed()).search("x", 10)
+        self.assertEqual([h["file"] for h in hits], ["07-knowledge/visible.md"])
+
+    def test_search_falls_back_to_keyword_search_when_the_provider_finds_nothing(self):
+        class Empty:
+            name = "qmd"
+            def available(self): return None
+            def query(self, *a): return []
+        hits = ob.FsBackend(self.vault, search_provider=Empty()).search("hybrid search", 5)
+        self.assertEqual(hits[0]["file"], "07-knowledge/hybrid-search.md")
 
     def test_read_by_unique_short_name(self):
         self.assertIn("Alex Example", self.b.read_note("alex-example"))
@@ -72,6 +117,13 @@ class FsBackend(unittest.TestCase):
         self.assertIn("## Executive summary", note.body)
         self.b.set_property(rel, "state", "done")
         self.assertEqual(kitlib.validate_okf(self.vault).errors, [])
+
+    def test_list_files_accepts_the_folder_spellings_a_model_writes(self):
+        want = self.b.list_files("05-people")
+        self.assertTrue(want)
+        for spelling in ("./05-people", "05-people/", "05-people\\", "/05-people", " 05-people "):
+            with self.subTest(spelling=spelling):
+                self.assertEqual(self.b.list_files(spelling), want)
 
     def test_list_files_with_prefix(self):
         files = self.b.list_files("07-knowledge")
@@ -203,19 +255,20 @@ class BridgeProcess(unittest.TestCase):
     def test_selftest_runs(self):
         vault = temp_vault()
         try:
-            r = subprocess.run([sys.executable, str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(vault), "--selftest"],
+            r = subprocess.run([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault), "--selftest"],
                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60, check=False)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertIn("selftest OK", r.stdout)
         finally:
             shutil.rmtree(vault.parent, ignore_errors=True)
 
-    # The tool surface is the contract: every client config `kit.py mcp-config` has ever written
-    # names these, so a rename or a dropped tool breaks a machine we cannot reach.
-    TOOLS = {"obsidian_search", "obsidian_read_note", "obsidian_list_files", "obsidian_backlinks",
+    # The tool surface is the contract: client allow-lists and system prompts name these, so a
+    # rename or a dropped tool breaks a machine we cannot reach. The obsidian_* → vault_* rename
+    # in 0.3.0 was deliberate and rides the same breaking release as the okf-vault server name.
+    TOOLS = {"vault_search", "vault_read_note", "vault_list_files", "vault_backlinks",
              "graph_context", "graph_neighbors", "graph_path", "graph_query", "vault_todos",
-             "obsidian_create_note", "obsidian_append_note", "obsidian_daily_append",
-             "obsidian_set_property", "file_meeting_minutes"}
+             "vault_create_note", "vault_append_note", "vault_daily_append",
+             "vault_set_property", "file_meeting_minutes"}
 
     def test_a_real_stdio_session_serves_every_tool_and_still_refuses(self):
         """The whole bridge over the wire: 14 tools, a read, a write, and three refusals.
@@ -241,16 +294,17 @@ class BridgeProcess(unittest.TestCase):
         vault = temp_vault()
 
         async def go():
-            params = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/obsidian_bridge.py"), "--backend", "fs", "--vault", str(vault)])
+            params = StdioServerParameters(command=sys.executable, args=[str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault)],
+                                           env=dict(os.environ))
             async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
                 await s.initialize()
                 tools = {t.name for t in (await s.list_tools()).tools}
                 out = {}
                 for label, name, args in (
-                        ("read", "obsidian_read_note", {"file": "07-knowledge/hybrid-search"}),
-                        ("write", "obsidian_create_note", {"name": "03-projects/over-the-wire", "content": "written by the session"}),
-                        ("confidential", "obsidian_read_note", {"file": "05-people/alex-example"}),
-                        ("denied", "obsidian_create_note", {"name": "05-people/nope", "content": "x"}),
+                        ("read", "vault_read_note", {"file": "07-knowledge/hybrid-search"}),
+                        ("write", "vault_create_note", {"name": "03-projects/over-the-wire", "content": "written by the session"}),
+                        ("confidential", "vault_read_note", {"file": "05-people/alex-example"}),
+                        ("denied", "vault_create_note", {"name": "05-people/nope", "content": "x"}),
                         ("write_sql", "graph_query", {"sql": "delete from nodes"})):
                     res = await s.call_tool(name, args)
                     out[label] = (bool(res.is_error), res.content[0].text)
@@ -276,6 +330,170 @@ class BridgeProcess(unittest.TestCase):
             shutil.rmtree(vault.parent, ignore_errors=True)
 
 
+def _need_sdk(case: unittest.TestCase) -> None:
+    import importlib.metadata
+    try:
+        version = importlib.metadata.version("mcp")
+    except importlib.metadata.PackageNotFoundError:
+        case.skipTest("mcp python sdk not installed (pip install 'mcp>=2,<3')")
+    if version.split(".")[0] != "2":
+        case.skipTest(f"mcp {version} installed; the bridge targets the 2.x API")
+
+
+def _stdio_session(vault: Path, *flags: str, calls=()):
+    """Start the bridge over stdio, list its tools, run `calls`; return (tool names, {label: (is_error, text)})."""
+    import asyncio
+
+    from mcp.client.stdio import stdio_client
+
+    from mcp import ClientSession, StdioServerParameters
+
+    async def go():
+        # env: stdio_client passes only a whitelist, and the offline suite's provider pin must reach the child
+        params = StdioServerParameters(command=sys.executable, env=dict(os.environ),
+                                       args=[str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(vault), *flags])
+        async with stdio_client(params) as (r, w), ClientSession(r, w) as s:
+            await s.initialize()
+            tools = {t.name for t in (await s.list_tools()).tools}
+            out = {}
+            for label, name, args in calls:
+                res = await s.call_tool(name, args)
+                out[label] = (bool(res.is_error), "".join(getattr(c, "text", "") for c in res.content))
+            return tools, out
+    return asyncio.run(go())
+
+
+class EveryToolOverTheWire(unittest.TestCase):
+    """Each of the 14 tools called through a real stdio session, not only listed.
+
+    The direct-call tests prove the logic; this proves the wiring a client actually crosses —
+    argument names, types and JSON encoding as the SDK derives them from the signatures.
+    """
+    READ_TOOLS = {"vault_search", "vault_read_note", "vault_list_files", "vault_backlinks",
+                  "graph_context", "graph_neighbors", "graph_path", "graph_query", "vault_todos"}
+
+    def setUp(self):
+        _need_sdk(self)
+        self.vault = temp_vault()
+
+    def tearDown(self):
+        shutil.rmtree(self.vault.parent, ignore_errors=True)
+
+    def test_every_tool_answers(self):
+        calls = (
+            ("search", "vault_search", {"query": "hybrid search", "limit": 3}),
+            ("read", "vault_read_note", {"file": "07-knowledge/hybrid-search"}),
+            ("list", "vault_list_files", {"folder": "./07-knowledge"}),
+            ("backlinks", "vault_backlinks", {"file": "07-knowledge/hybrid-search"}),
+            ("context", "graph_context", {"note": "search-relaunch"}),
+            ("neighbors", "graph_neighbors", {"note": "search-relaunch", "predicates": "links_to"}),
+            ("path", "graph_path", {"a": "hybrid-search", "b": "search-relaunch"}),
+            ("query", "graph_query", {"sql": "select count(*) as n from nodes"}),
+            ("todos", "vault_todos", {}),
+            ("create", "vault_create_note", {"name": "03-projects/wire-note", "content": "first line"}),
+            ("append", "vault_append_note", {"file": "03-projects/wire-note", "content": "second line"}),
+            ("property", "vault_set_property", {"file": "03-projects/wire-note", "name": "state", "value": "active"}),
+            ("daily", "vault_daily_append", {"content": "- logged over the wire"}),
+            ("minutes", "file_meeting_minutes", {"text": "Decision: ship it", "title": 'Wire "sync": done', "date": "2026-09-21"}),
+        )
+        tools, out = _stdio_session(self.vault, calls=calls)
+        self.assertEqual(len(tools), 14)
+        self.assertEqual({name for _, name, _ in calls}, tools, "every registered tool is called once")
+        for label, (is_error, text) in out.items():
+            self.assertFalse(is_error, f"{label}: {text}")
+        self.assertEqual(json.loads(out["search"][1])[0]["file"], "07-knowledge/hybrid-search.md")
+        self.assertIn("07-knowledge/hybrid-search.md", out["list"][1])
+        self.assertIn("health", out["context"][1])
+        self.assertGreater(json.loads(out["query"][1])["rows"][0][0], 10)
+        self.assertGreater(json.loads(out["todos"][1])["open"], 0)
+        note = (self.vault / "03-projects/wire-note.md").read_text(encoding="utf-8")
+        self.assertIn("first line", note); self.assertIn("second line", note); self.assertIn("state: active", note)
+        self.assertEqual(json.loads(out["minutes"][1])["path"], "02-meetings/2026-09-21-wire-sync-done.md")
+
+    def test_read_only_serves_nine_tools_and_no_write(self):
+        tools, _ = _stdio_session(self.vault, "--read-only")
+        self.assertEqual(tools, self.READ_TOOLS)
+
+    def test_propose_mode_records_a_write_over_the_wire_instead_of_making_it(self):
+        _, out = _stdio_session(self.vault, "--propose", calls=(
+            ("create", "vault_create_note", {"name": "03-projects/proposed", "content": "x"}),))
+        is_error, text = out["create"]
+        self.assertFalse(is_error, text)
+        self.assertTrue(text.startswith("proposed:"), text)
+        self.assertFalse((self.vault / "03-projects/proposed.md").exists())
+        self.assertTrue(list((self.vault / ".kit/proposals").glob("*")), "the proposal is on disk for a human")
+
+
+class HttpTransport(unittest.TestCase):
+    """`--http --token`: refused without the token, served with it — over a real socket."""
+
+    def setUp(self):
+        _need_sdk(self)
+        # loopback must never go to a proxy: on a managed machine with HTTP_PROXY set, both the
+        # probe and the SDK's client would send 127.0.0.1 to it (tests/helpers.py, llm_reachable)
+        loopback = "127.0.0.1,localhost"
+        patcher = mock.patch.dict(os.environ, {"NO_PROXY": loopback, "no_proxy": loopback})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.vault = temp_vault()
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0)); self.port = s.getsockname()[1]
+        env = dict(os.environ, KIT_BRIDGE_TOKEN="wire-token")
+        self.proc = subprocess.Popen([sys.executable, str(ROOT / "mcp/vault_bridge.py"), "--backend", "fs", "--vault", str(self.vault),
+                                      "--http", "--port", str(self.port), "--no-audit"],
+                                     env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        self.url = f"http://127.0.0.1:{self.port}/mcp"
+        import time
+        import urllib.error
+        import urllib.request
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(self.url, timeout=0.5)
+            except urllib.error.HTTPError:
+                break                                  # it answers: any HTTP status means it is up
+            except OSError:
+                if self.proc.poll() is not None:
+                    self.fail(f"bridge exited: {self.proc.stderr.read().decode(errors='replace')}")
+                time.sleep(0.1)
+        else:
+            self.fail("bridge did not start listening")
+
+    def tearDown(self):
+        self.proc.terminate()
+        try:
+            self.proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.proc.kill()
+        self.proc.stderr.close()
+        shutil.rmtree(self.vault.parent, ignore_errors=True)
+
+    def test_no_token_is_401_and_the_token_gets_a_session(self):
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(self.url, data=b"{}", method="POST", headers={"Content-Type": "application/json"})
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            urllib.request.urlopen(req, timeout=5)
+        self.assertEqual(ctx.exception.code, 401)
+
+        import asyncio
+
+        from mcp.client.streamable_http import create_mcp_http_client, streamable_http_client
+
+        from mcp import ClientSession
+
+        async def go():
+            async with create_mcp_http_client(headers={"Authorization": "Bearer wire-token"}) as http, \
+                    streamable_http_client(self.url, http_client=http) as streams, \
+                    ClientSession(streams[0], streams[1]) as s:
+                await s.initialize()
+                res = await s.call_tool("vault_read_note", {"file": "07-knowledge/hybrid-search"})
+                return bool(res.is_error), res.content[0].text
+        is_error, text = asyncio.run(go())
+        self.assertFalse(is_error, text)
+        self.assertIn("Hybrid search", text)
+
+
 class GraphTools(unittest.TestCase):
     def setUp(self):
         self.vault = temp_vault()
@@ -299,6 +517,32 @@ class GraphTools(unittest.TestCase):
         self.b.graph()
         self.b.set_property("03-projects/search-relaunch.md", "health", "red")
         self.assertIn("health: red", self.b.graph_context("search-relaunch"))
+
+    def test_graph_cache_forgets_a_note_that_was_moved_away_or_deleted(self):
+        """A move or a delete raises no mtime, so an mtime-only cache kept serving the old note.
+
+        Moving a note into a `_`-folder is how a user hides it; the graph tools must stop
+        answering about it at once, not after some other note happens to change.
+        """
+        sql = "select count(*) from nodes where path = '07-knowledge/reindex-qmd.md'"
+        self.assertEqual(self.b.graph_query(sql)["rows"], [[1]])
+        (self.vault / "_private").mkdir()
+        shutil.move(str(self.vault / "07-knowledge/reindex-qmd.md"), str(self.vault / "_private/reindex-qmd.md"))
+        self.assertEqual(self.b.graph_query(sql)["rows"], [[0]], "moved into a `_`-folder, still in the graph")
+        sql2 = "select count(*) from nodes where path = '07-knowledge/hybrid-search.md'"
+        self.assertEqual(self.b.graph_query(sql2)["rows"], [[1]])
+        (self.vault / "07-knowledge/hybrid-search.md").unlink()
+        self.assertEqual(self.b.graph_query(sql2)["rows"], [[0]], "deleted, still in the graph")
+
+    def test_minutes_title_with_yaml_specials_is_filed(self):
+        """The model chooses the title; quotes, a backslash or a colon must not break the YAML."""
+        for i, title in enumerate(('Review "beta" launch', "Path C:\\qmd fix", "Plan: Q4 and beyond")):
+            with self.subTest(title=title):
+                res = self.b.file_minutes("Decision: ship it", title, f"2026-09-2{i}")
+                note = kitlib.parse_note(self.vault / res["path"], self.vault)
+                self.assertIsNotNone(note.frontmatter, note.fm_error)
+                self.assertEqual(note.frontmatter["title"], title)
+                self.assertIn(f"# {title}", note.body)
 
     def test_todos_and_minutes_tools(self):
         t = self.b.todos()

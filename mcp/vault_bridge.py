@@ -3,7 +3,8 @@
 # requires-python = ">=3.11"
 # dependencies = ["pyyaml>=6.0", "mcp>=2,<3"]
 # ///
-"""obsidian_bridge — an MCP server that lets a local model read and write an Obsidian vault.
+"""vault_bridge — an MCP server (`okf-vault`) that lets a local model read and write a notes vault:
+Markdown with OKF frontmatter, the layout Obsidian opens as a vault.
 
 Two interchangeable backends:
 
@@ -14,14 +15,14 @@ Two interchangeable backends:
 Run as an MCP server (stdio). With uv nothing needs installing (deps come from the inline metadata above);
 with plain Python, `pip install 'mcp>=2,<3' pyyaml` first (this bridge targets the 2.x server API):
 
-  uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault
-  python mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault
-  python mcp/obsidian_bridge.py --backend cli --vault-name "vault"
-  uv run mcp/obsidian_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765   # as a service: http://127.0.0.1:8765/mcp
+  uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault
+  python mcp/vault_bridge.py --backend fs --vault ~/Notes/vault
+  python mcp/vault_bridge.py --backend cli --vault-name "vault"
+  uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault --http --port 8765   # as a service: http://127.0.0.1:8765/mcp
 
 Self-test without MCP:
 
-  python mcp/obsidian_bridge.py --backend fs --vault ../vault --selftest
+  python mcp/vault_bridge.py --backend fs --vault ../vault --selftest
 
 Access control (see docs/security.md): --read-only, --deny-write/--allow-write folder prefixes, --show-confidential
 (hidden by default), --max-write-bytes, --max-writes-per-minute, --propose (writes become proposals for a human to
@@ -29,10 +30,10 @@ apply), --audit PATH / --no-audit (JSONL log of every tool call), --token TOKEN 
 
 Tool surface (identical for both backends), 14 tools:
 
-  read   obsidian_search, obsidian_read_note, obsidian_list_files, obsidian_backlinks,
+  read   vault_search, vault_read_note, vault_list_files, vault_backlinks,
          graph_context, graph_neighbors, graph_path, graph_query, vault_todos
-  write  obsidian_create_note, obsidian_append_note, obsidian_daily_append,
-         obsidian_set_property, file_meeting_minutes   (not registered under --read-only)
+  write  vault_create_note, vault_append_note, vault_daily_append,
+         vault_set_property, file_meeting_minutes   (not registered under --read-only)
 """
 from __future__ import annotations
 
@@ -54,9 +55,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bridge_policy  # mcp/bridge_policy.py
 import kitgraph
 import kitlib
+import kitproviders
 import kitrecon
 
-STOPWORDS = {"the", "and", "for", "with", "what", "why", "how", "who", "which", "when", "where", "did", "does", "was", "were", "are", "our", "this", "that", "from", "into", "about", "der", "die", "das", "und", "ist", "wie", "wer", "mit", "von", "für", "auf", "ein", "eine", "nicht", "wird"}
 
 class BridgeError(RuntimeError):
     pass
@@ -92,10 +93,13 @@ def _check_name(name: str) -> None:
 class FsBackend:
     """Operate on the vault directly. Safe defaults: never overwrite silently, stay inside the vault."""
 
-    def __init__(self, vault: Path):
+    def __init__(self, vault: Path, search_provider: Any = None):
         self.vault = Path(vault).expanduser().resolve()
         if not self.vault.is_dir():
             raise BridgeError(f"vault not found: {self.vault}")
+        # None: resolve the vault's search slot on every call (explicit > KIT_SEARCH_PROVIDER >
+        # .kit/config.yml > qmd if installed > naive), the same slot `kit.py llm ask` uses.
+        self._search_provider = search_provider
 
     # -- helpers
     def _resolve(self, file: str, must_exist: bool = True) -> Path:
@@ -114,7 +118,7 @@ class FsBackend:
             return matches[0]
         if must_exist:
             hint = ", ".join(m.relative_to(self.vault).as_posix() for m in matches[:5]) or "no similar file"
-            raise BridgeError(f"note not found: {file} ({hint}). Use obsidian_search or obsidian_list_files to find the path.")
+            raise BridgeError(f"note not found: {file} ({hint}). Use vault_search or vault_list_files to find the path.")
         return cand
 
     def _resolve_template(self, template: str) -> Path:
@@ -132,21 +136,6 @@ class FsBackend:
         if not tpl.is_file():
             raise BridgeError(f"template not found: {tpl.name}")
         return tpl
-
-    def _notes(self) -> list[Any]:
-        """Every note we can actually read.
-
-        One file the bridge cannot decode — UTF-16 from PowerShell's `Out-File`, a stray binary —
-        must not take out search for the whole vault. Skipping it is also the safe direction: an
-        unreadable note stays invisible rather than half-parsed.
-        """
-        out = []
-        for p in kitlib.iter_markdown(self.vault):
-            try:
-                out.append(kitlib.parse_note(p, self.vault))
-            except (UnicodeDecodeError, OSError):
-                continue
-        return out
 
     def _text(self, path: Path) -> str:
         """The note's text, or a BridgeError naming it.
@@ -166,30 +155,48 @@ class FsBackend:
         return self._text(self._resolve(file))
 
     def list_files(self, folder: str = "") -> list[str]:
+        folder = _folder_prefix(folder)
         base = self.vault / folder if folder else self.vault
         if self.vault not in base.resolve().parents and base.resolve() != self.vault:
             raise BridgeError("folder escapes the vault")
-        return [p.relative_to(self.vault).as_posix() for p in kitlib.iter_markdown(base if base.exists() else self.vault)
-                if p.relative_to(self.vault).as_posix().startswith(folder)]
+        rels = (p.relative_to(self.vault).as_posix() for p in kitlib.iter_markdown(base if base.exists() else self.vault))
+        return [r for r in rels if not folder or r.startswith(folder + "/") or r == folder]
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
-        terms = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 1 and t.lower() not in STOPWORDS]
-        if not terms:
-            return []
-        hits = []
-        for note in self._notes():
-            if note.rel.startswith("90-templates") or note.path.name in kitlib.RESERVED_FILENAMES:
-                continue
-            hay = (note.body + "\n" + json.dumps(note.frontmatter or {}, default=str)).lower()
-            title = str((note.frontmatter or {}).get("title", note.path.stem)).lower()
-            phrase = " ".join(terms)
-            score = sum(hay.count(t) for t in terms) + 5 * hay.count(phrase) + (10 if phrase in title else 0)
-            if score:
-                idx = min((hay.find(t) for t in terms if t in hay), default=0)
-                snippet = re.sub(r"\s+", " ", hay[max(0, idx - 80): idx + 160]).strip()
-                hits.append({"file": note.rel, "title": (note.frontmatter or {}).get("title", note.path.stem), "score": score, "snippet": snippet})
-        hits.sort(key=lambda h: -h["score"])
+        """The vault's search slot — qmd's hybrid search when installed and indexed, keyword otherwise.
+
+        Two fallbacks, as in `kit.py llm ask`: the slot picks naive when qmd is not installed, and an
+        installed provider that answers nothing (an unindexed vault, an errored qmd) falls back to
+        naive here. A hit is kept only when its file exists in this vault: a qmd collection named
+        like this vault's but indexing another folder must not put that folder's paths in front of
+        the model, and the policy layer can only judge files it can open.
+        """
+        try:
+            provider = self._search_provider or kitproviders.search_provider(self.vault)
+        except SystemExit as exc:              # an unknown provider name in config or env: a refusal, not an exit
+            raise BridgeError(f"search is misconfigured: {exc}") from exc
+        collection = kitproviders.collection_name(self.vault)
+        hits = self._usable(provider.query(self.vault, query, limit, collection))
+        if not hits and provider.name != kitproviders.NaiveSearch.name:
+            hits = self._usable(kitproviders.NaiveSearch().query(self.vault, query, limit, collection))
         return hits[:limit]
+
+    def _usable(self, hits: list[Any]) -> list[dict[str, Any]]:
+        """Hits for notes the other read tools can see, and only those.
+
+        The visible set is `iter_markdown`'s, the walk list, read and the graph use: no `_`-folder
+        at any depth, no dot folder the kit owns, no templates. qmd indexes whatever its mask
+        matched, so search must not be the one tool that surfaces a note the user hid.
+        """
+        visible = {p.relative_to(self.vault).as_posix() for p in kitlib.iter_markdown(self.vault, include_templates=False)}
+        out = []
+        for h in hits:
+            rel = kitproviders.hit_rel(h.file)
+            if rel not in visible or Path(rel).name in kitlib.RESERVED_FILENAMES:
+                continue
+            snippet = re.sub(r"\s+", " ", h.snippet or "").strip()[:240]
+            out.append({"file": rel, "title": h.title or Path(rel).stem, "score": h.score, "snippet": snippet})
+        return out
 
     def backlinks(self, file: str) -> list[str]:
         target = self._resolve(file)
@@ -211,7 +218,7 @@ class FsBackend:
         _check_name(name)
         path = self._resolve(name, must_exist=False)
         if path.exists() and not overwrite:
-            raise BridgeError(f"{path.relative_to(self.vault).as_posix()} exists — pass overwrite=true or use obsidian_append_note")
+            raise BridgeError(f"{path.relative_to(self.vault).as_posix()} exists — pass overwrite=true or use vault_append_note")
         body = content
         if template:
             tpl = self._resolve_template(template)
@@ -265,21 +272,30 @@ class FsBackend:
         self._skipped_cache = (sig, out)
         return out
 
-    # -- graph side (rebuilt when any note changes)
-    _graph_cache: tuple[float, kitgraph.Graph] | None = None
+    # -- graph side (rebuilt when any note changes, appears or goes)
+    _graph_cache: tuple[Any, kitgraph.Graph] | None = None
+
+    def _note_set_signature(self) -> Any:
+        """Which notes exist and when each last changed.
+
+        The newest mtime alone misses a move and a delete — neither raises any mtime — and moving
+        a note into a `_`-folder is how a user hides it. Keying on the path set as well means the
+        graph tools stop answering about such a note on the very next call.
+        """
+        return frozenset((p.relative_to(self.vault).as_posix(), p.stat().st_mtime_ns) for p in kitlib.iter_markdown(self.vault))
 
     def graph(self) -> kitgraph.Graph:
-        latest = max((p.stat().st_mtime for p in kitlib.iter_markdown(self.vault)), default=0.0)
-        if self._graph_cache and self._graph_cache[0] >= latest:
+        sig = self._note_set_signature()
+        if self._graph_cache and self._graph_cache[0] == sig:
             return self._graph_cache[1]
         g = kitgraph.build_graph(self.vault)
-        self._graph_cache = (latest, g)
+        self._graph_cache = (sig, g)
         return g
 
     def graph_neighbors(self, node: str, depth: int = 1, preds: list[str] | None = None) -> list[dict[str, Any]]:
         g = self.graph()
         if not kitgraph.resolve_id(g, node):
-            raise BridgeError(f"no note matches {node!r}; use obsidian_search to find its path")
+            raise BridgeError(f"no note matches {node!r}; use vault_search to find its path")
         return [{"src": s, "pred": p, "dst": d, "depth": dd} for s, p, d, dd in kitgraph.neighbors(g, node, depth, preds)]
 
     def graph_path(self, a: str, b: str) -> list[dict[str, str]]:
@@ -321,6 +337,18 @@ class FsBackend:
         return {"path": m.path, "people": m.people, "project": m.project, "unresolved": m.unresolved,
                 "actions": m.actions, "decisions": m.decisions, "outcomes": m.outcomes,
                 "also_written": also, "skipped": list(m.skipped)}
+
+
+def _folder_prefix(folder: str) -> str:
+    """A folder as the model writes it, as the vault-relative POSIX prefix the listing compares.
+
+    Models write `./05-people`, `05-people/`, `/05-people` or, on Windows, `05-people\\`; each
+    used to match nothing and came back as an empty folder the model then reported as empty.
+    """
+    f = (folder or "").strip().replace("\\", "/")
+    while f.startswith("./"):
+        f = f[2:]
+    return f.strip("/")
 
 
 def _one_line(text: str) -> str:
@@ -405,7 +433,8 @@ class CliBackend:
     def list_files(self, folder: str = "") -> list[str]:
         out = self._run("files")
         files = [l.strip() for l in out.splitlines() if l.strip()]
-        return [f for f in files if f.startswith(folder)] if folder else files
+        folder = _folder_prefix(folder)
+        return [f for f in files if f.startswith(folder + "/") or f == folder] if folder else files
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
         out = self._run("search", {"query": query, "limit": limit})
@@ -518,28 +547,28 @@ def build_server(backend, read_only: bool = False):
     from mcp.server.mcpserver.exceptions import ToolError
 
     backend = _Refusals(backend, ToolError)
-    mcp = MCPServer("obsidian-vault", version=kitlib.KIT_VERSION, instructions=(
-        "Read and write the user's Obsidian vault. Notes are Markdown with YAML frontmatter (OKF). "
+    mcp = MCPServer("okf-vault", version=kitlib.KIT_VERSION, instructions=(
+        "Read and write the user's notes vault. Notes are Markdown with YAML frontmatter (OKF). "
         "Search first, then read specific notes by path. Prefer append over overwrite. "
         "Tasks are written as `- [ ] verb — owner, due YYYY-MM-DD`."))
 
-    @mcp.tool(name="obsidian_search")
-    def obsidian_search(query: str, limit: int = 10) -> str:
-        """Keyword search across the vault. Returns matching note paths with a short snippet. Use before reading."""
+    @mcp.tool(name="vault_search")
+    def vault_search(query: str, limit: int = 10) -> str:
+        """Search the vault (hybrid semantic search when qmd is set up, keyword search otherwise). Returns matching note paths with a short snippet. Use before reading."""
         return _announced(backend, json.dumps(backend.search(query, limit), ensure_ascii=False, indent=1))
 
-    @mcp.tool(name="obsidian_read_note")
-    def obsidian_read_note(file: str) -> str:
+    @mcp.tool(name="vault_read_note")
+    def vault_read_note(file: str) -> str:
         """Return the full text of one note. `file` is a vault-relative path (with or without .md) or a unique note name."""
         return backend.read_note(file)
 
-    @mcp.tool(name="obsidian_list_files")
-    def obsidian_list_files(folder: str = "") -> str:
+    @mcp.tool(name="vault_list_files")
+    def vault_list_files(folder: str = "") -> str:
         """List markdown files, optionally under a folder prefix such as `03-projects`."""
         return _announced(backend, "\n".join(backend.list_files(folder)))
 
-    @mcp.tool(name="obsidian_backlinks")
-    def obsidian_backlinks(file: str) -> str:
+    @mcp.tool(name="vault_backlinks")
+    def vault_backlinks(file: str) -> str:
         """Notes that link to the given note — the dossier view for a project, person or decision."""
         return "\n".join(backend.backlinks(file))
 
@@ -572,23 +601,23 @@ def build_server(backend, read_only: bool = False):
     if read_only:
         return mcp
 
-    @mcp.tool(name="obsidian_create_note")
-    def obsidian_create_note(name: str, content: str = "", template: str = "", overwrite: bool = False) -> str:
+    @mcp.tool(name="vault_create_note")
+    def vault_create_note(name: str, content: str = "", template: str = "", overwrite: bool = False) -> str:
         """Create a note at a vault-relative path (e.g. `02-meetings/2026-09-14-sync`). Optional template name from 90-templates (e.g. `meeting`). Fails if the note exists unless overwrite=true."""
         return backend.create_note(name, content, template or None, overwrite)
 
-    @mcp.tool(name="obsidian_append_note")
-    def obsidian_append_note(file: str, content: str) -> str:
+    @mcp.tool(name="vault_append_note")
+    def vault_append_note(file: str, content: str) -> str:
         """Append text to the end of an existing note. Safe, non-destructive."""
         return backend.append_note(file, content)
 
-    @mcp.tool(name="obsidian_daily_append")
-    def obsidian_daily_append(content: str) -> str:
+    @mcp.tool(name="vault_daily_append")
+    def vault_daily_append(content: str) -> str:
         """Append a line to today's daily note (created from the daily template if missing)."""
         return backend.daily_append(content)
 
-    @mcp.tool(name="obsidian_set_property")
-    def obsidian_set_property(file: str, name: str, value: str) -> str:
+    @mcp.tool(name="vault_set_property")
+    def vault_set_property(file: str, name: str, value: str) -> str:
         """Set one frontmatter property on a note, e.g. state=done, health=green, description=..."""
         return backend.set_property(file, name, value)
 
@@ -638,7 +667,7 @@ def main(argv=None) -> int:
     pol.add_argument("--allow-write", help="comma-separated folder prefixes that are the only writable ones")
     pol.add_argument("--show-confidential", action="store_true", help="expose notes with sensitivity: confidential (hidden by default)")
     pol.add_argument("--max-write-bytes", type=int, default=20_000); pol.add_argument("--max-writes-per-minute", type=int, default=20)
-    pol.add_argument("--allow-overwrite", action="store_true", help="let the model pass overwrite=true on obsidian_create_note (denied by default: it blanks an existing note)")
+    pol.add_argument("--allow-overwrite", action="store_true", help="let the model pass overwrite=true on vault_create_note (denied by default: it blanks an existing note)")
     pol.add_argument("--propose", action="store_true", help="writes become proposals in .kit/proposals/ (kit.py proposals apply)")
     pol.add_argument("--audit", help="JSONL audit log path (default <vault>/.kit/bridge-audit.jsonl)"); pol.add_argument("--no-audit", action="store_true")
     args = ap.parse_args(argv)
@@ -664,13 +693,13 @@ def main(argv=None) -> int:
         if token:
             import uvicorn
             app = bridge_policy.BearerAuth(server.streamable_http_app(host=args.host), token)
-            print(f"obsidian-vault MCP bridge on http://{args.host}:{args.port}/mcp — bearer token required"
+            print(f"okf-vault MCP bridge on http://{args.host}:{args.port}/mcp — bearer token required"
                   + (f": {token}" if args.token == "new" else ""), file=sys.stderr)
             uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
         else:
             if args.host not in ("127.0.0.1", "localhost", "::1"):
                 print("WARNING: HTTP bridge without --token on a non-loopback address — anyone who can reach it can edit the vault", file=sys.stderr)
-            print(f"obsidian-vault MCP bridge on http://{args.host}:{args.port}/mcp (streamable HTTP, no auth)", file=sys.stderr)
+            print(f"okf-vault MCP bridge on http://{args.host}:{args.port}/mcp (streamable HTTP, no auth)", file=sys.stderr)
             server.run(transport="streamable-http", host=args.host, port=args.port)
     else:
         server.run()  # stdio transport

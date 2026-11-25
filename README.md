@@ -1,6 +1,6 @@
 # OKF Vault Kit
 
-An Obsidian vault template that is also a Google **Open Knowledge Format** bundle, wired to **qmd** (Tobi Lütke's on-device hybrid search), the **Obsidian CLI**, and a **local 2B-class LLM** that can search and edit the vault through MCP — on macOS, Windows (native or WSL2) and Linux — with end-to-end tests.
+A Markdown knowledge vault that is a Google **Open Knowledge Format** bundle and opens as an Obsidian vault, wired to **qmd** (Tobi Lütke's on-device hybrid search), the **Obsidian CLI**, and a **local 2B-class LLM** that can search and edit the vault through MCP — on macOS, Windows (native or WSL2) and Linux — with end-to-end tests.
 
 For managers, project/product managers and engineers: same structure, three lanes.
 
@@ -46,7 +46,7 @@ assert things about CI and the git checkout and skip cleanly when run from it.
 | `kitproviders.py` | Swappable slots — `search` (qmd · naive), `llm` (any OpenAI-compatible endpoint), `embed`, `graph`; chosen per vault in `.kit/config.yml` |
 | `kit.py` · `kitlib.py` | Cross-platform CLI: `doctor`, `init`, `validate` (OKF + links + ontology), `index`, `log`, `mcp-config`, `llm smoke\|ask [--graph]`, `graph build\|export\|query\|neighbors\|path\|pack`, `reconcile`, `todos`, `minutes`, `proposals`, `test` |
 | `kitgraph.py` · `kitrecon.py` | The vault as a graph (ontology, derived facts, exports, SQLite) · reconciliation (hubs, todos, minutes) |
-| `mcp/obsidian_bridge.py` · `mcp/bridge_policy.py` | MCP server exposing the vault to a local model — read/write tools plus `graph_context`, `graph_neighbors`, `graph_path`, `graph_query`, `vault_todos`, `file_meeting_minutes`; policy layer: read-only, allow/deny lists, confidential hiding, limits, propose mode, audit, bearer token |
+| `mcp/vault_bridge.py` · `mcp/bridge_policy.py` | MCP server exposing the vault to a local model — read/write tools plus `graph_context`, `graph_neighbors`, `graph_path`, `graph_query`, `vault_todos`, `file_meeting_minutes`; policy layer: read-only, allow/deny lists, confidential hiding, limits, propose mode, audit, bearer token |
 | `scripts/` | `install-macos.sh`, `install-windows.ps1`, `install-wsl.sh` |
 | `config/` | qmd `index.yml` starter, LM Studio `mcp.json` example and system prompt |
 | `tests/` | `unittest`/pytest suite: structure, OKF, links, CLI, bridge, docs; qmd and LLM e2e tests that skip cleanly when the tool or endpoint is absent |
