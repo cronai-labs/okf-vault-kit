@@ -19,6 +19,8 @@
   python kit.py todos [--digest] [--sync-done]   surface and reconcile every open task
   python kit.py minutes recap.txt --title "Sync"  file a recap as a meeting note
   python kit.py proposals list|show|apply|reject   human-in-the-loop writes from a --propose bridge (docs/security.md)
+  python kit.py policy export [--out FILE]  what is confidential in the vault, as JSON
+  python kit.py agent-settings claude-code [--apply|--check]   deny it to Claude Code's own tools (docs/security.md §5)
 
 Every command also runs as `uv run kit.py ...` with no manual dependency setup (inline script metadata above).
 """
@@ -42,6 +44,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+import kitagent  # noqa: E402
 import kitgraph  # noqa: E402
 import kitlib  # noqa: E402
 import kitproviders  # noqa: E402
@@ -166,6 +169,9 @@ def cmd_doctor(args) -> int:
                      f"run `kit.py mcp-config --client {client} --vault <your vault> --write` to replace it")))
     vault = vault_for_cfg
     if vault.exists():
+        # No paths from inside the vault in this row: the report goes out, and the paths are confidential.
+        where, state = kitagent.doctor_row(vault)
+        rows.append(("agent settings (claude-code)", where, state))
         rep = kitlib.validate_okf(vault)
         # Say when this is the shipped sample. Without it the row is identical for every tester
         # and cannot answer the one question it exists for: is my own vault healthy?
@@ -510,6 +516,77 @@ def cmd_mcp_config(args) -> int:
         print(note)
     if wsl_lmstudio:
         print(text)
+    return 0
+
+
+# ---------------------------------------------------------------- policy export / agent-settings
+
+def _refuse(message: str) -> int:
+    print(f"refused: {message}", file=sys.stderr)
+    return 2
+
+
+def cmd_policy_export(args) -> int:
+    vault = _vault(args.vault)
+    try:
+        text = kitagent.export_json(kitagent.policy_export(vault))
+    except kitlib.PolicyConfigError as exc:
+        return _refuse(f"{exc} — nothing is exported until it is fixed (`kit.py validate` reports it)")
+    if args.out:
+        out = Path(args.out).expanduser()
+        kitagent.write_atomic(out, text)
+        print(f"wrote {out} — it names every confidential path in the vault", file=sys.stderr)
+        return 0
+    sys.stdout.write(text)
+    return 0
+
+
+def cmd_agent_settings(args) -> int:
+    vault = _vault(args.vault)
+    if args.apply and vault == TEMPLATE_VAULT.resolve():
+        sys.exit("that vault is the kit's own sample, not yours — --apply would write into this checkout. "
+                 "Pass your own: --vault ~/Notes/vault")
+    try:
+        state = kitagent.claude_code_state(vault, allow_git=args.allow_git)
+    except kitlib.PolicyConfigError as exc:
+        return _refuse(f"{exc} — no settings are generated until it is fixed (`kit.py validate` reports it)")
+    except kitagent.AgentSettingsError as exc:
+        return _refuse(str(exc))
+    m = state.merge
+    for line in m.warnings:
+        print(f"warning: {line}", file=sys.stderr)
+    local = [f"warning: {flag} — it overrides what this command writes (docs/security.md §5)" for flag in state.local_flags]
+    summary = (f"{len(state.plan.deny)} deny rule(s) and {len(state.plan.deny_read)} sandbox denyRead entries wanted; "
+               f"{len(m.added)} list entries to add, {len(m.removed)} stale")
+    if args.check:
+        for line in local:
+            print(line, file=sys.stderr)
+        if not m.changed:
+            print(f"ok: {kitagent.SETTINGS_REL} matches the vault ({summary})")
+            return 0
+        extra = [f"{len(m.flags_set)} sandbox flag(s) not set"] if m.flags_set else []
+        if not (m.added or m.removed or m.flags_set):
+            extra.append(f"{kitagent.MANIFEST_REL} out of date")
+        print(f"drift: {', '.join([summary, *extra])} — {kitagent.APPLY_HINT}")
+        return 1
+    for note in state.plan.notes:
+        print(f"note: {note}")
+    for line in m.overrides:
+        print(f"overrides your value: {line}")
+    for line in local:
+        print(line)
+    if not m.changed:
+        print(f"nothing to do: {kitagent.SETTINGS_REL} already matches the vault ({summary})")
+        return 0
+    if not args.apply:
+        text = kitagent.diff(state)
+        sys.stdout.write(text or f"(no change to {kitagent.SETTINGS_REL}; only {kitagent.MANIFEST_REL} would be rewritten)\n")
+        print(f"dry run: {summary} — add --apply to write {kitagent.SETTINGS_REL} and {kitagent.MANIFEST_REL}")
+        return 0
+    kitagent.apply(vault, state)
+    print(f"wrote {vault / kitagent.SETTINGS_REL} and {kitagent.MANIFEST_REL}: {summary}")
+    print("  takes effect at the agent's next tool call; settings in .claude/settings.local.json, --settings and "
+          "managed settings still apply on top (docs/security.md §5)")
     return 0
 
 
@@ -1233,6 +1310,29 @@ def main(argv: list[str] | None = None) -> int:
         if _name == "reject":
             _p.add_argument("--reason")
         _p.set_defaults(fn=cmd_proposals)
+
+    p = sub.add_parser("policy", help="what the vault declares and marks confidential")
+    posub = p.add_subparsers(dest="policy_cmd", required=True)
+    p = posub.add_parser("export", allow_abbrev=False,
+                         help="print, as JSON, every confidential folder, path rule and file (paths as the vault spells them)")
+    p.add_argument("--vault"); p.add_argument("--out", metavar="FILE", help="write the JSON here instead of stdout")
+    p.set_defaults(fn=cmd_policy_export)
+    p = sub.add_parser("agent-settings", help="turn the policy export into a coding agent's own read restrictions")
+    asub = p.add_subparsers(dest="agent", required=True)
+    p = asub.add_parser("claude-code", allow_abbrev=False,
+                        help="merge Read(...) deny rules, sandbox denyRead entries and the sandbox switches into "
+                             "<vault>/.claude/settings.json (dry run by default)",
+                        description="Deny the confidential folders and files to Claude Code's own tools, in the vault's "
+                                    ".claude/settings.json. Only a deny list: Claude Code's allow rules cannot carve an "
+                                    "exception out of a deny, so there is no mode that denies the vault and allows open "
+                                    "folders (docs/security.md §5).")
+    p.add_argument("--vault")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="write settings.json and the kit's manifest (default: preview a diff)")
+    mode.add_argument("--check", action="store_true", help="exit 1 when settings.json differs from what --apply would write; writes nothing")
+    p.add_argument("--allow-git", action="store_true",
+                   help="do not deny .git — confidential notes tracked in git then stay readable through the history")
+    p.set_defaults(fn=cmd_agent_settings)
 
     args = ap.parse_args(argv)
     return args.fn(args)

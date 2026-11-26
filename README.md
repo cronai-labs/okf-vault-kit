@@ -44,7 +44,8 @@ assert things about CI and the git checkout and skip cleanly when run from it.
 |---|---|
 | `vault/` | The template vault (and sample): OKF-conformant frontmatter, 14 templates, 3 Bases with 16 views, example notes, conventions, AI workflows, `99-system/ontology.yml`, `context.jsonld` |
 | `kitproviders.py` | Swappable slots — `search` (qmd · naive), `llm` (any OpenAI-compatible endpoint), `embed`, `graph`; chosen per vault in `.kit/config.yml` |
-| `kit.py` · `kitlib.py` | Cross-platform CLI: `doctor`, `init`, `validate` (OKF + links + ontology), `index`, `log`, `mcp-config`, `llm smoke\|ask [--graph]`, `graph build\|export\|query\|neighbors\|path\|pack`, `reconcile`, `todos`, `minutes`, `proposals`, `test` |
+| `kit.py` · `kitlib.py` | Cross-platform CLI: `doctor`, `init`, `validate` (OKF + links + ontology), `index`, `log`, `mcp-config`, `llm smoke\|ask [--graph]`, `graph build\|export\|query\|neighbors\|path\|pack`, `reconcile`, `todos`, `minutes`, `proposals`, `policy export`, `agent-settings claude-code`, `test` |
+| `kitagent.py` | What is confidential, as JSON (`policy export`), and Claude Code's own read deny rules and sandbox settings built from it (`agent-settings claude-code`) |
 | `kitgraph.py` · `kitrecon.py` | The vault as a graph (ontology, derived facts, exports, SQLite) · reconciliation (hubs, todos, minutes) |
 | `mcp/vault_bridge.py` · `mcp/bridge_policy.py` | MCP server exposing the vault to a local model — read/write tools plus `graph_context`, `graph_neighbors`, `graph_path`, `graph_query`, `vault_todos`, `file_meeting_minutes`; policy layer: read-only, allow/deny lists, confidential hiding, limits, propose mode, audit, bearer token |
 | `scripts/` | `install-macos.sh`, `install-windows.ps1`, `install-wsl.sh` |

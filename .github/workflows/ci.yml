@@ -189,7 +189,7 @@ jobs:
       - name: secrets, over the whole history
         run: '"$RUNNER_TEMP/gitleaks" detect --redact --no-banner --exit-code 1'
       - name: python SAST
-        run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp -ll
+        run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py kitagent.py mcp -ll
 
   megalinter:
     # The single lint gate. `make lint` still byte-compiles and validates the

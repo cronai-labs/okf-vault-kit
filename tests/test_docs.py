@@ -48,7 +48,7 @@ class Docs(unittest.TestCase):
         help_text = subprocess.run([sys.executable, str(ROOT / "kit.py"), "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace", check=False).stdout
         mentioned = set()
         for doc in self.docs():
-            mentioned |= set(re.findall(r"kit\.py (doctor|init|validate|index|mcp-config|llm|log|test|graph|reconcile|todos|minutes|proposals)\b", doc.read_text(encoding="utf-8")))
+            mentioned |= set(re.findall(r"kit\.py (doctor|init|validate|index|mcp-config|llm|log|test|graph|reconcile|todos|minutes|proposals|policy|agent-settings)\b", doc.read_text(encoding="utf-8")))
         self.assertTrue(mentioned)
         for cmd in mentioned:
             self.assertIn(cmd, help_text)
