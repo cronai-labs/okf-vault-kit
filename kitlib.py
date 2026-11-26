@@ -756,12 +756,22 @@ class ConfidentialityPolicy:
     folders: tuple[str, ...] = ()
     paths: tuple[str, ...] = ()
     _regexes: tuple[re.Pattern[str], ...] = field(default=(), compare=False, repr=False)
+    # The entries as the config spells them (separators and `.` segments normalised, case kept),
+    # for the policy export: an agent's own deny lists match literally, not case-folded.
+    declared_folders: tuple[str, ...] = field(default=(), compare=False)
+    declared_paths: tuple[str, ...] = field(default=(), compare=False)
 
     @classmethod
     def build(cls, folders: Iterable[str] = (), paths: Iterable[str] = ()) -> ConfidentialityPolicy:
+        folders, paths = tuple(folders), tuple(paths)
         f = tuple(_match_form(x) for x in folders)
         p = tuple(_match_form(x) for x in paths)
-        return cls(f, p, tuple(_glob_regex(x) for x in p))
+        return cls(f, p, tuple(_glob_regex(x) for x in p), folders, paths)
+
+    def in_folder(self, rel: str) -> bool:
+        """Is this vault-relative path a declared folder or below one? (Path rules aside.)"""
+        form = _match_form(rel)
+        return any(form == d or form.startswith(d + "/") for d in self.folders)
 
     def covers(self, rel: str) -> bool:
         """Does a floor or a path rule make this vault-relative reference confidential? (`.md` optional)"""
