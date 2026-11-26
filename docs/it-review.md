@@ -55,6 +55,7 @@ starts it on stdin/stdout and it has no socket.
 |---|---|
 | the vault folder | your notes; `.kit/` inside it holds the graph, the audit log, any proposals and `config.yml` (the qmd collection name, provider choices, and the folders and files that are confidential as a whole) |
 | `~/.lmstudio/mcp.json`, `%APPDATA%\Claude\…`, `~/.cursor/mcp.json` | only when you run `kit.py mcp-config --write`; the previous file is backed up alongside. With `--bridge-http` and a token, the bearer token is stored there in plain text, and the kit sets the file and its backup to `0600` on macOS and Linux; the default stdio setup stores no token |
+| `<vault>/.claude/settings.json`, `<vault>/.kit/agent-settings/claude-code.json` | only when you run `kit.py agent-settings claude-code --apply`: Claude Code's read deny rules and sandbox switches for the vault's confidential folders and files, merged into the settings file, and the list of entries the kit added. Both name confidential paths; the agent is denied the second |
 | `~/.cache/qmd`, `~/.config/qmd` | qmd's index and models, if installed |
 
 Nothing is written to system locations. Nothing needs administrator rights at runtime; only the
@@ -99,7 +100,10 @@ or Cursor's agent has file and shell tools of its own. Started in the vault or i
 it, it reads confidential notes directly, without the bridge, and if its model is hosted, the
 content goes to that host.
 Only the agent's own controls (for Claude Code, a read deny rule together with its sandbox) or a
-separate OS user that owns the vault keep it out, and the kit configures neither.
+separate OS user that owns the vault keep it out. For Claude Code, `kit.py agent-settings
+claude-code --apply` writes those controls into the vault's settings from what the vault marks
+confidential, and `kit.py doctor` reports when they drift; for other agents the kit configures
+nothing.
 [security.md §5](security.md#5-coding-agents-and-other-direct-readers) has the settings, what was
 tested, and with which version.
 

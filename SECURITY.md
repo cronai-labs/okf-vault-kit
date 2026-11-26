@@ -32,7 +32,9 @@ causes the kit to make a network connection other than to the endpoint you confi
 
 ## What is deliberately not a vulnerability
 
-- **The kit ships no sandbox**, and configures none in your coding agent. A container answers
+- **The kit ships no sandbox** and runs none. On request (`kit.py agent-settings claude-code
+  --apply`) it switches on Claude Code's own sandbox and read deny lists in the vault's settings;
+  those are the agent's controls, and how well they hold is the agent's. A container answers
   "what can this code do to my machine", never "what may this model do to my notes" — for what
   reaches the vault through the bridge, the policy layer answers that.
   [`docs/security.md`](docs/security.md) explains what your OS already provides if you want
