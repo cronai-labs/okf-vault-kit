@@ -724,8 +724,11 @@ def cmd_minutes(args) -> int:
     if args.llm:
         extra = _llm_structure(text, args.base_url or DEFAULT_BASE_URL, args.model or DEFAULT_MODEL)
     try:
+        # Entity detection reads the graph; by default the redacted one, so a meeting note does not
+        # link or name a confidential person or project the recap happens to mention (#52).
         m = kitrecon.file_minutes(vault, text, args.title, date, args.project, people, args.kind,
-                                  dry_run=args.dry_run, force=args.force, daily=args.daily, extra=extra)
+                                  dry_run=args.dry_run, force=args.force, daily=args.daily, extra=extra,
+                                  hide_confidential=not args.show_confidential)
     except FileExistsError as exc:
         print(exc); return 1
     print(f"{'would write' if args.dry_run else 'wrote'} {m.path}")
@@ -1175,7 +1178,10 @@ def main(argv: list[str] | None = None) -> int:
                    help="list tasks in notes with sensitivity: confidential (left out by default, as on the bridge)"); p.set_defaults(fn=cmd_todos)
     p = sub.add_parser("minutes", help="file a recap as a meeting note"); p.add_argument("file", help="text file or - for stdin"); p.add_argument("--title", required=True); p.add_argument("--vault"); p.add_argument("--date"); p.add_argument("--project"); p.add_argument("--people", help="comma-separated names")
     p.add_argument("--kind", default="project"); p.add_argument("--llm", action="store_true", help="also ask the local model to structure the recap"); p.add_argument("--base-url"); p.add_argument("--model"); p.add_argument("--daily", action="store_true", help="link the note from today's daily note")
-    p.add_argument("--dry-run", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_minutes)
+    p.add_argument("--dry-run", action="store_true"); p.add_argument("--force", action="store_true")
+    p.add_argument("--show-confidential", action="store_true",
+                   help="resolve people and projects against notes with sensitivity: confidential too (left out by default, as on the bridge)")
+    p.set_defaults(fn=cmd_minutes)
     p = sub.add_parser("log", help="append an entry to log.md"); p.add_argument("message"); p.add_argument("--vault"); p.add_argument("--kind", default="Update", help="Update | Creation | Deprecation"); p.set_defaults(fn=cmd_log)
     p = sub.add_parser("mcp-config", help="print or write a client's MCP config that registers the vault bridge (okf-vault)")
     p.add_argument("--client", choices=["lmstudio", "claude-desktop", "cursor"], default="lmstudio"); p.add_argument("--vault")
