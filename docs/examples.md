@@ -95,7 +95,7 @@ pbpaste > /tmp/recap.txt    # or any text
 uv run kit.py minutes /tmp/recap.txt --title "Search relaunch sync" --daily
 ```
 
-Output names the note, the people and project it resolved, and the extracted actions; the recap stays verbatim under *Recap*. In LM Studio the same is one sentence: "File this recap as today's search relaunch sync" — the model calls `file_meeting_minutes`, you confirm the arguments.
+Output names the note, the people and project it resolved, and the extracted actions; the recap stays verbatim under *Recap*. The sample people are confidential: a recap that names one is filed as a note marked confidential itself, which the output says in one line; `--keep-open` files it open, with their names as written. In LM Studio the same is one sentence: "File this recap as today's search relaunch sync" — the model calls `file_meeting_minutes`, you confirm the arguments.
 
 ## 11. Ask the graph
 

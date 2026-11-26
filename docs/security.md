@@ -21,7 +21,7 @@ The layer is enforced inside the bridge and nowhere else. Everything in this sec
 | Read-only | `--read-only` | off — write tools are then **not registered at all**, so the model cannot even attempt them |
 | Write deny-list (folder prefixes, file names) | `--deny-write a,b` | `05-people, 99-system, 90-templates, 09-archive, .obsidian, .kit, index.md, log.md, context.jsonld` |
 | Write allow-list (only these are writable; deny still applies) | `--allow-write 02-meetings,01-journal` | everything not denied |
-| Confidential hiding | `--show-confidential` to disable | **on**: notes with `sensitivity: confidential` are invisible to the bridge's read, search, list, backlinks and todos tools, the `graph_*` tools and context packs, and `file_meeting_minutes` neither resolves people or projects to them nor names one in its result. Not to anything that reads the files directly (§5) |
+| Confidential hiding | `--show-confidential` to disable | **on**: notes with `sensitivity: confidential` are invisible to the bridge's read, search, list, backlinks and todos tools, the `graph_*` tools and context packs, and `file_meeting_minutes` links neither people nor projects to them and returns names, never paths. Not to anything that reads the files directly (§5) |
 | Size limit per write | `--max-write-bytes N` | 20 000 |
 | Rate limit | `--max-writes-per-minute N` | 20 |
 | Propose mode | `--propose` | off — with it, every write is recorded under `.kit/proposals/` and nothing changes until a human runs `kit.py proposals apply <id>` |
@@ -38,7 +38,7 @@ A confidential note's title, description, path and tasks are confidential too, n
 | `03-projects/projects.md` and `06-decisions/decision-log.md` (`kit.py reconcile --apply`) | gets no row; `reconcile` reports an existing row whose linked note's frontmatter says `sensitivity: confidential` as `hub_confidential_row`, and `--apply` removes it |
 | `00-home/todo-digest.md` (`kit.py todos --digest`) | its tasks are left out |
 | what `kit.py todos` prints, on the terminal and with `--json` | its tasks are left out, unless you pass `--show-confidential` |
-| the people and projects `kit.py minutes` and the bridge's `file_meeting_minutes` resolve a recap to | never resolved to it; `kit.py minutes --show-confidential` includes it, and the bridge tool's result names no confidential note |
+| a meeting note `kit.py minutes` or the bridge's `file_meeting_minutes` files | a note may raise its confidentiality, never lower it. `kit.py minutes` (and the tool under `--show-confidential`) links it and marks the meeting note confidential, so log.md and the daily note name the meeting without title or path. `kit.py minutes --keep-open` (and the tool by default) does not link it: a person's name is kept in `people:` as written, a project is left out, and the meeting keeps its template's sensitivity. A name passed in `people` comes back like an unknown one; a name only found in the recap does not, since only names of notes are found in a recap |
 | the graph files (`kit.py graph build`) and what the `kit.py graph` commands print | left out, with every derived value and finding that refers to it and every source or actor only confidential notes name, unless you pass `--show-confidential` |
 | the prompt `kit.py llm ask` sends to the model | neither its body nor its title or path |
 
