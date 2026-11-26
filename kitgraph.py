@@ -19,7 +19,7 @@ import re
 import sqlite3
 import urllib.parse
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -205,6 +205,7 @@ class Graph:
     edges: list[tuple[str, str, str, str]] = field(default_factory=list)   # src, pred, dst, origin
     findings: list[Finding] = field(default_factory=list)
     built_at: str = ""
+    redacted: bool = False         # True once `redact` dropped the confidential notes; recorded in exports
     _edge_set: set[tuple[str, str, str]] = field(default_factory=set, repr=False)
 
     def add_edge(self, src: str, pred: str, dst: str, origin: str = "frontmatter") -> bool:
@@ -687,6 +688,47 @@ def context_pack(g: Graph, node: str, depth: int = 1) -> str:
     return "\n".join(lines) + "\n"
 
 
+
+# ---------------------------------------------------------------- confidential redaction
+
+def node_confidential(node: Node, file_confidential: Callable[[str], bool]) -> bool:
+    """Is this graph node a confidential note? `file_confidential` answers for its vault-relative path.
+
+    Actors, sources and virtual nodes carry no note frontmatter. The normalised props are checked
+    first because the ontology can map an alias onto `sensitivity`; the file check is what catches a
+    note whose frontmatter did not parse, whose props are therefore empty.
+    """
+    if getattr(node, "kind", "") != "note":
+        return False
+    if str(node.props.get("sensitivity", "")).strip().lower() == kitlib.CONFIDENTIAL:
+        return True
+    return file_confidential(node.path or node.id)
+
+
+def redact(g: Graph, file_confidential: Callable[[str], bool]) -> Graph:
+    """A copy of `g` without its confidential notes, their edges and their findings.
+
+    One function for the bridge and the CLI, so what an agent's graph tools see and what
+    `kit.py graph` and `llm ask --graph` print or write cannot drift apart (#52). Filtering each
+    tool's output is not enough: the nodes table and the exports carry every note's title,
+    description and full frontmatter, and a context pack labels each neighbour by its title.
+    """
+    hidden = {nid for nid, n in g.nodes.items() if node_confidential(n, file_confidential)}
+    red = Graph(built_at=g.built_at, redacted=True)
+    red.nodes = {nid: n for nid, n in g.nodes.items() if nid not in hidden}
+    for src, pred, dst, origin in g.edges:
+        if src not in hidden and dst not in hidden:
+            red.add_edge(src, pred, dst, origin)
+    red.findings = [f for f in g.findings if f.node not in hidden]
+    return red
+
+
+def redact_vault(g: Graph, vault: Path) -> Graph:
+    """`redact` with the kit's shared predicate, for a graph built from `vault` on disk."""
+    vault = Path(vault)
+    return redact(g, lambda rel: kitlib.is_confidential(vault, rel))
+
+
 def mentions(g: Graph, text: str, types_excluded: Iterable[str] = ("system",)) -> list[str]:
     """Note ids whose title or alias appears in free text (word boundary, case-insensitive), longest titles first."""
     out: list[tuple[int, str]] = []
@@ -843,6 +885,9 @@ def to_jsonld(g: Graph, context: dict[str, Any], base: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- sqlite
 
+CONFIDENTIAL_HIDDEN = "hidden"
+CONFIDENTIAL_SHOWN = "shown"
+
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, type TEXT, title TEXT, description TEXT, path TEXT, mtime REAL, props TEXT);
@@ -890,6 +935,9 @@ def _fill_sqlite(con: sqlite3.Connection, g: Graph) -> None:
     con.execute("INSERT INTO meta VALUES ('built_at', ?)", (g.built_at,))
     con.execute("INSERT INTO meta VALUES ('nodes', ?)", (str(len(g.nodes)),))
     con.execute("INSERT INTO meta VALUES ('edges', ?)", (str(len(g.edges)),))
+    # What `kit.py graph query` checks before it serves a file on disk: a database built with
+    # --show-confidential, or by a kit that did not redact yet, must not answer a default query.
+    con.execute("INSERT INTO meta VALUES ('confidential', ?)", (CONFIDENTIAL_HIDDEN if g.redacted else CONFIDENTIAL_SHOWN,))
     for n in g.nodes.values():
         con.execute("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?)",
                     (n.id, n.kind, n.type, n.title, n.description, n.path, n.mtime, json.dumps(_json_safe(n.props), ensure_ascii=False)))
@@ -905,6 +953,26 @@ def _fill_sqlite(con: sqlite3.Connection, g: Graph) -> None:
     con.executemany("INSERT OR IGNORE INTO edges VALUES (?,?,?,?)", g.edges)
     con.executemany("INSERT INTO findings VALUES (?,?,?,?,?)", [(f.level, f.code, f.node, f.message, f.suggestion) for f in g.findings])
     con.commit()
+
+
+
+def sqlite_confidential(path: Path) -> str | None:
+    """The `confidential` mode a graph database on disk was built in, or None when it does not say.
+
+    None covers a database from a kit before #52, which redacted nothing; callers treat it as
+    holding confidential notes.
+    """
+    try:
+        con = sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key='confidential'").fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+    return row[0] if row else None
 
 
 def query_sqlite(con: sqlite3.Connection, sql: str, limit: int = 200) -> tuple[list[str], list[tuple]]:

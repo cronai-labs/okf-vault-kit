@@ -345,21 +345,10 @@ class Guarded:
         return red
 
     def _redact_graph(self, g):
-        hidden = {nid for nid, n in g.nodes.items() if self._node_confidential(nid, n)}
-        red = kitgraph.Graph(built_at=g.built_at)
-        red.nodes = {nid: n for nid, n in g.nodes.items() if nid not in hidden}
-        for src, pred, dst, origin in g.edges:
-            if src not in hidden and dst not in hidden:
-                red.add_edge(src, pred, dst, origin)
-        red.findings = [f for f in g.findings if f.node not in hidden]
-        return red
-
-    def _node_confidential(self, nid: str, node) -> bool:
-        if getattr(node, "kind", "") != "note":
-            return False       # actors, sources and virtual nodes carry no note frontmatter
-        if str(node.props.get("sensitivity", "")).lower() == "confidential":
-            return True
-        return self._confidential(node.path or nid)
+        # The same redaction `kit.py graph` and `llm ask --graph` apply, so the CLI cannot show a
+        # node the bridge hides. The file check is this layer's: it fails closed on a reference it
+        # cannot resolve or a vault it cannot look into.
+        return kitgraph.redact(g, self._confidential)
 
     # ------------------------------------------------------------ write side
     def _write(self, tool: str, args: dict[str, Any], target: str, payload: str, fn: Callable[[], Any],
