@@ -729,12 +729,30 @@ def _form(root: Path, entry: str) -> str | None:
     return None if p is None else os.path.normpath(str(p)).casefold()
 
 
+def _at_or_under(form: str, base: str) -> bool:
+    return form == base or form.startswith(base.rstrip(os.sep) + os.sep)
+
+
+def _glob_reaches(glob: str, glob_form: str, form: str) -> bool:
+    """Can the glob `glob` (literal start `glob_form`) match `form` or a path under it?
+
+    When the literal start ends mid-name (`./05-peo*`), it is compared as a string, so it reaches
+    `05-people`; when it ends at a `/` (`./05-people-public/**`), only paths at or under that folder
+    count, so a sibling that merely starts the same (`05-people`) is not reached.
+    """
+    cut = min((i for i, c in enumerate(glob) if c in _WILDCARDS), default=len(glob))
+    mid_name = cut > 0 and glob[cut - 1] not in "/\\"
+    return _at_or_under(form, glob_form) or (mid_name and form.startswith(glob_form))
+
+
 def _reopens(root: Path, allow: str, denied: list[str]) -> bool:
     """Could this `allowRead` entry re-open part of a denied path? (A narrower allow wins.)
 
     Conservative, since doctor's "ok" must mean ok: an entry at or under a denied path is flagged,
-    and so is a glob whose literal start (the text before its first wildcard, compared as a string,
-    so `./0*` reaches `./05-people`) is a prefix of a denied path or lies under one. Case is ignored.
+    and so is a glob whose literal start (the text before its first wildcard) is a prefix of a
+    denied path or lies under one. A literal start that ends mid-name is compared as a string, so
+    `./0*` reaches `./05-people`; one that ends at a `/` is compared by whole names, so
+    `./05-people-public/**` does not. Case is ignored.
     """
     a_form = _form(root, allow)
     if a_form is None:
@@ -745,11 +763,11 @@ def _reopens(root: Path, allow: str, denied: list[str]) -> bool:
         if d_form is None:
             continue
         d_glob = any(c in _WILDCARDS for c in d)
-        if a_form == d_form or a_form.startswith(d_form.rstrip(os.sep) + os.sep):
+        if _at_or_under(a_form, d_form):
             return True
-        if a_glob and (d_form.startswith(a_form) or a_form.startswith(d_form)):
+        if a_glob and _glob_reaches(allow, a_form, d_form):
             return True
-        if d_glob and a_form.startswith(d_form):
+        if d_glob and _glob_reaches(d, d_form, a_form):
             return True
     return False
 

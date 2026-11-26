@@ -643,6 +643,17 @@ class Doctor(_Vault):
         for allow in ("./", "./04-areas/**", "./05", "./06-*/x.md"):
             self.assertFalse(kitagent._reopens(root, allow, denied), allow)
 
+    def test_reopens_tells_a_sibling_with_the_same_prefix_from_a_glob_cut_mid_name(self):
+        root = self.v.resolve()
+        denied = ["./05-people", "./08-resources/exports/*.csv"]
+        # The literal start ends mid-name: `05-peo*` matches `05-people` itself.
+        for allow in ("./05-peo*", "./05-people*", "./08-resources/exp*/a.csv"):
+            self.assertTrue(kitagent._reopens(root, allow, denied), allow)
+        # A complete other name that merely starts the same reaches neither denied path.
+        for allow in ("./05-people-public/**", "./05-people-public/*.md", "./08-resources/exports-old/*",
+                      "./08-resources/exports-old/a.csv"):
+            self.assertFalse(kitagent._reopens(root, allow, denied), allow)
+
     def test_a_negation_after_the_kits_rules_is_flagged(self):
         agent(self.v, "--apply")
         s = read_settings(self.v)
