@@ -713,6 +713,8 @@ def _resolve_sandbox_path(root: Path, entry: str) -> Path | None:
         return Path(os.path.realpath(entry))
     if entry.startswith("~/") or entry == "~":
         return Path(os.path.realpath(Path(entry).expanduser()))
+    if os.path.isabs(entry):            # a drive path on Windows (`D:\v\x`): resolved like `/x`
+        return Path(os.path.realpath(entry))
     return Path(root) / entry
 
 
