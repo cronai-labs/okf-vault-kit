@@ -758,9 +758,21 @@ def redact(g: Graph, file_confidential: Callable[[str], bool]) -> Graph:
     red = Graph(built_at=g.built_at, signature=g.signature, redacted=True)
     red.nodes = {nid: dataclasses.replace(n, derived={k: v for k, v in n.derived.items() if not _names(v, hidden)})
                  for nid, n in g.nodes.items() if nid not in hidden}
+    kept_edge: set[str] = set()
+    touched_hidden: set[str] = set()
     for src, pred, dst, origin in g.edges:
         if src not in hidden and dst not in hidden:
             red.add_edge(src, pred, dst, origin)
+            kept_edge.update((src, dst))
+        else:
+            touched_hidden.update((src, dst))
+    # A source or actor exists because some note's frontmatter named it (`sources:`, `generated.by`).
+    # One that only confidential notes named carries their content — a term sheet's title and URL,
+    # a bot's name — so it goes with them. One a visible note also names stays.
+    for nid in touched_hidden - kept_edge - hidden:
+        if nid in red.nodes and red.nodes[nid].kind in ("source", "actor"):
+            del red.nodes[nid]
+            hidden.add(nid)
     red.findings = [f for f in g.findings if f.node not in hidden and not hidden.intersection(f.refs)]
     return red
 

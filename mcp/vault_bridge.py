@@ -282,7 +282,7 @@ class FsBackend:
         a note into a `_`-folder is how a user hides it. Keying on the path set as well means the
         graph tools stop answering about such a note on the very next call.
         """
-        return frozenset((p.relative_to(self.vault).as_posix(), p.stat().st_mtime_ns) for p in kitlib.iter_markdown(self.vault))
+        return kitgraph.note_set_signature(self.vault)   # one definition, shared with `kit.py graph query`
 
     def graph(self) -> kitgraph.Graph:
         sig = self._note_set_signature()

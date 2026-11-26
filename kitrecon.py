@@ -404,7 +404,12 @@ def _reconcile_superseded(vault: Path, g: kitgraph.Graph, apply: bool) -> list[C
     changes = []
     for f in g.findings:
         if f.code == "state_conflict":
-            ch = Change("state_conflict", f.node, f.message)
+            # The message names the superseding note by path; when that note is confidential, the
+            # reconcile output (and `--json`, which agents read) says so instead of naming it (#52).
+            msg = f.message
+            if any(_node_confidential(vault, g, r) for r in f.refs):
+                msg = f"is superseded by a note marked `sensitivity: confidential` but has state `{g.nodes[f.node].props.get('state')}`" if f.node in g.nodes else "is superseded by a note marked `sensitivity: confidential`"
+            ch = Change("state_conflict", f.node, msg)
             if apply:
                 kitlib.set_frontmatter(vault / f.node, {"state": "superseded"})
                 ch.applied = True

@@ -413,6 +413,42 @@ class RedactionLeavesNoHiddenIdInVisibleNodes(unittest.TestCase):
         self.assertTrue(kept, "the redacted graph still reports")
 
 
+class SourcesAndActorsOfHiddenNotesGo(unittest.TestCase):
+    """A source or actor only a confidential note names carries that note's content (a title, a URL)."""
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+        people = self.vault / "05-people" / "alex-example.md"
+        text = people.read_text(encoding="utf-8")
+        people.write_text(text.replace("sensitivity: confidential",
+                                       "sensitivity: confidential\nsources: [{ id: acq, resource: \"https://deals.example/falcon-term-sheet\", "
+                                       "title: \"Falcon term sheet\" }]", 1).replace("generated: { by: human:me,", "generated: { by: \"agent:falcon-dealbot\",", 1),
+                          encoding="utf-8")
+        visible = self.vault / "03-projects" / "search-relaunch.md"
+        vtext = visible.read_text(encoding="utf-8")
+        visible.write_text(vtext.replace("---\n", "---\nsources: [{ id: shared, resource: \"https://shared.example/spec\", title: \"Shared spec\" }]\n", 1),
+                           encoding="utf-8")
+        self.full = kitgraph.build_graph(self.vault)
+
+    def test_the_fixture_creates_both_nodes(self):
+        ids = " ".join(self.full.nodes)
+        self.assertIn("falcon-term-sheet", ids)
+        self.assertIn("falcon-dealbot", ids)
+
+    def test_redaction_drops_them_and_keeps_a_visible_notes_source(self):
+        red = kitgraph.redact_vault(self.full, self.vault)
+        dump = json.dumps(kitgraph.to_json(red), ensure_ascii=False)
+        for marker in ("falcon-term-sheet", "Falcon term sheet", "falcon-dealbot"):
+            self.assertNotIn(marker, dump)
+        self.assertIn("Shared spec", dump, "a source a visible note names stays")
+
+    def test_the_bridge_query_does_not_list_them(self):
+        g = bp.Guarded(ob.FsBackend(self.vault), bp.Policy(audit_path=None), self.vault)
+        rows = g.graph_query("select id, title from nodes where kind in ('source', 'actor')", 1000)["rows"]
+        self.assertNotIn("falcon", json.dumps(rows).lower())
+
+
 class GraphQueryFollowsTheNotes(unittest.TestCase):
     """`graph query` answers from .kit/graph.sqlite only while the notes are those it was built from."""
 

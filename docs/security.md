@@ -39,14 +39,14 @@ A confidential note's title, description, path and tasks are confidential too, n
 | `00-home/todo-digest.md` (`kit.py todos --digest`) | its tasks are left out |
 | what `kit.py todos` prints, on the terminal and with `--json` | its tasks are left out, unless you pass `--show-confidential` |
 | the people and projects `kit.py minutes` and the bridge's `file_meeting_minutes` resolve a recap to | never resolved to it; `kit.py minutes --show-confidential` includes it, and the bridge tool's result names no confidential note |
-| the graph files (`kit.py graph build`) and what the `kit.py graph` commands print | left out, with every derived value and finding that refers to it, unless you pass `--show-confidential` |
+| the graph files (`kit.py graph build`) and what the `kit.py graph` commands print | left out, with every derived value and finding that refers to it and every source or actor only confidential notes name, unless you pass `--show-confidential` |
 | the prompt `kit.py llm ask` sends to the model | neither its body nor its title or path |
 
 A count line says how much was left out in `index.md` ("N file(s) not listed: marked `sensitivity: confidential`, or unreadable."), in the todo digest, in what `kit.py todos` prints, in the output of `kit.py graph build`, and in the console line of `kit.py llm ask`. The other `kit.py graph` commands (`export`, `query`, `neighbors`, `path`, `pack`) leave confidential notes out without saying so, and the hub passes of `reconcile` add no row for one without a finding; only the removal of an existing row is reported.
 
 A note the kit cannot read or parse (broken frontmatter, a frontmatter block hidden behind a byte-order mark, a file that is not UTF-8) counts as confidential: "could not tell" is not "not confidential". One exception: `reconcile` removes an existing hub row only when the linked note's frontmatter says `sensitivity: confidential`. A row whose note cannot be read or parsed stays, and is reported as `hub_row_unverifiable` for you to check: a row is deleted on what the note says, never on a guess.
 
-Files generated before this rule keep their old lines until they are generated again. To clean a vault after upgrading, run `kit.py index`, `kit.py reconcile --apply`, `kit.py todos --digest` and `kit.py graph build`. The vault's git history, and every clone of it, keeps the old lines regardless.
+The generated files are snapshots. When you mark a note confidential, its title, description and tasks stay in `index.md`, the hubs, the digest and the graph files until they are generated again, and until then `kit.py llm ask`, the bridge and anything you attach read them as ordinary text. So after marking a note confidential, and once after upgrading from a kit without this rule, run `kit.py index`, `kit.py reconcile --apply`, `kit.py todos --digest` and `kit.py graph build`. The vault's git history, and every clone of it, keeps the old lines regardless. `kit.py validate` and `kit.py reconcile` report problems per file on your terminal and may name a confidential note's path there; `reconcile` names no confidential note in a state conflict it reports.
 
 ### Recommended profiles
 

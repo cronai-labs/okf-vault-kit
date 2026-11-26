@@ -448,8 +448,14 @@ def check_links(root: Path) -> Report:
             if not target:
                 continue
             resolved = root / target.lstrip("/") if target.startswith("/") else (path.parent / target).resolve()
-            if not resolved.exists():
+            try:
+                resolved.stat()
+            except (FileNotFoundError, NotADirectoryError):
                 rep.errors.append(f"{rel}: broken link -> {target}")
+            except OSError as exc:
+                # A folder we may not read (permissions, an agent's sandbox) is not a broken link, and
+                # before Python 3.14 Path.exists() raised here and took the whole validate run down.
+                rep.warnings.append(f"{rel}: link target cannot be checked ({exc.__class__.__name__}) -> {target}")
         for m in WIKILINK_RE.finditer(text):
             target = m.group(1).strip()
             if is_template and PLACEHOLDER_RE.search(target):

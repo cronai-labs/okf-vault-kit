@@ -383,3 +383,36 @@ class Minutes(_TempVault):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SupersededByAConfidentialNote(_TempVault):
+    """`reconcile` (and `--json`, which agents read) names no confidential note in a state conflict."""
+    SECRET = "06-decisions/2026-09-15-embedding-model-for-de-en.md"
+    ADOPT = "06-decisions/2026-09-08-adopt-qmd-for-local-search.md"
+
+    def test_the_conflict_is_reported_without_the_path(self):
+        p = self.v / self.SECRET
+        text = p.read_text(encoding="utf-8")
+        p.write_text(text.replace("sensitivity: internal", "sensitivity: confidential\nsupersedes: \"[Adopt qmd](2026-09-08-adopt-qmd-for-local-search.md)\"", 1),
+                     encoding="utf-8", newline="\n")
+        changes = kitrecon.reconcile(self.v, apply=False, today=dt.date(2026, 9, 14))
+        conflicts = [c for c in changes if c.code == "state_conflict"]
+        self.assertEqual([c.file for c in conflicts], [self.ADOPT], [c.render() for c in changes])
+        self.assertIn("a note marked `sensitivity: confidential`", conflicts[0].message)
+        for c in changes:
+            self.assertNotIn("embedding-model", c.render())
+
+
+@unittest.skipIf(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0), "POSIX permissions, not root")
+class ValidateAnUnreadableLinkTarget(_TempVault):
+    """A link into a folder the kit may not read is a warning, not a crash (Path.exists() raised before 3.14)."""
+
+    def test_validate_reports_and_finishes(self):
+        self.write("07-knowledge/locked/hidden.md", "---\ntype: note\ntitle: Hidden\ndescription: x\n---\nbody\n")
+        self.write("07-knowledge/points-in.md", "---\ntype: note\ntitle: Points in\ndescription: x\n---\n[hidden](locked/hidden.md)\n")
+        locked = self.v / "07-knowledge" / "locked"
+        locked.chmod(0)
+        self.addCleanup(locked.chmod, 0o755)
+        rep = kitlib.check_links(self.v)
+        self.assertTrue(any("cannot be checked" in w and "locked/hidden.md" in w for w in rep.warnings), rep.warnings)
+        self.assertFalse(any("locked/hidden.md" in e for e in rep.errors), rep.errors)
