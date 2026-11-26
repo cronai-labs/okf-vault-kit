@@ -4,6 +4,8 @@
 commands and `llm ask --graph` read the graph through the same redaction as the bridge's graph
 tools, and `--show-confidential` opts back in with the bridge's meaning.
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -11,7 +13,9 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import threading
+import types
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -542,6 +546,32 @@ class LlmAskKeepsNSources(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(len(self.sources()), int(n), f"-n {n} must send {n} visible source(s)")
             self.assertEqual(LEFT_OUT.search(r.stdout).group(1), "1", "only what ranked ahead of the last source is counted")
+
+
+class MinutesPassesTheConfidentialChoice(unittest.TestCase):
+    def test_hidden_by_default_and_shown_on_request(self):
+        seen = []
+
+        def record(*args, **kw):
+            seen.append(kw)
+            return types.SimpleNamespace(path="02-meetings/x.md", people=[], project=None, unresolved=[],
+                                         outcomes=[], decisions=[], actions=[], skipped=[])
+
+        tmp = Path(tempfile.mkdtemp(prefix="okf-minutes-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        (tmp / "vault").mkdir()
+        recap = tmp / "recap.txt"
+        recap.write_text("We met.\n", encoding="utf-8")
+        real = kit.kitrecon.file_minutes
+        kit.kitrecon.file_minutes = record
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                for extra in ((), ("--show-confidential",)):
+                    self.assertEqual(kit.main(["minutes", str(recap), "--title", "Sync", "--vault", str(tmp / "vault"),
+                                               "--dry-run", *extra]), 0)
+        finally:
+            kit.kitrecon.file_minutes = real
+        self.assertEqual([kw.get("hide_confidential") for kw in seen], [True, False])
 
 
 if __name__ == "__main__":
