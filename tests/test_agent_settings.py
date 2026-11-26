@@ -153,6 +153,16 @@ class PolicyExport(_Vault):
         self.assertIn("Read(./03-projects/board/**)", plan.deny)
         self.assertIn("Read(./03-projects/shared/x.md)", plan.deny)
 
+    def test_a_link_to_the_parent_of_a_floor_lists_the_floor_as_a_folder(self):
+        # The link itself points outside the floor; the floor turns up one level below it.
+        set_config(self.v, 'confidentiality:\n  confidential_folders: ["04-areas/hr"]\n')
+        write(self.v, "04-areas/hr/pay.md", "# Pay\n")
+        write(self.v, "04-areas/hr/deep/bands.md", "# Bands\n")
+        symlink(self, self.v / "areas-alias", Path("04-areas"))
+        files = self.export()["confidential_files"]
+        self.assertIn("areas-alias/hr/", files)
+        self.assertEqual([f for f in files if f.startswith("areas-alias/hr/")], ["areas-alias/hr/"])
+
     def test_refuses_a_broken_config_with_nothing_on_stdout(self):
         set_config(self.v, "confidentiality:\n  confidential_folder: [x]\n")
         r = run("policy", "export", "--vault", str(self.v))

@@ -98,9 +98,9 @@ def policy_export(root: Path) -> dict[str, Any]:
     tools read attachments, `.trash` and `_`-prefixed folders like any other file. A folder the walk
     cannot list is listed with a trailing `/`, in both lists: what is in it cannot be told.
 
-    Symlinked folders are followed, since an agent reads through them; one that points into a declared
-    folder is listed whole with a trailing `/`, and so is one that points back up its own path (a
-    cycle), which is not followed again.
+    Symlinked folders are followed, since an agent reads through them; a folder that lands in a declared
+    folder once links are resolved (a link into it, or a folder below a link to its parent) is listed
+    whole with a trailing `/`, and so is a link back up its own path (a cycle), which is not followed again.
     """
     root = Path(root).resolve()
     policy = kitlib.confidentiality_policy(root)
@@ -137,14 +137,15 @@ def policy_export(root: Path) -> dict[str, Any]:
                 # it, and whether an agent resolves it before matching a deny rule was not tested.
                 files.append(rel + "/")
                 continue
-            if os.path.islink(full):
-                try:
-                    inner = os.path.relpath(real, real_root).replace(os.sep, "/")
-                except ValueError:
-                    inner = ".."                  # another drive (Windows): outside the vault
-                if not inner.startswith("../") and inner != ".." and policy.in_folder(inner):
-                    files.append(rel + "/")       # a link into a declared folder: denied whole
-                    continue
+            # Where it lands, for every folder and not only a link: below a link to the parent of a
+            # declared folder (`alias -> 04-areas` for `04-areas/hr`), `alias/hr` is no link itself.
+            try:
+                inner = os.path.relpath(real, real_root).replace(os.sep, "/")
+            except ValueError:
+                inner = ".."                      # another drive (Windows): outside the vault
+            if not inner.startswith("../") and inner != ".." and policy.in_folder(inner):
+                files.append(rel + "/")           # reached through a link into a declared folder: denied whole
+                continue
             chains[full] = (*chain, real)
             keep.append(d)
         dirnames[:] = keep
