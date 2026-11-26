@@ -115,9 +115,6 @@ def _prefix_hit(rel: str, prefixes: tuple[str, ...]) -> str | None:
     return None
 
 
-_unparsed_frontmatter = kitlib.unparsed_frontmatter
-
-
 class Guarded:
     """Wraps a backend (FsBackend or CliBackend) and enforces the policy on every call."""
 
@@ -174,9 +171,7 @@ class Guarded:
             note = kitlib.parse_note(p, self.vault)
         except Exception:  # noqa: BLE001 — undecodable or unreadable: we cannot prove it is safe
             return True
-        if note.frontmatter is None:
-            return bool(note.fm_error) or _unparsed_frontmatter(note.body)
-        return str(note.frontmatter.get("sensitivity", "")).lower() == "confidential"
+        return kitlib.note_confidential(note)
 
     def _resolve_rel(self, file: str, must_exist: bool = True) -> str:
         """Vault-relative path of a note reference, using the backend's resolver when it has one.

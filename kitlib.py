@@ -658,6 +658,41 @@ def unparsed_frontmatter(body: str) -> bool:
     return body.lstrip("\ufeff \t\r\n").startswith("---")
 
 
+CONFIDENTIAL = "confidential"
+
+
+def note_confidential(note: Note) -> bool:
+    """Is this parsed note confidential? The one predicate every reader and writer of the kit shares.
+
+    The bridge, `llm ask`, `index.md`, the hub tables and the todo digest used to decide this in
+    three places, and the generated files did not decide it at all: they copied a confidential
+    note's title, description and tasks into ordinary files the bridge then served whole (#52).
+    Fails closed like the bridge: frontmatter we could not parse (a YAML error, a block a BOM
+    hid) counts as confidential, because "I could not tell" is not "it is not confidential".
+    """
+    if note.frontmatter is None:
+        return bool(note.fm_error) or unparsed_frontmatter(note.body)
+    return str(note.frontmatter.get("sensitivity", "")).strip().lower() == CONFIDENTIAL
+
+
+def is_confidential(root: Path, rel: str) -> bool:
+    """`note_confidential` for a vault-relative reference (`.md` optional).
+
+    A reference to no file is not confidential (there is nothing to hide, and callers that must
+    treat an unresolvable reference as the worst case \u2014 the bridge \u2014 check that before calling).
+    A file we cannot read or decode is confidential.
+    """
+    root = Path(root)
+    path = root / (rel if rel.endswith(".md") else rel + ".md")
+    if not path.is_file():
+        return False
+    try:
+        note = parse_note(path, root)
+    except Exception:  # noqa: BLE001 \u2014 unreadable or undecodable: we cannot prove it is safe
+        return True
+    return note_confidential(note)
+
+
 def slugify(text: str, max_len: int = 60) -> str:
     s = re.sub(r"\(example\)", "", text, flags=re.I).strip().lower()
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")

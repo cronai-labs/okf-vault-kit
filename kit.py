@@ -976,20 +976,9 @@ def _confidential(vault: Path, rel: str) -> bool:
     """True when the note carries `sensitivity: confidential` — the line the MCP bridge enforces."""
     if not rel or rel.startswith(("http://", "https://")):
         return False
-    path = vault / (rel if rel.endswith(".md") else rel + ".md")
-    if not path.is_file():
-        return False
-    try:
-        note = kitlib.parse_note(path, vault)
-    except Exception:  # noqa: BLE001 — an unreadable note is not a reason to leak it
-        return True
-    if note.frontmatter is None:
-        # Fail closed, like the bridge: a note whose YAML has any syntax error, or whose block a
-        # BOM hid, would otherwise have its body placed verbatim into the prompt. An unresolvable
-        # path stays False above — the bridge answers False there too, and mirroring it wrongly
-        # would withhold notes that are fine.
-        return bool(note.fm_error) or kitlib.unparsed_frontmatter(note.body)
-    return str(note.frontmatter.get("sensitivity", "")).lower() == "confidential"
+    # The shared predicate fails closed like the bridge: an unreadable note, a YAML error or a
+    # block a BOM hid counts as confidential. A path to no file stays False, as in the bridge.
+    return kitlib.is_confidential(vault, rel)
 
 
 def _search_hits(vault: Path, question: str, n: int, collection: str | None,
