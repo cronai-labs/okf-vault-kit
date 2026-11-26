@@ -422,24 +422,43 @@ class Minutes(_TempVault):
                 self.assertEqual(m.confidential_links, [])
                 self.assertEqual(self.fm(m)["sensitivity"], "confidential", "a template's level is never lowered")
 
+    def test_force_over_a_raised_note_keeps_it_confidential(self):
+        """`--force` replaces a meeting note; it must not lower one an earlier run raised."""
+        first = kitrecon.file_minutes(self.v, "Alex Example joined.\nDecision: ship it\n", "Forced", self.DAY)
+        self.assertTrue(kitlib.is_confidential(self.v, first.path))
+        again = kitrecon.file_minutes(self.v, "Nobody named.\nDecision: wait\n", "Forced", self.DAY, mode="plain", force=True)
+        self.assertEqual(again.path, first.path)
+        self.assertTrue(kitlib.is_confidential(self.v, again.path))
+
+    def test_an_unknown_attendee_is_plain_text_and_leaves_no_graph_warning(self):
+        import kitgraph
+        m = kitrecon.file_minutes(self.v, "Decision: ship it\n", "Attendees", self.DAY, people=["Nobody Known"], mode="plain")
+        fm = self.fm(m)
+        self.assertEqual((fm["people"], fm["attendees"]), ([], ["Nobody Known"]))
+        g = kitgraph.build_graph(self.v)
+        self.assertEqual([f.render() for f in g.findings if f.node == m.path and f.code == "unresolved_ref"], [])
+
     def test_raise_keeps_an_unknown_name_as_written(self):
         m = kitrecon.file_minutes(self.v, "x", "Explicit", self.DAY, people=["Sam", "Unknown Person"], dry_run=True)
         self.assertEqual(m.people, ["05-people/sam-example.md"])
         self.assertEqual(m.names, ["Sam Example", "Unknown Person"])
         self.assertEqual(m.unresolved, ["Unknown Person"])
 
-    def test_plain_keeps_a_confidential_name_as_the_recap_wrote_it(self):
-        """The note's `people:` echoes the recap ("alex example", "Sam"); the confidential note's title,
-        description and path never reach it. A person who is not confidential is still linked."""
+    def test_plain_lists_only_visible_people_from_the_recap(self):
+        """Plain mode lists a person the recap mentions only when it links to a visible note: listing a
+        confidential one while an unknown name is never found would tell them apart. The recap stays
+        verbatim in the body. The confidential note's title, description and path never reach the
+        frontmatter."""
         self.write("05-people/robin-visible.md", VISIBLE_PERSON)
         recap = "Today alex example, Sam and Robin Visible walked through the numbers.\nDecision: ship it\n"
         m = kitrecon.file_minutes(self.v, recap, "Numbers sync", self.DAY, mode="plain")
         self.assertEqual(m.people, ["05-people/robin-visible.md"])
-        self.assertEqual(sorted(m.names), ["Robin Visible", "Sam", "alex example"])
-        self.assertEqual(sorted(m.unresolved), ["Sam", "alex example"])
+        self.assertEqual(m.names, ["Robin Visible"])
+        self.assertEqual(m.unresolved, [])
         self.assertEqual(m.confidential_links, [])
         fm = self.fm(m)
-        self.assertEqual(sorted(fm["people"]), ["Robin Visible", "Sam", "alex example"])
+        self.assertEqual(fm["people"], ["Robin Visible"])
+        self.assertNotIn("attendees", fm)
         self.assertEqual(fm["sensitivity"], "internal", "plain mode keeps the template's level")
         raw = (self.v / m.path).read_text(encoding="utf-8").split("\n---\n", 1)[0]
         for leak in ("Alex Example", "Sam Example", "05-people/alex", "05-people/sam", ALEX[2], SAM[2]):

@@ -782,12 +782,10 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     else:
         m.people = found_people
         m.names = [linkable.nodes[p].title for p in found_people]
-        if mode == "plain":
-            # A confidential person the recap mentions keeps the name as the recap wrote it: the
-            # whole graph only finds that span of the text, and nothing of the note is copied.
-            for nid, written in detect_entity_mentions(text, full)[0]:
-                if nid not in linkable.nodes and written.casefold() not in {x.casefold() for x in m.names}:
-                    m.names.append(written); m.unresolved.append(written)
+        # In plain mode a name the recap mentions is only listed when it links to a visible note.
+        # Listing a confidential person found in the text, while an unknown name in the same text is
+        # never found, would tell the reader which names are confidential; the recap stays verbatim
+        # in the body, so nothing the meeting said is lost.
     if project:
         nid, _method, _cands = resolver.resolve(project, ["project", "area"])
         if nid:
@@ -831,13 +829,22 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     fm.update({
         "type": "meeting", "title": title, "date": date, "meeting_type": kind,
         "description": _describe(m),
-        "people": list(m.names),
+        # `people:` is a reference list (the ontology resolves each entry to a person note), so it
+        # holds only the names that were linked. A name that links to no readable note goes to
+        # `attendees:`, plain text: as a reference it would raise an unresolved_ref warning for an
+        # unknown name and none for a confidential one, which tells the two apart in the graph.
+        "people": [linkable.nodes[nid].title for nid in m.people],
         "project": f"[{linkable.nodes[m.project].title}]({_link(rel, m.project)})" if m.project else "",
         "state": "open",
         "generated": {"by": actor, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds")},
     })
-    # Raised, never lowered: a template that already says confidential keeps its own spelling.
-    if m.confidential_links and str(fm.get("sensitivity", "")).strip().lower() != kitlib.CONFIDENTIAL:
+    plain_names = [n for n in m.names if n in m.unresolved]
+    if plain_names:
+        fm["attendees"] = plain_names
+    # Raised, never lowered: a template that already says confidential keeps its own spelling, and
+    # `--force` over a note that is confidential (an earlier run raised it) keeps it confidential.
+    overwrites_confidential = out.exists() and kitlib.is_confidential(vault, rel)
+    if (m.confidential_links or overwrites_confidential) and str(fm.get("sensitivity", "")).strip().lower() != kitlib.CONFIDENTIAL:
         fm["sensitivity"] = kitlib.CONFIDENTIAL
     rest = _fill_section(rest, "## Outcomes", m.outcomes)
     rest = _fill_section(rest, "## Decisions", m.decisions, hint_target=rel)

@@ -630,7 +630,8 @@ class MinutesPassesTheConfidentialChoice(unittest.TestCase):
         kept = run("--title", "Kept", "--keep-open")
         self.assertNotIn("marked confidential", kept)
         fm = kit.kitlib.parse_note(v / "02-meetings/2026-09-14-kept.md", v).frontmatter
-        self.assertEqual((fm["people"], fm["sensitivity"]), (["Alex", "Sam"], "internal"))
+        # the recap's confidential names are not listed in plain mode; the recap keeps them in the body
+        self.assertEqual((fm["people"], fm.get("attendees"), fm["sensitivity"]), ([], None, "internal"))
 
 
 if __name__ == "__main__":

@@ -122,15 +122,15 @@ class PolicyLayer(unittest.TestCase):
             encoding="utf-8", newline="\n")
         recap = "alex example, Sam and the Codename Kestrel team met.\nDecision: ship it\n"
         res = guarded(self.vault).file_minutes(recap, "Hidden sync", "2026-09-22")
-        self.assertEqual(sorted(res["people"]), ["Sam", "alex example"], res)
+        self.assertEqual(res["people"], [], res)
         self.assertIsNone(res["project"])
         self.assertFalse(res["marked_confidential"])
         dumped = json.dumps(res)
         for leak in ("alex-example", "sam-example", "Alex Example", "Sam Example", "05-people", "kestrel.md", "Kestrel"):
             self.assertNotIn(leak, dumped)
         written = kitlib.parse_note(self.vault / res["path"], self.vault).frontmatter
-        self.assertEqual((sorted(written["people"]), written["project"], written["sensitivity"]),
-                         (["Sam", "alex example"], "", "internal"))
+        self.assertEqual((written["people"], written.get("attendees"), written["project"], written["sensitivity"]),
+                         ([], None, "", "internal"))
 
     def test_minutes_result_is_the_same_for_a_confidential_and_an_unknown_name(self):
         """Passed in `people`, a confidential name and a name the vault does not know come back alike."""
@@ -142,15 +142,20 @@ class PolicyLayer(unittest.TestCase):
         self.assertEqual((hidden["people"], hidden["unresolved"]), (["Sam Example"], ["Sam Example"]))
         self.assertEqual(shape(hidden, "Sam Example"), shape(unknown, "Nobody Known"))
         fm = [kitlib.parse_note(self.vault / r["path"], self.vault).frontmatter for r in (hidden, unknown)]
-        self.assertEqual([(f["people"], f["sensitivity"]) for f in fm],
-                         [(["Sam Example"], "internal"), (["Nobody Known"], "internal")])
+        # a name that links to no readable note is plain text in `attendees:`, never a reference in
+        # `people:`: as a reference an unknown name would leave a graph finding a confidential one does not
+        self.assertEqual([(f["people"], f["attendees"], f["sensitivity"]) for f in fm],
+                         [([], ["Sam Example"], "internal"), ([], ["Nobody Known"], "internal")])
 
-    def test_minutes_keeps_a_confidential_name_detected_in_the_recap(self):
-        """Pinned, not endorsed: only names of notes are detected in a recap, so a confidential person
-        the recap mentions is kept as written while an unknown name in the text is not listed at all.
-        A model that files a recap can tell the two apart; the docs say so (security.md)."""
+    def test_minutes_lists_neither_a_confidential_nor_an_unknown_name_found_in_the_recap(self):
+        """Only names of notes are detected in a recap, so an unknown name in the text is never listed.
+        A confidential one is not listed either: otherwise the result would tell the two apart."""
         res = guarded(self.vault).file_minutes("Sam and Zed Unknown met.\n", "Detected sync", "2026-09-25")
-        self.assertEqual((res["people"], res["unresolved"]), (["Sam"], ["Sam"]))
+        self.assertEqual((res["people"], res["unresolved"]), ([], []))
+        unknown = guarded(self.vault).file_minutes("Zed Unknown met.\n", "Detected sync two", "2026-09-26")
+        self.assertEqual((unknown["people"], unknown["unresolved"]), ([], []))
+        graph = guarded(self.vault).graph_query("select code, message from findings", 1000)["rows"]
+        self.assertNotIn("Zed", json.dumps(graph))
 
     def test_minutes_with_show_confidential_raises_the_note(self):
         (self.vault / "03-projects/kestrel.md").write_text(

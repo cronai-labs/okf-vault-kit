@@ -561,7 +561,7 @@ class GraphTools(unittest.TestCase):
         self.assertEqual((res["people"], res["unresolved"]), (["Sam Example"], ["Sam Example"]))
         cli = ob.CliBackend(vault_name="v", binary="obsidian-not-there", vault_path=str(self.vault))
         res = cli.file_minutes("Alex Example joined.", "Plain sync two", "2026-09-22", mode="plain")
-        self.assertEqual(res["people"], ["Alex Example"])
+        self.assertEqual(res["people"], [], "a confidential name found only in the recap is not listed")
         self.assertNotIn("05-people", json.dumps(res))
 
 
