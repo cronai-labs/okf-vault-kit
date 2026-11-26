@@ -113,6 +113,29 @@ class PolicyLayer(unittest.TestCase):
             os.chmod(sub, stat.S_IRWXU)
         self.assertFalse(g._confidential("03-projects/no-such-note"), "a reference to no file has nothing to hide")
 
+    def test_minutes_result_names_no_confidential_person_or_project(self):
+        """The tool's result, and the note it writes, used to name exactly the confidential notes the
+        recap mentioned: one call told the model which names are confidential (#52)."""
+        (self.vault / "03-projects/kestrel.md").write_text(
+            "---\ntype: project\ntitle: Codename Kestrel\ndescription: d\nstate: active\nsensitivity: confidential\n---\n# K\n",
+            encoding="utf-8", newline="\n")
+        recap = "Alex Example, Sam Example and the Codename Kestrel team met.\nDecision: ship it\n"
+        res = guarded(self.vault).file_minutes(recap, "Hidden sync", "2026-09-22")
+        self.assertEqual((res["people"], res["project"]), ([], None), res)
+        dumped = json.dumps(res)
+        for leak in ("alex-example", "sam-example", "kestrel.md"):
+            self.assertNotIn(leak, dumped)
+        written = kitlib.parse_note(self.vault / res["path"], self.vault).frontmatter
+        self.assertEqual((written["people"], written["project"]), ([], ""))
+
+        explicit = guarded(self.vault).file_minutes("x", "Explicit sync", "2026-09-23", people="Sam Example, Nobody Known")
+        self.assertEqual(explicit["people"], [])
+        self.assertEqual(explicit["unresolved"], ["Sam Example", "Nobody Known"], "a confidential name reads like an unknown one")
+
+        shown = guarded(self.vault, hide_confidential=False).file_minutes(recap, "Shown sync", "2026-09-24")
+        self.assertEqual(set(shown["people"]), {"05-people/alex-example.md", "05-people/sam-example.md"})
+        self.assertEqual(shown["project"], "03-projects/kestrel.md")
+
     def test_read_only_and_allow_list(self):
         ro = guarded(self.vault, read_only=True)
         with self.assertRaises(bp.PolicyError):

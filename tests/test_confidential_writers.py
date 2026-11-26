@@ -326,6 +326,32 @@ class Minutes(_TempVault):
         self.assertIn("Meeting filed: a note marked confidential", daily)
         _assert_none_of(self, daily, "Bluebird")
 
+    def test_confidential_people_are_neither_detected_nor_resolved(self):
+        """The note's `people:` and the result would otherwise name exactly the confidential notes a
+        recap mentions: an oracle for which names are confidential (#52)."""
+        day = dt.date(2026, 9, 14)
+        m = kitrecon.file_minutes(self.v, "Alex Example and Sam Example walked through the numbers.\nDecision: ship it\n",
+                                  "Numbers sync", day)
+        self.assertEqual(m.people, [])
+        self.assertEqual(kitlib.parse_note(self.v / m.path, self.v).frontmatter["people"], [])
+
+        explicit = kitrecon.file_minutes(self.v, "x", "Explicit", day, people=["Sam Example", "Nobody Known"], dry_run=True)
+        self.assertEqual(explicit.people, [])
+        self.assertEqual(explicit.unresolved, ["Sam Example", "Nobody Known"], "a confidential name reads like an unknown one")
+
+    def test_a_confidential_project_is_not_resolved(self):
+        self.write("03-projects/kestrel.md", SECRET_PROJECT)
+        day = dt.date(2026, 9, 14)
+        self.assertIsNone(kitrecon.file_minutes(self.v, "Codename Kestrel status.\n", "Kestrel", day, dry_run=True).project)
+        m = kitrecon.file_minutes(self.v, "x", "Kestrel two", day, project="Codename Kestrel", dry_run=True)
+        self.assertIsNone(m.project)
+        self.assertEqual(m.unresolved, ["Codename Kestrel"])
+
+    def test_show_confidential_resolves_them(self):
+        m = kitrecon.file_minutes(self.v, "Alex Example and Sam Example met.\n", "Shown", dt.date(2026, 9, 14),
+                                  dry_run=True, hide_confidential=False)
+        self.assertEqual(set(m.people), {"05-people/alex-example.md", "05-people/sam-example.md"})
+
     def test_an_ordinary_minutes_note_is_still_logged_by_title(self):
         m = kitrecon.file_minutes(self.v, self.RECAP, "Bluebird review", dt.date(2026, 9, 14), daily=True)
         self.assertIn(f"[Bluebird review]({m.path})", (self.v / "log.md").read_text(encoding="utf-8"))

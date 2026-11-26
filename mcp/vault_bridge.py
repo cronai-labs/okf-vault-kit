@@ -322,12 +322,15 @@ class FsBackend:
                 "tasks": [t.__dict__ for t in tasks]}
 
     def file_minutes(self, text: str, title: str, date: str = "", project: str = "", people: str = "", kind: str = "project",
-                     daily: bool = True) -> dict[str, Any]:
+                     daily: bool = True, hide_confidential: bool = False) -> dict[str, Any]:
+        # hide_confidential is off here like every other FsBackend read (todos, read_note): the
+        # backend has no policy. Guarded passes the policy's answer; the server only ever talks to it.
         day = dt.date.fromisoformat(date) if date else dt.date.today()
         ppl = [p.strip() for p in people.split(",") if p.strip()] or None
         title = _one_line(title)
         try:
-            m = kitrecon.file_minutes(self.vault, text, title, day, project or None, ppl, kind, g=self.graph(), daily=daily)
+            m = kitrecon.file_minutes(self.vault, text, title, day, project or None, ppl, kind, g=self.graph(), daily=daily,
+                                      hide_confidential=hide_confidential)
         except FileExistsError as exc:
             raise BridgeError(str(exc)) from exc
         self._graph_cache = None
@@ -398,7 +401,8 @@ class CliBackend:
     def graph_context(self, node, depth=1): return self._need_fs().graph_context(node, depth)
     def todos(self, owner="", overdue_only=False): return self._need_fs().todos(owner, overdue_only)
     def skipped_files(self): return self._fs.skipped_files() if self._fs else []
-    def file_minutes(self, text, title, date="", project="", people="", kind="project", daily=True): return self._need_fs().file_minutes(text, title, date, project, people, kind, daily)
+    def file_minutes(self, text, title, date="", project="", people="", kind="project", daily=True, hide_confidential=False):
+        return self._need_fs().file_minutes(text, title, date, project, people, kind, daily, hide_confidential)
 
     def _resolve(self, file: str, must_exist: bool = True) -> Path:
         """Map a reference to a vault path so the policy layer can check it (needs --vault).

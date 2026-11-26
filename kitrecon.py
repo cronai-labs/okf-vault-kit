@@ -729,11 +729,18 @@ def detect_entities(text: str, g: kitgraph.Graph) -> tuple[list[str], list[str]]
 def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None, project: str | None = None,
                  people: list[str] | None = None, kind: str = "project", g: kitgraph.Graph | None = None,
                  dry_run: bool = False, force: bool = False, daily: bool = False, actor: str = "process:kit-minutes",
-                 extra: dict[str, list[str]] | None = None) -> Minutes:
+                 extra: dict[str, list[str]] | None = None, hide_confidential: bool = True) -> Minutes:
     vault = Path(vault)
     g = g or kitgraph.build_graph(vault)
     date = date or dt.date.today()
-    resolver = kitgraph.Resolver(g.nodes, kitgraph.load_ontology(vault), g.nodes[kitgraph.SELF_ID].props.get("actor"))
+    self_actor = g.nodes[kitgraph.SELF_ID].props.get("actor")
+    # People and projects are matched against the graph without its confidential notes (#52). The
+    # note's `people:`/`project:` and the bridge tool's result would otherwise name exactly the
+    # confidential notes a recap mentions, an oracle for which names are confidential; a hidden
+    # name, detected or passed explicitly, ends up exactly like one the vault does not know.
+    if hide_confidential:
+        g = kitgraph.redact_vault(g, vault)
+    resolver = kitgraph.Resolver(g.nodes, kitgraph.load_ontology(vault), self_actor)
     m = Minutes(title=title, date=date, text=text)
     found_people, found_projects = detect_entities(text, g)
     if people:

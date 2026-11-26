@@ -401,7 +401,11 @@ class Guarded:
         def run():
             daily_rel = self._daily_rel(date)
             daily_ok = bool(daily_rel) and self._side_write_ok(daily_rel)
-            out = self.backend.file_minutes(text, title, date, project, people, kind, daily=daily_ok)
+            # Entities are matched without the confidential notes, so neither the result nor the
+            # note it writes names one: a recap that mentions a hidden name must come back exactly
+            # like one that mentions a name the vault does not know (#52).
+            out = self.backend.file_minutes(text, title, date, project, people, kind, daily=daily_ok,
+                                            hide_confidential=self.policy.hide_confidential)
             if daily_rel and not daily_ok:
                 out["skipped"] = list(out.get("skipped", ())) + [f"{daily_rel} (write denied by policy)"]
             return out
