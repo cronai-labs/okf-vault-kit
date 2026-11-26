@@ -293,5 +293,118 @@ class OneRedactionForTheBridgeAndTheCli(unittest.TestCase):
         self.assertFalse(set(ids) & {FALCON_REL, *PEOPLE})
 
 
+# Each confidential note below makes the full graph name its id in a visible note's derived value
+# or finding. The visible notes refer to them by name, by a typo of a title or by a body link, never
+# by a link in their frontmatter: a visible note's own props are exported as written, and a link
+# there would put the hidden path into the export for a reason the redaction does not own.
+CONF = "sensitivity: confidential\n"
+ADOPT = "06-decisions/2026-09-08-adopt-qmd-for-local-search.md"
+REFERRING = {
+    # supersedes a visible decision: state_conflict on it, and its derived superseded_by
+    "06-decisions/zz-hidden-supersedes.md": "---\ntype: decision\ntitle: Hidden successor\n" + CONF
+    + "date: 2026-09-20\nstate: decided\narea: \"[Platform engineering](../04-areas/platform-engineering.md)\"\n"
+    + "supersedes: \"[Adopt qmd](2026-09-08-adopt-qmd-for-local-search.md)\"\n---\nbody\n",
+    # the "did you mean" of an unresolved_ref
+    "03-projects/zephyr-secret.md": "---\ntype: project\ntitle: Zephyr Secret\nowner: me\n" + CONF + "---\nbody\n",
+    # one of the candidates of an ambiguous_ref (the other one is visible)
+    "05-people/kim-hidden.md": "---\ntype: person\ntitle: Kim Doppel\n" + CONF + "---\nbody\n",
+    "05-people/kim-visible.md": "---\ntype: person\ntitle: Kim Doppel\nsensitivity: internal\n---\nbody\n",
+    # the target of a range_violation
+    "06-decisions/quartz-hidden.md": "---\ntype: decision\ntitle: Quartz Plan\n" + CONF + "date: 2026-09-21\n---\nbody\n",
+    # stale knowledge: at_risk on the note that links to it, project_at_risk on the project it serves
+    "07-knowledge/stale-hidden.md": "---\ntype: spec\ntitle: Withered spec\n" + CONF
+    + "stale_after: 2020-01-01T00:00:00Z\nproject: \"[Search relaunch](../03-projects/search-relaunch.md)\"\n---\nbody\n",
+    "06-decisions/zz-visible-refs.md": "---\ntype: decision\ntitle: Visible refs\nsensitivity: internal\ndate: 2026-09-22\n"
+    "area: \"[Platform engineering](../04-areas/platform-engineering.md)\"\n"
+    "project: Zephyr Secrt\nowner: Kim Doppel\npeople: [\"Quartz Plan\"]\n---\nbody\n",
+    "07-knowledge/visible-relies.md": "---\ntype: concept\ntitle: Relies on the withered spec\nsensitivity: internal\n---\n"
+    "See [the old spec](stale-hidden.md).\n",
+}
+HIDDEN_REFERRED = ("06-decisions/zz-hidden-supersedes.md", "03-projects/zephyr-secret.md", "05-people/kim-hidden.md",
+                   "06-decisions/quartz-hidden.md", "07-knowledge/stale-hidden.md")
+INTERPOLATING = ("state_conflict", "unresolved_ref", "ambiguous_ref", "range_violation", "at_risk", "project_at_risk")
+
+
+def referring_vault() -> Path:
+    v = temp_vault()
+    for rel, text in REFERRING.items():
+        (v / rel).write_text(text, encoding="utf-8", newline="\n")
+    return v
+
+
+def names_hidden(text: str) -> list[str]:
+    """The hidden ids `text` names; the stem alone is enough to identify one."""
+    return [rel for rel in HIDDEN_REFERRED if Path(rel).stem in text]
+
+
+class RedactionLeavesNoHiddenIdInVisibleNodes(unittest.TestCase):
+    """A visible node's derived values and findings name other nodes; none of them may be hidden."""
+
+    def setUp(self):
+        self.vault = referring_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+        self.full = kitgraph.build_graph(self.vault)
+        self.red = kit._graph(self.vault)
+
+    def test_the_full_graph_names_a_hidden_id_in_every_interpolating_finding(self):
+        # the fixture's own check: without it, a later change to the sample could make every test below pass vacuously
+        for code in INTERPOLATING:
+            named = [f for f in self.full.findings if f.code == code and f.node not in HIDDEN_REFERRED
+                     and names_hidden(f.message + f.suggestion)]
+            self.assertTrue(named, f"no visible {code} finding names a hidden note in the full graph")
+        self.assertEqual(self.full.nodes[ADOPT].derived.get("superseded_by"), "06-decisions/zz-hidden-supersedes.md")
+        self.assertFalse(set(HIDDEN_REFERRED) & set(self.red.nodes), "the fixture's notes must all be hidden")
+
+    def test_no_export_names_a_hidden_id(self):
+        onto = kitgraph.load_ontology(self.vault)
+        ctx, base = kitgraph.load_context(self.vault, onto), onto.base_iri
+        con = kitgraph.to_sqlite(self.red, ":memory:")
+        try:
+            dump = "\n".join(con.iterdump())
+        finally:
+            con.close()
+        for what, text in (("to_json", json.dumps(kitgraph.to_json(self.red), ensure_ascii=False)),
+                           ("to_ntriples", "\n".join(kitgraph.to_ntriples(self.red, ctx, base))),
+                           ("to_jsonld", json.dumps(kitgraph.to_jsonld(self.red, ctx, base), ensure_ascii=False)),
+                           ("to_sqlite", dump)):
+            self.assertEqual(names_hidden(text), [], f"{what} names a hidden note")
+
+    def test_no_context_pack_names_a_hidden_id(self):
+        for nid in self.red.nodes:
+            pack = kitgraph.context_pack(self.red, nid, 2)
+            self.assertEqual(names_hidden(pack), [], f"the context pack of {nid} names a hidden note")
+
+    def test_the_bridge_names_no_hidden_id(self):
+        g = bp.Guarded(ob.FsBackend(self.vault), bp.Policy(audit_path=None), self.vault)
+        for nid in (ADOPT, "03-projects/search-relaunch.md", "06-decisions/zz-visible-refs.md", "07-knowledge/visible-relies.md"):
+            self.assertEqual(names_hidden(g.graph_context(nid, 2)), [], f"graph_context {nid}")
+        for table in ("nodes", "edges", "props", "derived", "findings"):
+            rows = g.graph_query(f"select * from {table}", 100000)["rows"]
+            self.assertEqual(names_hidden(json.dumps(rows, ensure_ascii=False)), [], f"graph_query {table}")
+
+    def test_the_cli_names_no_hidden_id(self):
+        r = run("graph", "build", "--vault", str(self.vault))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(names_hidden(r.stdout), [], "graph build printed a finding that names a hidden note")
+        for name in ("graph.json", "graph.jsonld", "graph.nt"):
+            self.assertEqual(names_hidden((self.vault / ".kit" / name).read_text(encoding="utf-8")), [], name)
+        r = run("graph", "pack", ADOPT, "--vault", str(self.vault))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("superseded_by", r.stdout, "the superseding note is hidden, so is the fact it names")
+        self.assertEqual(names_hidden(r.stdout), [])
+
+    def test_redaction_copies_and_keeps_what_names_no_hidden_note(self):
+        # llm ask reads mentions() from the full graph and the bridge caches it: redaction must not change it
+        self.assertEqual(self.full.nodes[ADOPT].derived.get("superseded_by"), "06-decisions/zz-hidden-supersedes.md")
+        self.assertIsNot(self.red.nodes[ADOPT], self.full.nodes[ADOPT])
+        self.assertIn("trust_tier", self.red.nodes[ADOPT].derived, "only a value naming a hidden note goes")
+        kept = {f.render() for f in self.red.findings}
+        for f in self.full.findings:
+            if f.node not in self.red.nodes or names_hidden(f.message + f.suggestion):
+                continue
+            self.assertIn(f.render(), kept, "a finding about visible notes only must survive the redaction")
+        self.assertTrue(kept, "the redacted graph still reports")
+
+
 if __name__ == "__main__":
     unittest.main()
