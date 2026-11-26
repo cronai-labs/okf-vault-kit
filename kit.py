@@ -1028,6 +1028,10 @@ def _confidential(vault: Path, rel: str) -> bool:
     return kitlib.is_confidential(vault, rel)
 
 
+# The cap of the over-fetch in `llm ask`; the bridge's Guarded.SEARCH_FETCH_CAP, for the same reason.
+ASK_FETCH_CAP = 100
+
+
 def _note_id(rel: str) -> str:
     """One spelling per note, so a note found by search and named in the question counts once."""
     return rel if rel.endswith(".md") else rel + ".md"
@@ -1053,7 +1057,11 @@ def cmd_llm_ask(args) -> int:
     vault = _vault(args.vault)
     base = args.base_url or DEFAULT_BASE_URL
     collection = kitproviders.collection_name(vault, args.collection)
-    hits = _search_hits(vault, args.question, args.n, collection, getattr(args, "search_provider", None))
+    # The provider applies its limit before the confidential filter below, so asking it for -n let
+    # confidential notes that ranked first use up the slots. Asked once for more, with the bridge's
+    # rule (Guarded.search), never again in a loop: a qmd search is a process with a timeout.
+    fetch = min(max(args.n, 1) * 3 + 10, ASK_FETCH_CAP)
+    hits = _search_hits(vault, args.question, fetch, collection, getattr(args, "search_provider", None))
     if not hits:
         print("no matching notes found")
         return 1
@@ -1063,6 +1071,8 @@ def cmd_llm_ask(args) -> int:
     withheld: set[str] = set()
     visible = []
     for h in hits:
+        if len(visible) >= args.n:
+            break       # what ranks below the last source was never going to be sent, so it is not counted either
         rel = kitproviders.hit_rel(h["file"])
         if _confidential(vault, rel):
             withheld.add(_note_id(rel))
