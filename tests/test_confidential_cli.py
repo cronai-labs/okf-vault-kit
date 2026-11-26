@@ -511,5 +511,38 @@ class TodosLeaveConfidentialTasksOut(unittest.TestCase):
                       "--sync-done works on every task, whatever the listing shows")
 
 
+class LlmAskKeepsNSources(unittest.TestCase):
+    """Confidential hits that rank first do not use up the -n slots, as on the bridge's search."""
+
+    def setUp(self):
+        Records.seen = []
+        srv = HTTPServer(("127.0.0.1", 0), Records)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.server_close)
+        self.addCleanup(srv.shutdown)
+        self.base = f"http://127.0.0.1:{srv.server_port}/v1"
+        self.vault = falcon_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+
+    def sources(self) -> list[str]:
+        prompt = "\n".join(m["content"] for m in Records.seen[-1]["messages"])
+        return re.findall(r"^\[(\d+)\] ", prompt, re.M)
+
+    def test_n_visible_sources_when_a_confidential_note_ranks_first(self):
+        # a word many open notes carry, and a confidential note that says little else
+        (self.vault / "03-projects/search-heavy.md").write_text(
+            "---\ntype: project\ntitle: Search search search\nsensitivity: confidential\n---\n" + "search " * 40 + "\n",
+            encoding="utf-8", newline="\n")
+        ranked = [kit.kitproviders.hit_rel(h["file"]) for h in kit._search_hits(self.vault, "search", 20, None, "naive")]
+        self.assertEqual(ranked[0], "03-projects/search-heavy.md", "the test needs the confidential note to rank first")
+        self.assertGreater(len(ranked), 3, "and enough open notes behind it")
+        for n in ("1", "3"):
+            r = run("llm", "ask", "search", "--vault", str(self.vault), "--base-url", self.base,
+                    "--search-provider", "naive", "-n", n)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertEqual(len(self.sources()), int(n), f"-n {n} must send {n} visible source(s)")
+            self.assertEqual(LEFT_OUT.search(r.stdout).group(1), "1", "only what ranked ahead of the last source is counted")
+
+
 if __name__ == "__main__":
     unittest.main()
