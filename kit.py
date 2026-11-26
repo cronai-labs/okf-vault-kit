@@ -19,6 +19,8 @@
   python kit.py todos [--digest] [--sync-done]   surface and reconcile every open task
   python kit.py minutes recap.txt --title "Sync"  file a recap as a meeting note
   python kit.py proposals list|show|apply|reject   human-in-the-loop writes from a --propose bridge (docs/security.md)
+  python kit.py policy export [--out FILE]  what is confidential in the vault, as JSON
+  python kit.py agent-settings claude-code [--apply|--check|--remove]   deny it to Claude Code's own tools (docs/security.md §5)
 
 Every command also runs as `uv run kit.py ...` with no manual dependency setup (inline script metadata above).
 """
@@ -42,6 +44,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+import kitagent  # noqa: E402
 import kitgraph  # noqa: E402
 import kitlib  # noqa: E402
 import kitproviders  # noqa: E402
@@ -166,6 +169,9 @@ def cmd_doctor(args) -> int:
                      f"run `kit.py mcp-config --client {client} --vault <your vault> --write` to replace it")))
     vault = vault_for_cfg
     if vault.exists():
+        # No paths from inside the vault in this row: the report goes out, and the paths are confidential.
+        where, state = kitagent.doctor_row(vault)
+        rows.append(("agent settings (claude-code)", where, state))
         rep = kitlib.validate_okf(vault)
         # Say when this is the shipped sample. Without it the row is identical for every tester
         # and cannot answer the one question it exists for: is my own vault healthy?
@@ -312,6 +318,11 @@ def cmd_validate(args) -> int:
     print("== Links, wikilinks, Bases embeds ==")
     print(links.render())
     hygiene = [links]
+    floors = kitlib.check_confidentiality(vault)
+    if floors.errors or floors.warnings or floors.checked:
+        print(f"== Confidentiality: floors and path rules in {kitlib.CONFIG_REL} ==")
+        print(floors.render())
+    hygiene.append(floors)
     use_onto = not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)
     if use_onto:
         g = kitgraph.build_graph(vault)
@@ -508,6 +519,118 @@ def cmd_mcp_config(args) -> int:
     return 0
 
 
+# ---------------------------------------------------------------- policy export / agent-settings
+
+def _refuse(message: str) -> int:
+    print(f"refused: {message}", file=sys.stderr)
+    return 2
+
+
+def cmd_policy_export(args) -> int:
+    vault = _vault(args.vault)
+    try:
+        text = kitagent.export_json(kitagent.policy_export(vault))
+    except kitlib.PolicyConfigError as exc:
+        return _refuse(f"{exc} — nothing is exported until it is fixed (`kit.py validate` reports it)")
+    if args.out:
+        out = Path(args.out).expanduser()
+        kitagent.write_atomic(out, text)
+        print(f"wrote {out} — it names every confidential path in the vault", file=sys.stderr)
+        return 0
+    sys.stdout.write(text)
+    return 0
+
+
+def _agent_settings_remove(vault: Path, args) -> int:
+    if args.check or args.allow_git:
+        return _refuse("--remove takes only --vault and --apply")
+    try:
+        result, raw = kitagent.removal_state(vault)
+    except kitagent.AgentSettingsError as exc:
+        return _refuse(str(exc))
+    if result is None:
+        print(f"nothing to remove: there is no {kitagent.MANIFEST_REL}, so the kit owns nothing in {kitagent.SETTINGS_REL}")
+        return 0
+    counts = (f"{len(result.removed)} list entries the kit added, {len(result.restored)} sandbox switch(es) it set, "
+              f"and {kitagent.MANIFEST_REL}")
+    for line in result.restored:
+        print(f"puts back: {line}")
+    if not args.apply:
+        sys.stdout.write(kitagent.diff_text(raw, result.settings) if result.settings is not None and raw is not None else "")
+        print(f"dry run: would take out {counts} — add --apply to write")
+        return 0
+    try:
+        writes_settings = kitagent.settings_differ(vault, result.settings)
+        kitagent.remove_apply(vault, result)
+    except kitagent.AgentSettingsError as exc:
+        return _refuse(str(exc))
+    print(f"took out {counts}" + ("" if writes_settings else f"; left {kitagent.SETTINGS_REL} alone, nothing in it to change"))
+    return 0
+
+
+def cmd_agent_settings(args) -> int:
+    vault = _vault(args.vault)
+    if args.apply and vault == TEMPLATE_VAULT.resolve():
+        sys.exit("that vault is the kit's own sample, not yours — --apply would write into this checkout. "
+                 "Pass your own: --vault ~/Notes/vault")
+    if args.remove:
+        return _agent_settings_remove(vault, args)
+    try:
+        # --check answers for the choice the last --apply recorded, as doctor does, unless told otherwise.
+        state = kitagent.claude_code_state(vault, allow_git=(args.allow_git or None) if args.check else args.allow_git)
+    except kitlib.PolicyConfigError as exc:
+        return _refuse(f"{exc} — no settings are generated until it is fixed (`kit.py validate` reports it)")
+    except kitagent.AgentSettingsError as exc:
+        return _refuse(str(exc))
+    m = state.merge
+    writes_settings = m.changed and kitagent.settings_differ(vault, m.settings)
+    if args.apply and writes_settings:
+        try:
+            kitagent.refuse_symlinked_settings(vault)
+        except kitagent.AgentSettingsError as exc:
+            return _refuse(str(exc))
+    for line in m.warnings:
+        print(f"warning: {line}", file=sys.stderr)
+    local = [f"warning: {flag} — it overrides what this command writes (docs/security.md §5)" for flag in state.local_flags]
+    summary = (f"{len(state.plan.deny)} deny rule(s) and {len(state.plan.deny_read)} sandbox denyRead entries wanted; "
+               f"{len(m.added)} list entries to add, {len(m.removed)} stale")
+    if args.check:
+        for flag in state.plan.flags:
+            print(f"warning: {flag} (docs/security.md §5)", file=sys.stderr)
+        for line in local:
+            print(line, file=sys.stderr)
+        if not m.changed:
+            print(f"ok: {kitagent.SETTINGS_REL} matches the vault ({summary})")
+            return 0
+        extra = [f"{len(m.flags_set)} sandbox flag(s) not set"] if m.flags_set else []
+        if not (m.added or m.removed or m.flags_set):
+            extra.append(f"{kitagent.MANIFEST_REL} out of date")
+        print(f"drift: {', '.join([summary, *extra])} — {kitagent.APPLY_HINT}")
+        return 1
+    for note in state.plan.notes:
+        print(f"note: {note}")
+    for line in m.overrides:
+        print(f"overrides your value: {line}")
+    for line in local:
+        print(line)
+    if not m.changed:
+        print(f"nothing to do: {kitagent.SETTINGS_REL} already matches the vault ({summary})")
+        return 0
+    if not args.apply:
+        text = kitagent.diff(state)
+        sys.stdout.write(text or f"(no change to {kitagent.SETTINGS_REL}; only {kitagent.MANIFEST_REL} would be rewritten)\n")
+        print(f"dry run: {summary} — add --apply to write {kitagent.SETTINGS_REL} and {kitagent.MANIFEST_REL}")
+        return 0
+    kitagent.apply(vault, state)
+    if writes_settings:
+        print(f"wrote {vault / kitagent.SETTINGS_REL} and {kitagent.MANIFEST_REL}: {summary}")
+    else:
+        print(f"wrote {kitagent.MANIFEST_REL}; left {kitagent.SETTINGS_REL} alone, it already matches: {summary}")
+    print("  takes effect at the agent's next tool call; settings in .claude/settings.local.json, --settings and "
+          "managed settings still apply on top (docs/security.md §5)")
+    return 0
+
+
 # ---------------------------------------------------------------- graph
 
 def _graph(vault: Path, show_confidential: bool = False, onto: kitgraph.Ontology | None = None) -> kitgraph.Graph:
@@ -524,7 +647,7 @@ def _graph(vault: Path, show_confidential: bool = False, onto: kitgraph.Ontology
 def _hidden_line(full: int, shown: kitgraph.Graph) -> str:
     """A count, never a name: how many notes the redaction left out, and how to include them."""
     left_out = full - len(shown.nodes)
-    return (f"{left_out} note(s) marked sensitivity: confidential left out (--show-confidential includes them)"
+    return (f"{left_out} confidential note(s) left out (--show-confidential includes them)"
             if left_out else "")
 
 
@@ -663,7 +786,7 @@ def cmd_todos(args) -> int:
         return not owner or (t.owner or "").lower() == owner
 
     hidden = sum(1 for t in full.tasks if t.file in full.confidential and mine(t)) if rep is not full else 0
-    left_out = (f"{hidden} task(s) in notes marked sensitivity: confidential left out (--show-confidential includes them)"
+    left_out = (f"{hidden} task(s) in confidential notes left out (--show-confidential includes them)"
                 if hidden else "")
     tasks = [t for t in (rep.tasks if args.all else rep.open) if mine(t)]
     if args.json:
@@ -733,6 +856,8 @@ def cmd_minutes(args) -> int:
                                   mode="plain" if args.keep_open else "raise")
     except FileExistsError as exc:
         print(exc); return 1
+    except kitlib.PolicyConfigError as exc:
+        return _refuse(f"{exc} (`kit.py validate` reports it; --keep-open files without linking)")
     print(f"{'would write' if args.dry_run else 'wrote'} {m.path}")
     print(f"  people: {', '.join(m.names) or '-'}   project: {m.project or '-'}   unresolved: {', '.join(m.unresolved) or '-'}")
     if m.confidential_links:
@@ -1028,7 +1153,8 @@ def cmd_llm_smoke(args) -> int:
 
 
 def _confidential(vault: Path, rel: str) -> bool:
-    """True when the note carries `sensitivity: confidential` — the line the MCP bridge enforces."""
+    """True when the note is confidential — by its own `sensitivity`, or by a folder floor or path
+    rule in `.kit/config.yml` — the line the MCP bridge enforces."""
     if not rel or rel.startswith(("http://", "https://")):
         return False
     # The shared predicate fails closed like the bridge: an unreadable note, a YAML error or a
@@ -1109,7 +1235,7 @@ def cmd_llm_ask(args) -> int:
         if packs:
             facts = "\n\nFacts from the vault graph (authoritative for relations, states, dates):\n\n" + "\n".join(packs)
     if withheld:
-        print(f"{len(withheld)} matching note(s) marked sensitivity: confidential were left out of the prompt.")
+        print(f"{len(withheld)} matching confidential note(s) were left out of the prompt.")
     if not hits and not facts:
         print("no matching notes found that may be sent to the model")
         return 1
@@ -1227,6 +1353,32 @@ def main(argv: list[str] | None = None) -> int:
         if _name == "reject":
             _p.add_argument("--reason")
         _p.set_defaults(fn=cmd_proposals)
+
+    p = sub.add_parser("policy", help="what the vault declares and marks confidential")
+    posub = p.add_subparsers(dest="policy_cmd", required=True)
+    p = posub.add_parser("export", allow_abbrev=False,
+                         help="print, as JSON, every confidential folder, path rule and file (paths as the vault spells them)")
+    p.add_argument("--vault"); p.add_argument("--out", metavar="FILE", help="write the JSON here instead of stdout")
+    p.set_defaults(fn=cmd_policy_export)
+    p = sub.add_parser("agent-settings", help="turn the policy export into a coding agent's own read restrictions")
+    asub = p.add_subparsers(dest="agent", required=True)
+    p = asub.add_parser("claude-code", allow_abbrev=False,
+                        help="merge Read(...) deny rules, sandbox denyRead entries and the sandbox switches into "
+                             "<vault>/.claude/settings.json (dry run by default)",
+                        description="Deny the confidential folders and files to Claude Code's own tools, in the vault's "
+                                    ".claude/settings.json. Only a deny list: Claude Code's allow rules cannot carve an "
+                                    "exception out of a deny, so there is no mode that denies the vault and allows open "
+                                    "folders (docs/security.md §5).")
+    p.add_argument("--vault")
+    mode = p.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="write settings.json and the kit's manifest (default: preview a diff)")
+    mode.add_argument("--check", action="store_true", help="exit 1 when settings.json or the manifest differs from what --apply would write (with the .git choice the last --apply recorded); writes nothing")
+    p.add_argument("--allow-git", action="store_true",
+                   help="do not deny .git — confidential notes tracked in git then stay readable through the history")
+    p.add_argument("--remove", action="store_true",
+                   help="take out what the kit added (the entries its manifest owns, the sandbox switches as recorded) "
+                        "and delete the manifest; a dry run unless --apply is given too")
+    p.set_defaults(fn=cmd_agent_settings)
 
     args = ap.parse_args(argv)
     return args.fn(args)

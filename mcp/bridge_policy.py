@@ -6,9 +6,10 @@ the MCP tools and the backend:
   * read-only mode          write tools are not even registered
   * write allow/deny lists  vault-relative folder prefixes, checked against the path the backend resolves to
                             (case-insensitively); people notes and system folders are denied by default
-  * confidential hiding     notes with `sensitivity: confidential` are invisible to reads, searches, listings and every
-                            graph tool, and agents may not write them or set the `sensitivity` property. This holds
-                            for this bridge only: a tool that opens the vault's files itself is not stopped by it
+  * confidential hiding     notes with `sensitivity: confidential`, and every file a confidential folder or path rule in
+                            `.kit/config.yml` covers (all of them while that file is broken), are invisible to reads,
+                            searches, listings and every graph tool, and agents may not write them or set the
+                            `sensitivity` property. This holds for this bridge only: a tool that opens the vault's files itself is not stopped by it
                             (docs/security.md §5)
   * size and rate limits    per write call and per minute
   * propose mode            writes are recorded as proposals under .kit/proposals/ and applied by a human
@@ -223,6 +224,16 @@ class Guarded:
             tpl = str(template).strip().replace("\\", "/")
             if posixpath.isabs(tpl) or re.match(r"^[A-Za-z]:", tpl) or ".." in tpl.split("/"):
                 raise PolicyError(f"{tool}: template `{template}` must be a name under 90-templates")
+            # The copy carries the template's `sensitivity` line, so a labelled template comes out
+            # as a hidden note, as the kit's own person template does. A floor or path rule over the
+            # template does not travel, and neither does a label that could not be read: those
+            # would come out as an ordinary note (#120).
+            tpl_rel = "90-templates/" + tpl.strip("/") + ("" if tpl.lower().endswith(".md") else ".md")
+            if self.policy.hide_confidential and (
+                    not self.vault or kitlib.confidential_floor(self.vault, tpl_rel) is not False
+                    or kitlib.own_confidentiality(self.vault, tpl_rel) is None):
+                raise PolicyError(f"{tool}: template `{template}` is under a confidential folder or path rule, or its "
+                                  "confidentiality cannot be told; agents do not copy it (policy)")
         if len(payload.encode("utf-8")) > self.policy.max_write_bytes:
             raise PolicyError(f"{tool}: payload of {len(payload.encode('utf-8'))} bytes exceeds the {self.policy.max_write_bytes}-byte limit; split it")
         now = time.monotonic()

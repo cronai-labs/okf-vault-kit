@@ -30,7 +30,7 @@ test-qmd: ## the end-to-end lane; needs qmd on PATH
 
 lint: ## ruff, a byte-compile on the floor Python, and the template vault
 	uvx $(RUFF) check .
-	uv run --python $(PY) python -m compileall -q kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp testkit tests
+	uv run --python $(PY) python -m compileall -q kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py kitagent.py mcp testkit tests
 	uv run --python $(PY) kit.py validate --vault vault --strict
 
 fmt: ## no formatter is configured; say so rather than pretend

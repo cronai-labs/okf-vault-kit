@@ -84,7 +84,7 @@ class _TempVault(unittest.TestCase):
 
 
 class Index(_TempVault):
-    COUNT = re.compile(r"^(\d+) file\(s\) not listed: marked `sensitivity: confidential`, or unreadable\.$", re.M)
+    COUNT = re.compile(r"^(\d+) file\(s\) not listed: confidential, or unreadable\.$", re.M)
 
     def _expected_hidden(self) -> int:
         return sum(1 for p in kitlib.iter_markdown(self.v)
@@ -285,7 +285,7 @@ class Predicate(_TempVault):
 
 
 class Digest(_TempVault):
-    COUNT = re.compile(r"^(\d+) task\(s\) in notes marked `sensitivity: confidential` are not listed", re.M)
+    COUNT = re.compile(r"^(\d+) task\(s\) in confidential notes are not listed", re.M)
     TODAY = dt.date(2026, 9, 14)
 
     def setUp(self):
@@ -514,7 +514,7 @@ class SupersededByAConfidentialNote(_TempVault):
         changes = kitrecon.reconcile(self.v, apply=False, today=dt.date(2026, 9, 14))
         conflicts = [c for c in changes if c.code == "state_conflict"]
         self.assertEqual([c.file for c in conflicts], [self.ADOPT], [c.render() for c in changes])
-        self.assertIn("a note marked `sensitivity: confidential`", conflicts[0].message)
+        self.assertIn("a confidential note", conflicts[0].message)
         for c in changes:
             self.assertNotIn("embedding-model", c.render())
 

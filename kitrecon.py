@@ -6,7 +6,8 @@ Three concerns, all deterministic, all dry-run by default:
              and derived-state conflicts from the graph (superseded decisions). Policy: structured frontmatter in the
              note is the source of truth; hub rows are views. --apply rewrites hub cells, adds missing rows, sets
              derived states; it never touches free-text cells, and the only row it deletes is one that links to a
-             note whose frontmatter says `sensitivity: confidential` (#52).
+             note whose frontmatter says `sensitivity: confidential`, or that a folder or path rule in
+             `.kit/config.yml` covers (#52, #120).
   todos      every `- [ ]` / `- [x]` in the vault with owner and due parsed from `— owner, due YYYY-MM-DD`;
              overdue / due-soon / duplicates / done-in-one-place-open-in-another; digest page; --sync-done.
   minutes    file a pasted recap as a meeting note: entities resolved through the graph, actions and decisions
@@ -170,7 +171,7 @@ def _row_confidentiality(vault: Path, g: kitgraph.Graph, hub: str, cell: str) ->
 
 def _confidential_row(hub: str, line_no: int, apply: bool) -> Change:
     """The one row reconcile deletes. Named by its line, never by its cells: they are what leaked."""
-    return Change("hub_confidential_row", hub, f"line {line_no} links to a note marked confidential"
+    return Change("hub_confidential_row", hub, f"line {line_no} links to a confidential note"
                   + (" — row removed" if apply else " — run with --apply to remove the row"), applied=apply)
 
 
@@ -189,6 +190,12 @@ def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None,
     vault = Path(vault)
     g = g or kitgraph.build_graph(vault)
     changes: list[Change] = []
+    broken = kitlib.confidentiality_config_error(vault)
+    if broken:
+        # Every note reads as "could not tell", so every hub row is kept and reported unverifiable;
+        # this line says where the cause is, since the row findings point at the notes (#120).
+        changes.append(Change("confidentiality_config", kitlib.CONFIG_REL,
+                              f"{broken} — every note counts as confidential and no hub row is added or removed until it is fixed"))
     changes += _reconcile_superseded(vault, g, apply)       # derived states first …
     if apply and any(c.applied for c in changes):
         g = kitgraph.build_graph(vault)                      # … so the hub passes see the new states
@@ -408,7 +415,7 @@ def _reconcile_superseded(vault: Path, g: kitgraph.Graph, apply: bool) -> list[C
             # reconcile output (and `--json`, which agents read) says so instead of naming it (#52).
             msg = f.message
             if any(_node_confidential(vault, g, r) for r in f.refs):
-                msg = f"is superseded by a note marked `sensitivity: confidential` but has state `{g.nodes[f.node].props.get('state')}`" if f.node in g.nodes else "is superseded by a note marked `sensitivity: confidential`"
+                msg = f"is superseded by a confidential note but has state `{g.nodes[f.node].props.get('state')}`" if f.node in g.nodes else "is superseded by a confidential note"
             ch = Change("state_conflict", f.node, msg)
             if apply:
                 kitlib.set_frontmatter(vault / f.node, {"state": "superseded"})
@@ -616,7 +623,7 @@ def render_digest(rep: TodoReport, from_file: str = DIGEST, actor: str = "proces
              "tags: [system, generated]", "sensitivity: internal", f"generated: {{ by: {actor}, at: \"{now}\" }}", "---", "",
              "# Todo Digest", "", f"{len(rep.open)} open tasks across {len({t.file for t in rep.tasks})} notes. Ticking a task here does nothing — tick it where it lives (links on every line).", ""]
     if rep.hidden:
-        lines += [f"{rep.hidden} task(s) in notes marked `sensitivity: confidential` are not listed, nor any duplicate that involves one.", ""]
+        lines += [f"{rep.hidden} task(s) in confidential notes are not listed, nor any duplicate that involves one.", ""]
     def section(title: str, items: list[Task], empty: str):
         lines.append(f"## {title}"); lines.append("")
         if not items:
@@ -758,10 +765,19 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     stays in `people:` as the recap or the caller wrote it, never as a confidential note's title or
     path, and a confidential project is neither linked nor stored. Names in `people:` that are not
     linked are also in `unresolved`.
+
+    Raises kitlib.PolicyConfigError in "raise" mode while `.kit/config.yml` is broken: every note
+    then reads as confidential, and the label this mode writes would outlive the fix (#120).
     """
     if mode not in MINUTES_MODES:
         raise ValueError(f"mode must be one of {', '.join(MINUTES_MODES)}, not {mode!r}")
     vault = Path(vault)
+    if mode == "raise":
+        broken = kitlib.confidentiality_config_error(vault)
+        if broken:
+            raise kitlib.PolicyConfigError(f"{broken} — minutes are not filed with linked notes until it is fixed, "
+                                           "since every note reads as confidential meanwhile and the meeting would be "
+                                           "marked confidential for good")
     full = g or kitgraph.build_graph(vault)
     date = date or dt.date.today()
     self_actor = full.nodes[kitgraph.SELF_ID].props.get("actor")
@@ -843,7 +859,9 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
         fm["attendees"] = plain_names
     # Raised, never lowered: a template that already says confidential keeps its own spelling, and
     # `--force` over a note that is confidential (an earlier run raised it) keeps it confidential.
-    overwrites_confidential = out.exists() and kitlib.is_confidential(vault, rel)
+    # The note's own label only: a folder floor keeps the note confidential without one, and a
+    # config that cannot be read must not leave a durable `sensitivity:` line behind (#120).
+    overwrites_confidential = out.exists() and kitlib.own_confidentiality(vault, rel) is not False
     if (m.confidential_links or overwrites_confidential) and str(fm.get("sensitivity", "")).strip().lower() != kitlib.CONFIDENTIAL:
         fm["sensitivity"] = kitlib.CONFIDENTIAL
     rest = _fill_section(rest, "## Outcomes", m.outcomes)

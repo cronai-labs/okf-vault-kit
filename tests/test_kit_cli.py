@@ -840,7 +840,7 @@ class ConfidentialStaysOutOfThePrompt(unittest.TestCase):
         self.assertNotIn("05-people/alex-example.md", r.stdout, "a confidential hit is dropped whole, path and title too (#52)")
         self.assertNotIn("Delegated authority", r.stdout, "note body leaked into the prompt")
         self.assertNotIn("Rolling 1:1 agenda", r.stdout)
-        self.assertIn("sensitivity: confidential", r.stdout, "say when something was withheld")
+        self.assertIn("confidential note(s) were left out", r.stdout, "say when something was withheld")
 
     def test_a_qmd_hit_id_names_the_same_note(self):
         """The qmd lane reaches the check through `hit_rel`; a collection-prefixed id would skip it."""
