@@ -560,10 +560,11 @@ def _agent_settings_remove(vault: Path, args) -> int:
         print(f"dry run: would take out {counts} — add --apply to write")
         return 0
     try:
+        writes_settings = kitagent.settings_differ(vault, result.settings)
         kitagent.remove_apply(vault, result)
     except kitagent.AgentSettingsError as exc:
         return _refuse(str(exc))
-    print(f"took out {counts}")
+    print(f"took out {counts}" + ("" if writes_settings else f"; left {kitagent.SETTINGS_REL} alone, nothing in it to change"))
     return 0
 
 
@@ -581,12 +582,13 @@ def cmd_agent_settings(args) -> int:
         return _refuse(f"{exc} — no settings are generated until it is fixed (`kit.py validate` reports it)")
     except kitagent.AgentSettingsError as exc:
         return _refuse(str(exc))
-    if args.apply:
+    m = state.merge
+    writes_settings = m.changed and kitagent.settings_differ(vault, m.settings)
+    if args.apply and writes_settings:
         try:
             kitagent.refuse_symlinked_settings(vault)
         except kitagent.AgentSettingsError as exc:
             return _refuse(str(exc))
-    m = state.merge
     for line in m.warnings:
         print(f"warning: {line}", file=sys.stderr)
     local = [f"warning: {flag} — it overrides what this command writes (docs/security.md §5)" for flag in state.local_flags]
@@ -620,7 +622,10 @@ def cmd_agent_settings(args) -> int:
         print(f"dry run: {summary} — add --apply to write {kitagent.SETTINGS_REL} and {kitagent.MANIFEST_REL}")
         return 0
     kitagent.apply(vault, state)
-    print(f"wrote {vault / kitagent.SETTINGS_REL} and {kitagent.MANIFEST_REL}: {summary}")
+    if writes_settings:
+        print(f"wrote {vault / kitagent.SETTINGS_REL} and {kitagent.MANIFEST_REL}: {summary}")
+    else:
+        print(f"wrote {kitagent.MANIFEST_REL}; left {kitagent.SETTINGS_REL} alone, it already matches: {summary}")
     print("  takes effect at the agent's next tool call; settings in .claude/settings.local.json, --settings and "
           "managed settings still apply on top (docs/security.md §5)")
     return 0

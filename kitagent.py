@@ -571,17 +571,26 @@ def apply(root: Path, state: State) -> bool:
     if not state.merge.changed:
         return False
     root = Path(root)
-    refuse_symlinked_settings(root)
-    existing, _ = _read_json(root / SETTINGS_REL, SETTINGS_REL)
-    if not same_json(existing, state.merge.settings):
+    if settings_differ(root, state.merge.settings):
+        refuse_symlinked_settings(root)
         write_atomic(root / SETTINGS_REL, (BOM if has_bom(state.raw_settings) else "") + settings_text(state.merge.settings))
     write_atomic(root / MANIFEST_REL, settings_text(state.merge.manifest))
     return True
 
 
+def settings_differ(root: Path, settings: dict[str, Any] | None) -> bool:
+    """Would writing `settings` change settings.json as it is on disk? (None: nothing to write.)"""
+    if settings is None:
+        return False
+    existing, _ = _read_json(Path(root) / SETTINGS_REL, SETTINGS_REL)
+    return not same_json(existing, settings)
+
+
 def refuse_symlinked_settings(root: Path) -> None:
     """--apply and --remove --apply rename a new file into place, which would turn a symlinked
-    settings.json (one kept with dotfiles, say) into a regular file and leave its target as it was."""
+    settings.json (one kept with dotfiles, say) into a regular file and leave its target as it was.
+    Callers ask only when settings.json would change: the manifest beside it is the kit's own file,
+    and writing it alone keeps a link that already matches from staying in drift forever."""
     if (Path(root) / SETTINGS_REL).is_symlink():
         raise AgentSettingsError(f"{SETTINGS_REL} is a symlink; writing would replace the link with a regular file. "
                                  "Merge the dry run's diff into its target by hand, or replace the link with a copy first")
@@ -673,11 +682,10 @@ def remove_apply(root: Path, result: Removal) -> None:
     """Write settings.json, then delete the manifest: a run stopped between the two leaves the
     manifest, and the next --remove finds nothing more to take out and deletes it."""
     root = Path(root)
-    refuse_symlinked_settings(root)
-    if result.settings is not None:
-        existing, raw = _read_json(root / SETTINGS_REL, SETTINGS_REL)
-        if not same_json(existing, result.settings):
-            write_atomic(root / SETTINGS_REL, (BOM if has_bom(raw) else "") + settings_text(result.settings))
+    if settings_differ(root, result.settings):
+        refuse_symlinked_settings(root)
+        _, raw = _read_json(root / SETTINGS_REL, SETTINGS_REL)
+        write_atomic(root / SETTINGS_REL, (BOM if has_bom(raw) else "") + settings_text(result.settings))
     with contextlib.suppress(FileNotFoundError):
         (root / MANIFEST_REL).unlink()
 

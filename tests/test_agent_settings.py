@@ -491,11 +491,41 @@ class Reverse(_Vault):
         self.assertEqual(real.read_text(encoding="utf-8"), '{"model": "x"}\n')
         self.assertFalse((self.v / MANIFEST).exists())
         self.assertEqual(agent(self.v).returncode, 0, "the dry run still previews")
-        write(self.v, MANIFEST, json.dumps({"permissions.deny": [], "sandbox.filesystem.denyRead": []}))
+        # --remove refuses too when it would take something out of the link's target.
+        real.write_text('{"permissions": {"deny": ["Read(./x)"]}}\n', encoding="utf-8")
+        write(self.v, MANIFEST, json.dumps({"permissions.deny": ["Read(./x)"], "sandbox.filesystem.denyRead": []}))
         r = agent(self.v, "--remove", "--apply")
         self.assertEqual(r.returncode, 2, r.stdout)
         self.assertIn("symlink", r.stderr)
         self.assertTrue((self.v / SETTINGS).is_symlink())
+        self.assertTrue((self.v / MANIFEST).exists())
+
+    def test_a_symlinked_settings_file_that_needs_no_change_reaches_a_clean_state(self):
+        # The refusal is about replacing the link; with nothing to write into settings.json, only the
+        # manifest is written, so --check and doctor can turn green.
+        self.assertEqual(agent(self.v, "--apply").returncode, 0)
+        real = self.v.parent / "dotfiles-settings.json"
+        (self.v / SETTINGS).replace(real)
+        (self.v / MANIFEST).unlink()
+        symlink(self, self.v / SETTINGS, real)
+        before = real.read_text(encoding="utf-8")
+        self.assertEqual(agent(self.v, "--check").returncode, 1, "no manifest yet")
+        r = agent(self.v, "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"left {SETTINGS} alone", r.stdout)
+        self.assertTrue((self.v / SETTINGS).is_symlink())
+        self.assertEqual(real.read_text(encoding="utf-8"), before)
+        self.assertTrue((self.v / MANIFEST).exists())
+        r = agent(self.v, "--check")
+        self.assertEqual(r.returncode, 0, r.stdout)
+        # --remove: settings.json needs no change when the kit's entries are already gone by hand.
+        real.write_text('{"model": "x"}\n', encoding="utf-8")
+        r = agent(self.v, "--remove", "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(f"left {SETTINGS} alone", r.stdout)
+        self.assertFalse((self.v / MANIFEST).exists())
+        self.assertTrue((self.v / SETTINGS).is_symlink())
+        self.assertEqual(real.read_text(encoding="utf-8"), '{"model": "x"}\n')
 
     def test_the_manifest_records_what_apply_replaced_and_keeps_it(self):
         self.put(self.FOREIGN)
