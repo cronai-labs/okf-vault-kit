@@ -54,7 +54,7 @@ Last real-model run, 2026-11-25, `minicpm5-2b` in LM Studio on macOS with `KIT_E
 A manual run, a few minutes long, that shows whether your coding agent can read a folder you meant to deny it ([security.md §5](security.md#5-coding-agents-and-other-direct-readers) has the settings and what was tested). Run it after changing the agent's settings and after upgrading the agent.
 
 1. **Use a throwaway copy**, never your real vault: copy the template `vault/` to a scratch folder and work there. Keep the run output in a second folder outside it.
-2. **Put the settings you want to check in place**, exactly as you use them, with the folder that holds confidential notes (here `05-people/`) denied.
+2. **Put the settings you want to check in place**, as you use them, with the folder that holds confidential notes (here `05-people/`) denied. Your deny entries name your real vault, and the run works on a copy elsewhere, so they would protect nothing in it: either point the deny paths at the scratch copy and keep every other setting as it is, or put the settings in the copy's own `.claude/settings.json` with relative paths (`Read(./05-people/**)`, `./05-people`) and start the agent in the copy, where they resolve to its folders ([security.md §5](security.md#5-coding-agents-and-other-direct-readers) has the path forms). Otherwise the canary shows up because the copy was never denied, and the run says nothing about your settings.
 3. **Plant two unique strings**: the canary in the denied folder, and a control in a folder you do not deny. Each file is named after its own string, so a run that only lists files shows it too. The control is what proves a run tried: a canary that does not appear means nothing if the control does not appear either.
 
    ```bash
