@@ -214,6 +214,15 @@ class Plan(_Vault):
             self.assertIn(f"Read(./{spelling})", plan.deny)
             self.assertIn(f"./{spelling}", plan.deny_read)
 
+    def test_a_path_rule_with_a_dot_in_its_last_name_goes_out_in_both_spellings(self):
+        # No file matches yet: the spellings come from the rule, not from the files listed one by one.
+        set_config(self.v, 'confidentiality:\n  confidential_paths: ["daily/2024.11.26", "07-knowledge/Salary Review v1.2"]\n')
+        plan = kitagent.claude_code_plan(self.v, self.export())
+        for spelling in ("daily/2024.11.26", "daily/2024.11.26.md",
+                         "07-knowledge/Salary Review v1.2", "07-knowledge/Salary Review v1.2.md"):
+            self.assertIn(f"Read(./{spelling})", plan.deny)
+            self.assertIn(f"./{spelling}", plan.deny_read)
+
     def test_a_name_a_rule_cannot_match_literally_denies_its_parent_folder(self):
         for name in ("odd [x]/n[1].md", "spaced/ lead.md", "bang/!x.md", "hash/#x.md"):
             write(self.v, f"07-knowledge/{name}", MARKED)

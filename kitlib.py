@@ -748,15 +748,16 @@ def _glob_regex(pattern: str) -> re.Pattern[str]:
 
 
 def path_rule_spellings(pattern: str) -> tuple[str, ...]:
-    """The spellings a path rule matches: itself, and with `.md` added when its last name has no
-    extension and does not end in `*` (which matches the `.md` already).
+    """The spellings a path rule matches: itself, and with `.md` added unless it ends in `.md`
+    already (any case) or in `*` (which matches the `.md` already).
 
     A reference is looked up with and without `.md`, so a rule without one covers the note too:
     `07-knowledge/salary-review` hides `07-knowledge/salary-review.md` however it is referenced.
-    The generator writes the same spellings, so the kit and an agent's deny list agree.
+    Any other dot is part of the name, not an extension: `daily/2024.11.26` hides
+    `daily/2024.11.26.md`. The generator writes the same spellings, so the kit and an agent's deny
+    list agree.
     """
-    last = pattern.rsplit("/", 1)[-1]
-    if last.endswith("*") or posixpath.splitext(last)[1]:
+    if pattern.endswith("*") or pattern.lower().endswith(".md"):
         return (pattern,)
     return (pattern, pattern + ".md")
 

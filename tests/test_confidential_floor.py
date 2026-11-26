@@ -152,8 +152,31 @@ class TheFloorDecides(_FloorVault):
         self.assertFalse(pol.covers("07-knowledge/salary-review-2.md"))
         self.assertEqual(kitlib.path_rule_spellings("07-knowledge/salary-review"),
                          ("07-knowledge/salary-review", "07-knowledge/salary-review.md"))
-        for rule in ("x/*.csv", "x/plan.md", "x/plan-*", "x/**"):
-            self.assertEqual(kitlib.path_rule_spellings(rule), (rule,), "an extension, or a `*` that matches it already")
+        for rule in ("x/plan.md", "x/Plan.MD", "x/plan-*", "x/**"):
+            self.assertEqual(kitlib.path_rule_spellings(rule), (rule,), "`.md` already, or a `*` that matches it already")
+        for rule in ("x/*.csv", "daily/2024.11.26", "07-knowledge/Salary Review v1.2"):
+            self.assertEqual(kitlib.path_rule_spellings(rule), (rule, rule + ".md"), "a dot is not `.md`")
+
+    def test_a_rule_whose_last_name_holds_a_dot_covers_the_note(self):
+        # `2024.11.26` read as a name with the extension `.26`: the rule got no `.md` spelling, hid
+        # nothing, and validate called it a misspelling.
+        notes = {"daily/2024.11.26.md": "# Day\n\nDOTDAY-BODY\n",
+                 "07-knowledge/Salary Review v1.2.md": "---\ntype: concept\ntitle: Pay bands\n---\n# Pay\n\nDOTSAL-BODY\n"}
+        for rel, text in notes.items():
+            write(self.vault, rel, text)
+        self.assertTrue(set(notes) <= {n.path for n in kitgraph.build_graph(self.vault).nodes.values()}, "the fixture")
+        set_config(self.vault, 'confidentiality:\n  confidential_paths: ["daily/2024.11.26", "07-knowledge/Salary Review v1.2"]\n')
+        index = kitlib.build_index(self.vault)
+        graph = json.dumps(kitgraph.to_json(kitgraph.redact_vault(kitgraph.build_graph(self.vault), self.vault)), default=str)
+        for rel in notes:
+            self.assertIs(kitlib.confidentiality(self.vault, rel), True, rel)
+            self.assertIs(kitlib.confidentiality(self.vault, rel.removesuffix(".md")), True, rel)
+            self.assertNotIn(rel, index)
+            self.assertNotIn(rel, graph)
+        for marker in ("DOTDAY", "DOTSAL", "Pay bands"):
+            self.assertNotIn(marker, index + graph)
+        r = run("validate", "--vault", str(self.vault))
+        self.assertNotIn("matches no file", r.stdout)
 
     def test_a_path_rule_ending_in_a_slash_points_to_the_folders_key(self):
         with self.assertRaisesRegex(kitlib.PolicyConfigError, "confidential_folders"):
