@@ -282,7 +282,7 @@ class FsBackend:
         a note into a `_`-folder is how a user hides it. Keying on the path set as well means the
         graph tools stop answering about such a note on the very next call.
         """
-        return frozenset((p.relative_to(self.vault).as_posix(), p.stat().st_mtime_ns) for p in kitlib.iter_markdown(self.vault))
+        return kitgraph.note_set_signature(self.vault)   # one definition, shared with `kit.py graph query`
 
     def graph(self) -> kitgraph.Graph:
         sig = self._note_set_signature()
@@ -322,19 +322,26 @@ class FsBackend:
                 "tasks": [t.__dict__ for t in tasks]}
 
     def file_minutes(self, text: str, title: str, date: str = "", project: str = "", people: str = "", kind: str = "project",
-                     daily: bool = True) -> dict[str, Any]:
+                     daily: bool = True, mode: str = "raise") -> dict[str, Any]:
+        # "raise" here like every other FsBackend read that sees the whole vault (todos, read_note):
+        # the backend has no policy. Guarded passes the policy's mode; the server only talks to it.
         day = dt.date.fromisoformat(date) if date else dt.date.today()
         ppl = [p.strip() for p in people.split(",") if p.strip()] or None
         title = _one_line(title)
         try:
-            m = kitrecon.file_minutes(self.vault, text, title, day, project or None, ppl, kind, g=self.graph(), daily=daily)
+            m = kitrecon.file_minutes(self.vault, text, title, day, project or None, ppl, kind, g=self.graph(), daily=daily,
+                                      mode=mode)
         except FileExistsError as exc:
             raise BridgeError(str(exc)) from exc
         self._graph_cache = None
         # also_written names what the vault actually took: the log entry is skipped when log.md
         # cannot be decoded, and a result that claims it anyway is the lie this tool used to tell.
         also = [] if any(x.startswith("log.md") for x in m.skipped) else ["log.md"]
-        return {"path": m.path, "people": m.people, "project": m.project, "unresolved": m.unresolved,
+        # "plain" returns the names as the note's `people:` holds them, never paths: a confidential
+        # name and an unknown one both come back as written and in `unresolved` (#52). `project` is
+        # only ever a note that mode could link, so a visible one.
+        return {"path": m.path, "people": m.people if mode == "raise" else list(m.names), "project": m.project,
+                "unresolved": m.unresolved, "marked_confidential": bool(m.confidential_links),
                 "actions": m.actions, "decisions": m.decisions, "outcomes": m.outcomes,
                 "also_written": also, "skipped": list(m.skipped)}
 
@@ -398,7 +405,8 @@ class CliBackend:
     def graph_context(self, node, depth=1): return self._need_fs().graph_context(node, depth)
     def todos(self, owner="", overdue_only=False): return self._need_fs().todos(owner, overdue_only)
     def skipped_files(self): return self._fs.skipped_files() if self._fs else []
-    def file_minutes(self, text, title, date="", project="", people="", kind="project", daily=True): return self._need_fs().file_minutes(text, title, date, project, people, kind, daily)
+    def file_minutes(self, text, title, date="", project="", people="", kind="project", daily=True, mode="raise"):
+        return self._need_fs().file_minutes(text, title, date, project, people, kind, daily, mode)
 
     def _resolve(self, file: str, must_exist: bool = True) -> Path:
         """Map a reference to a vault path so the policy layer can check it (needs --vault).
@@ -623,7 +631,7 @@ def build_server(backend, read_only: bool = False):
 
     @mcp.tool(name="file_meeting_minutes")
     def file_meeting_minutes(text: str, title: str, date: str = "", project: str = "", people: str = "", kind: str = "project") -> str:
-        """File a pasted recap/transcript as a meeting note in 02-meetings: people and project resolved against the vault, actions (`Action:`, `TODO:`, `- [ ]`) and decisions (`Decision:`, `Agreed:`) extracted, recap kept verbatim, entry added to log.md and today's daily note. `people` is comma-separated names; date defaults to today."""
+        """File a pasted recap/transcript as a meeting note in 02-meetings: people and project resolved against the vault, actions (`Action:`, `TODO:`, `- [ ]`) and decisions (`Decision:`, `Agreed:`) extracted, recap kept verbatim, entry added to log.md and today's daily note. `people` is comma-separated names; date defaults to today. The result's `people` are the names the note lists; a name not linked to a note you can read is kept as written and also listed in `unresolved`."""
         return json.dumps(backend.file_minutes(text, title, date, project, people, kind), ensure_ascii=False)
 
     return mcp

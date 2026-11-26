@@ -147,6 +147,9 @@ class Minutes(unittest.TestCase):
     def test_file_minutes_end_to_end(self):
         v = temp_vault()
         try:
+            # The sample people are confidential, so the default ("raise") links them and marks the
+            # meeting confidential; log.md and the daily note then name it without its title
+            # (covered in test_confidential_writers, as is the "plain" mode).
             m = kitrecon.file_minutes(v, RECAP, "Latency check-in", dt.date(2026, 9, 15), daily=True)
             self.assertEqual(m.path, "02-meetings/2026-09-15-latency-check-in.md")
             self.assertEqual(set(m.people), {"05-people/alex-example.md", "05-people/sam-example.md"})
@@ -154,6 +157,7 @@ class Minutes(unittest.TestCase):
             note = kitlib.parse_note(v / m.path, v)
             self.assertIsNone(note.fm_error); self.assertEqual(note.frontmatter["type"], "meeting")
             self.assertEqual(note.frontmatter["people"], ["Alex Example", "Sam Example"])
+            self.assertEqual(note.frontmatter["sensitivity"], "confidential")
             self.assertEqual(note.frontmatter["generated"]["by"], "process:kit-minutes")
             self.assertIn("## Actions\n\n- [ ] rerun the latency benchmark — Alex, due 2026-09-16", note.body)
             self.assertIn("> Search relaunch sync with Alex and Sam.", note.body)
@@ -162,8 +166,8 @@ class Minutes(unittest.TestCase):
             g = kitgraph.build_graph(v)
             self.assertEqual([f.render() for f in g.findings], [])
             self.assertIn((m.path, "project", "03-projects/search-relaunch.md", "frontmatter"), g.edges)
-            self.assertIn("Filed meeting note [Latency check-in]", (v / "log.md").read_text(encoding="utf-8"))
-            self.assertIn("Meeting filed: [Latency check-in]", kitlib.daily_note_path(v, dt.date(2026, 9, 15)).read_text(encoding="utf-8"))
+            self.assertIn("Filed a meeting note marked confidential", (v / "log.md").read_text(encoding="utf-8"))
+            self.assertIn("Meeting filed: a note marked confidential", kitlib.daily_note_path(v, dt.date(2026, 9, 15)).read_text(encoding="utf-8"))
             with self.assertRaises(FileExistsError):
                 kitrecon.file_minutes(v, RECAP, "Latency check-in", dt.date(2026, 9, 15))
             self.assertIn("rerun the latency benchmark", [t.text for t in kitrecon.scan_todos(v)])
@@ -175,6 +179,7 @@ class Minutes(unittest.TestCase):
         try:
             m = kitrecon.file_minutes(v, "nothing structured here", "Quick chat", dt.date(2026, 9, 16), people=["Sam", "Unknown Person"], dry_run=True)
             self.assertEqual(m.people, ["05-people/sam-example.md"]); self.assertEqual(m.unresolved, ["Unknown Person"])
+            self.assertEqual(m.names, ["Sam Example", "Unknown Person"], "an unknown name is kept as written")
             self.assertFalse((v / m.path).exists())
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
@@ -188,7 +193,8 @@ class Minutes(unittest.TestCase):
             dpath.parent.mkdir(parents=True, exist_ok=True)
             dpath.write_text("---\ntype: daily\ntitle: Day\ndescription: d\ndate: 2026-09-17\n---\n\n## Log\n\n- health back to green.",
                              encoding="utf-8", newline="\n")
-            kitrecon.file_minutes(v, RECAP, "Glue check", day, daily=True)
+            # "plain" keeps the note open, so the daily line carries the title this test reads.
+            kitrecon.file_minutes(v, RECAP, "Glue check", day, daily=True, mode="plain")
             raw = dpath.read_bytes()
             self.assertNotIn(b"\r\n", raw, "the daily note was appended with CRLF")
             lines = raw.decode("utf-8").splitlines()

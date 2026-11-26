@@ -7,7 +7,9 @@ the MCP tools and the backend:
   * write allow/deny lists  vault-relative folder prefixes, checked against the path the backend resolves to
                             (case-insensitively); people notes and system folders are denied by default
   * confidential hiding     notes with `sensitivity: confidential` are invisible to reads, searches, listings and every
-                            graph tool, and agents may not write them or set the `sensitivity` property
+                            graph tool, and agents may not write them or set the `sensitivity` property. This holds
+                            for this bridge only: a tool that opens the vault's files itself is not stopped by it
+                            (docs/security.md §5)
   * size and rate limits    per write call and per minute
   * propose mode            writes are recorded as proposals under .kit/proposals/ and applied by a human
                             (`kit.py proposals list|apply|reject`)
@@ -115,9 +117,6 @@ def _prefix_hit(rel: str, prefixes: tuple[str, ...]) -> str | None:
     return None
 
 
-_unparsed_frontmatter = kitlib.unparsed_frontmatter
-
-
 class Guarded:
     """Wraps a backend (FsBackend or CliBackend) and enforces the policy on every call."""
 
@@ -167,16 +166,9 @@ class Guarded:
             return False
         if rel == _UNRESOLVED or not self.vault:
             return True
-        p = self.vault / (rel if rel.endswith(".md") else rel + ".md")
-        if not p.exists():
-            return False
-        try:
-            note = kitlib.parse_note(p, self.vault)
-        except Exception:  # noqa: BLE001 — undecodable or unreadable: we cannot prove it is safe
-            return True
-        if note.frontmatter is None:
-            return bool(note.fm_error) or _unparsed_frontmatter(note.body)
-        return str(note.frontmatter.get("sensitivity", "")).lower() == "confidential"
+        # The shared predicate, not a copy: this one called `Path.exists()` outside its try, which
+        # raises PermissionError under a chmod-000 folder up to Python 3.13.
+        return kitlib.is_confidential(self.vault, rel)
 
     def _resolve_rel(self, file: str, must_exist: bool = True) -> str:
         """Vault-relative path of a note reference, using the backend's resolver when it has one.
@@ -350,21 +342,10 @@ class Guarded:
         return red
 
     def _redact_graph(self, g):
-        hidden = {nid for nid, n in g.nodes.items() if self._node_confidential(nid, n)}
-        red = kitgraph.Graph(built_at=g.built_at)
-        red.nodes = {nid: n for nid, n in g.nodes.items() if nid not in hidden}
-        for src, pred, dst, origin in g.edges:
-            if src not in hidden and dst not in hidden:
-                red.add_edge(src, pred, dst, origin)
-        red.findings = [f for f in g.findings if f.node not in hidden]
-        return red
-
-    def _node_confidential(self, nid: str, node) -> bool:
-        if getattr(node, "kind", "") != "note":
-            return False       # actors, sources and virtual nodes carry no note frontmatter
-        if str(node.props.get("sensitivity", "")).lower() == "confidential":
-            return True
-        return self._confidential(node.path or nid)
+        # The same redaction `kit.py graph` and `llm ask --graph` apply, so the CLI cannot show a
+        # node the bridge hides. The file check is this layer's: it fails closed on a reference it
+        # cannot resolve or a vault it cannot look into.
+        return kitgraph.redact(g, self._confidential)
 
     # ------------------------------------------------------------ write side
     def _write(self, tool: str, args: dict[str, Any], target: str, payload: str, fn: Callable[[], Any],
@@ -420,7 +401,12 @@ class Guarded:
         def run():
             daily_rel = self._daily_rel(date)
             daily_ok = bool(daily_rel) and self._side_write_ok(daily_rel)
-            out = self.backend.file_minutes(text, title, date, project, people, kind, daily=daily_ok)
+            # Hiding confidential notes, the tool links only the others and keeps every other name
+            # as written ("plain"): a name passed in `people` that is confidential comes back exactly
+            # like one the vault does not know. With --show-confidential it links them all and marks
+            # a meeting that links a confidential note confidential itself ("raise") (#52).
+            out = self.backend.file_minutes(text, title, date, project, people, kind, daily=daily_ok,
+                                            mode="plain" if self.policy.hide_confidential else "raise")
             if daily_rel and not daily_ok:
                 out["skipped"] = list(out.get("skipped", ())) + [f"{daily_rel} (write denied by policy)"]
             return out

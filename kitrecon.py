@@ -5,7 +5,8 @@ Three concerns, all deterministic, all dry-run by default:
   reconcile  hub tables (projects.md one-liners, decision-log.md register, priorities.md) vs. note frontmatter,
              and derived-state conflicts from the graph (superseded decisions). Policy: structured frontmatter in the
              note is the source of truth; hub rows are views. --apply rewrites hub cells, adds missing rows, sets
-             derived states; it never deletes and never touches free-text cells.
+             derived states; it never touches free-text cells, and the only row it deletes is one that links to a
+             note whose frontmatter says `sensitivity: confidential` (#52).
   todos      every `- [ ]` / `- [x]` in the vault with owner and due parsed from `— owner, due YYYY-MM-DD`;
              overdue / due-soon / duplicates / done-in-one-place-open-in-another; digest page; --sync-done.
   minutes    file a pasted recap as a meeting note: entities resolved through the graph, actions and decisions
@@ -138,6 +139,52 @@ def _milestone_text(props: dict) -> str:
     return " ".join(x for x in (ms, due_s) if x)
 
 
+def _node_confidential(vault: Path, g: kitgraph.Graph, nid: str) -> bool:
+    """`kitlib.is_confidential` for a graph node; actors, sources and virtual nodes are no notes."""
+    n = g.nodes.get(nid)
+    return bool(n) and n.kind == "note" and kitlib.is_confidential(vault, n.path or nid)
+
+
+def _row_confidentiality(vault: Path, g: kitgraph.Graph, hub: str, cell: str) -> bool | None:
+    """Does a hub row link to a confidential note? True, False, or None for "could not tell".
+
+    Asked of the file the link names before the graph resolves it, so a target the graph reads
+    differently (frontmatter that does not parse) is still judged by the shared predicate; then of
+    the node the row resolves to, because a resolution by stem or title can land somewhere else.
+    Three answers, not two: the caller deletes the row on True, and a row is hand-written text
+    that exists nowhere else, so an unreadable target or a YAML error must not count as a yes.
+    """
+    target = _first_link_target(cell)
+    if not target:
+        return False
+    rel = posixpath.normpath(f"{Path(hub).parent.as_posix()}/{target}")
+    answers = [kitlib.confidentiality(vault, rel)] if not rel.startswith("..") else []
+    nid = kitgraph.resolve_id(g, rel)
+    n = g.nodes.get(nid) if nid else None
+    if n and n.kind == "note":            # actors, sources and virtual nodes are no notes
+        answers.append(kitlib.confidentiality(vault, n.path or nid))
+    if True in answers:
+        return True
+    return None if None in answers else False
+
+
+def _confidential_row(hub: str, line_no: int, apply: bool) -> Change:
+    """The one row reconcile deletes. Named by its line, never by its cells: they are what leaked."""
+    return Change("hub_confidential_row", hub, f"line {line_no} links to a note marked confidential"
+                  + (" — row removed" if apply else " — run with --apply to remove the row"), applied=apply)
+
+
+def _unverifiable_row(hub: str, line_no: int) -> Change:
+    """A row whose target the kit cannot read or parse: kept as written, never rewritten.
+
+    Not deleted, because its free-text cells would be lost with it; not reconciled either, because
+    a note without readable frontmatter has no health, state or date to copy, and drift would
+    blank the cells. Named by its line, like a confidential row: the target may be one.
+    """
+    return Change("hub_row_unverifiable", hub, f"line {line_no} links to a note the kit cannot read or parse"
+                  " — row left as written; fix the note's permissions or frontmatter and run reconcile again")
+
+
 def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None, today: dt.date | None = None) -> list[Change]:
     vault = Path(vault)
     g = g or kitgraph.build_graph(vault)
@@ -150,7 +197,9 @@ def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None,
     changes += _reconcile_priorities(vault, g)
     if apply and any(c.applied for c in changes):
         n = sum(1 for c in changes if c.applied)
-        for skip in _log_entry(vault, f"Reconciled hubs and derived states ({n} change(s)) — kit.py reconcile --apply", "Update", today):
+        removed = sum(1 for c in changes if c.applied and c.code == "hub_confidential_row")
+        what = f"{n} change(s)" + (f", {removed} row(s) for confidential notes removed" if removed else "")
+        for skip in _log_entry(vault, f"Reconciled hubs and derived states ({what}) — kit.py reconcile --apply", "Update", today):
             changes.append(Change("log_unreadable", "log.md", skip))
     return changes
 
@@ -195,11 +244,27 @@ def _reconcile_projects(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Cha
         return [Change("hub_no_table", PROJECT_HUB, "table lacks a 'Project' column")]
     changes: list[Change] = []
     seen: set[str] = set()
+    drop: list[int] = []
     for i in range(first, end):
         cells = _split_row(lines[i])
         if len(cells) < len(header):
             cells += [""] * (len(header) - len(cells))
+        # The one deliberate exception to "reconcile never deletes" (#52): the hub is an ordinary
+        # file the bridge serves whole, so a row naming a confidential note is a leak, and
+        # rewriting its cells would only keep it current. Earlier versions of reconcile wrote
+        # such rows themselves; removing them is what cleans those vaults up. Only on a certain
+        # yes: a target we cannot read or parse leaves the row alone (_unverifiable_row).
+        verdict = _row_confidentiality(vault, g, PROJECT_HUB, cells[col["project"]])
+        if verdict:
+            changes.append(_confidential_row(PROJECT_HUB, i + 1, apply))
+            drop.append(i)
+            continue
         nid = _row_target_id(g, PROJECT_HUB, cells[col["project"]])
+        if verdict is None:
+            changes.append(_unverifiable_row(PROJECT_HUB, i + 1))
+            if nid:
+                seen.add(nid)     # the row is there; asking for a second one would duplicate it
+            continue
         if not nid:
             changes.append(Change("hub_broken_row", PROJECT_HUB, f"row '{cells[col['project']]}' does not link to a project note"))
             continue
@@ -216,8 +281,10 @@ def _reconcile_projects(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Cha
                 lines[i] = "| " + " | ".join(cells) + " |"
                 ch.applied = True
             changes.append(ch)
+    # A confidential project gets no row, and no finding either: one would ask for the row on every run.
     missing = [nid for nid, n in g.nodes.items() if n.kind == "note" and n.type == "project"
-               and str(n.props.get("state") or "") not in CLOSED_STATES and nid not in seen]
+               and str(n.props.get("state") or "") not in CLOSED_STATES and nid not in seen
+               and not _node_confidential(vault, g, nid)]
     new_rows = []
     for nid in sorted(missing):
         n = g.nodes[nid]
@@ -234,6 +301,8 @@ def _reconcile_projects(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Cha
         changes.append(ch)
     if apply and any(c.applied for c in changes):
         lines[end:end] = new_rows
+        for i in reversed(drop):      # every dropped row sits above `end`, so the insert did not move it
+            del lines[i]
         hub.write_text("\n".join(lines) + ("\n" if text.endswith("\n") else ""), encoding="utf-8", newline="\n")
     return changes
 
@@ -261,7 +330,18 @@ def _reconcile_decisions(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Ch
         cells = _split_row(lines[i])
         if len(cells) < len(header):
             cells += [""] * (len(header) - len(cells))
+        # Deleted, not reconciled: see the same exception in _reconcile_projects (#52).
+        verdict = _row_confidentiality(vault, g, DECISION_HUB, cells[col["note"]])
+        if verdict:
+            changes.append(_confidential_row(DECISION_HUB, i + 1, apply))
+            continue          # not kept in `rows`, so the rewrite below leaves it out
         nid = _row_target_id(g, DECISION_HUB, cells[col["note"]])
+        if verdict is None:
+            changes.append(_unverifiable_row(DECISION_HUB, i + 1))
+            if nid:
+                seen.add(nid)
+            rows.append((cells[col["date"]] if "date" in col else "", lines[i]))   # kept: the rewrite keeps only `rows`
+            continue
         if not nid:
             changes.append(Change("hub_broken_row", DECISION_HUB, f"row '{cells[col.get('decision', 0)]}' does not link to a decision note"))
             rows.append(("", lines[i])); continue
@@ -279,7 +359,8 @@ def _reconcile_decisions(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Ch
                 ch.applied = True
             changes.append(ch)
         rows.append((cells[col["date"]] if "date" in col else "", lines[i]))
-    missing = [nid for nid, n in g.nodes.items() if n.kind == "note" and n.type == "decision" and nid not in seen]
+    missing = [nid for nid, n in g.nodes.items() if n.kind == "note" and n.type == "decision" and nid not in seen
+               and not _node_confidential(vault, g, nid)]
     for nid in sorted(missing):
         n = g.nodes[nid]
         ch = Change("hub_missing_row", DECISION_HUB, f"decision {nid} is not in the register")
@@ -310,8 +391,11 @@ def _reconcile_priorities(vault: Path, g: kitgraph.Graph) -> list[Change]:
     section = m.group(1) if m else ""
     changes = []
     for nid, n in g.nodes.items():
+        # A confidential decision is not asked for: priorities.md is an ordinary file, and listing
+        # the decision there would copy its title out of the note that hides it (#52).
         if (n.kind == "note" and n.type == "decision" and n.props.get("state") == "open"
-                and Path(nid).name not in section and n.title not in section):
+                and Path(nid).name not in section and n.title not in section
+                and not _node_confidential(vault, g, nid)):
             changes.append(Change("priorities_missing_open_decision", PRIORITIES, f"open decision {nid} is not listed under '## Open decisions'"))
     return changes
 
@@ -320,7 +404,12 @@ def _reconcile_superseded(vault: Path, g: kitgraph.Graph, apply: bool) -> list[C
     changes = []
     for f in g.findings:
         if f.code == "state_conflict":
-            ch = Change("state_conflict", f.node, f.message)
+            # The message names the superseding note by path; when that note is confidential, the
+            # reconcile output (and `--json`, which agents read) says so instead of naming it (#52).
+            msg = f.message
+            if any(_node_confidential(vault, g, r) for r in f.refs):
+                msg = f"is superseded by a note marked `sensitivity: confidential` but has state `{g.nodes[f.node].props.get('state')}`" if f.node in g.nodes else "is superseded by a note marked `sensitivity: confidential`"
+            ch = Change("state_conflict", f.node, msg)
             if apply:
                 kitlib.set_frontmatter(vault / f.node, {"state": "superseded"})
                 ch.applied = True
@@ -418,17 +507,44 @@ class TodoReport:
     done_conflicts: list[list[Task]] = field(default_factory=list)
     synced: list[Task] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)   # what the run could not read, named for the user
+    confidential: set[str] = field(default_factory=set)  # files of `tasks` that kitlib.is_confidential hides
+    hidden: int = 0                                      # tasks without_confidential() left out
 
     @property
     def open(self) -> list[Task]:
         return [t for t in self.tasks if not t.done]
+
+    def without_confidential(self) -> TodoReport:
+        """The report minus every task in a confidential note, and every duplicate or done/open
+        conflict that involves one — the rule the bridge's vault_todos applies per call (#52).
+
+        A view, not a different scan: the report itself keeps every task, because `--sync-done`,
+        the CLI's own listing and the bridge (which filters by its own policy, and shows them with
+        --show-confidential) all work on the whole vault. Whatever writes a file that agents can
+        read — the digest — renders this view instead.
+        """
+        if not self.confidential:
+            return self
+
+        def keep(t: Task) -> bool:
+            return t.file not in self.confidential
+
+        def whole(grps: list[list[Task]]) -> list[list[Task]]:
+            return [grp for grp in grps if all(keep(t) for t in grp)]
+
+        return TodoReport([t for t in self.tasks if keep(t)], self.today,
+                          overdue=[t for t in self.overdue if keep(t)], due_soon=[t for t in self.due_soon if keep(t)],
+                          open_no_owner=[t for t in self.open_no_owner if keep(t)],
+                          duplicates=whole(self.duplicates), done_conflicts=whole(self.done_conflicts),
+                          synced=[t for t in self.synced if keep(t)], skipped=list(self.skipped),
+                          hidden=sum(1 for t in self.tasks if not keep(t)))
 
 
 def todo_report(vault: Path, today: dt.date | None = None, horizon_days: int = 7, sync_done: bool = False) -> TodoReport:
     vault = Path(vault)
     today = today or dt.date.today()
     tasks = scan_todos(vault)
-    rep = TodoReport(tasks, today)
+    rep = TodoReport(tasks, today, confidential={f for f in {t.file for t in tasks} if kitlib.is_confidential(vault, f)})
     for t in tasks:
         if t.done:
             continue
@@ -490,11 +606,17 @@ def _task_line(t: Task, from_file: str) -> str:
 
 
 def render_digest(rep: TodoReport, from_file: str = DIGEST, actor: str = "process:kit-todos") -> str:
+    # Always the filtered view, whoever built the report: the digest is an `internal` note the
+    # bridge serves whole, and it used to list confidential notes' tasks with owner, due date and
+    # path (#52). No caller can opt out; the bridge's --show-confidential reads the notes themselves.
+    rep = rep.without_confidential()
     now = dt.datetime.now().astimezone().isoformat(timespec="seconds")
     lines = ["---", "type: system", "title: Todo Digest",
              f"description: Generated task digest as of {rep.today.isoformat()} — {len(rep.overdue)} overdue, {len(rep.due_soon)} due soon, {len(rep.done_conflicts)} conflict(s); regenerate with kit.py todos --digest.",
              "tags: [system, generated]", "sensitivity: internal", f"generated: {{ by: {actor}, at: \"{now}\" }}", "---", "",
              "# Todo Digest", "", f"{len(rep.open)} open tasks across {len({t.file for t in rep.tasks})} notes. Ticking a task here does nothing — tick it where it lives (links on every line).", ""]
+    if rep.hidden:
+        lines += [f"{rep.hidden} task(s) in notes marked `sensitivity: confidential` are not listed, nor any duplicate that involves one.", ""]
     def section(title: str, items: list[Task], empty: str):
         lines.append(f"## {title}"); lines.append("")
         if not items:
@@ -546,8 +668,10 @@ class Minutes:
     title: str
     date: dt.date
     text: str
-    people: list[str] = field(default_factory=list)        # node ids
+    people: list[str] = field(default_factory=list)        # node ids of the people linked
     project: str | None = None                             # node id
+    names: list[str] = field(default_factory=list)         # the note's `people:`: linked titles, other names as written
+    confidential_links: list[str] = field(default_factory=list)  # linked notes marked confidential ("raise" marks the note)
     actions: list[str] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
     outcomes: list[str] = field(default_factory=list)
@@ -586,12 +710,14 @@ def _format_action(text: str, owner: str, due: str) -> str:
     return f"- [ ] {text}" + (f" — {meta}" if meta else "")
 
 
-def detect_entities(text: str, g: kitgraph.Graph) -> tuple[list[str], list[str]]:
-    """People and projects mentioned in free text, by title/alias (word-boundary, case-insensitive).
+def detect_entity_mentions(text: str, g: kitgraph.Graph) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """People and projects mentioned in free text, as (node id, the text as written) pairs.
 
-    A bare first name is matched capitalised and case-sensitively instead: 'will', 'mark', 'max'
-    and 'grant' are ordinary English words, and a person named Will must not be an attendee of
-    every meeting whose recap contains a future tense.
+    Matched by title/alias (word-boundary, case-insensitive). A bare first name is matched
+    capitalised and case-sensitively instead: 'will', 'mark', 'max' and 'grant' are ordinary
+    English words, and a person named Will must not be an attendee of every meeting whose recap
+    contains a future tense. The second element is the matched span of `text`, never the note's
+    title: a caller that must not copy a note's title can still keep the name the text used.
     """
     people, projects = [], []
     for nid, n in g.nodes.items():
@@ -604,27 +730,62 @@ def detect_entities(text: str, g: kitgraph.Graph) -> tuple[list[str], list[str]]
                 names.append((first[:1].upper() + first[1:], 0))
         for name, mode in names:
             clean = re.sub(r"\s*\(example\)", "", name, flags=re.I).strip()
-            if clean and re.search(r"(?<![\w-])" + re.escape(clean) + r"(?![\w-])", text, mode):
-                (people if n.type == "person" else projects).append(nid); break
+            hit = re.search(r"(?<![\w-])" + re.escape(clean) + r"(?![\w-])", text, mode) if clean else None
+            if hit:
+                (people if n.type == "person" else projects).append((nid, hit.group(0))); break
     return people, projects
+
+
+def detect_entities(text: str, g: kitgraph.Graph) -> tuple[list[str], list[str]]:
+    """`detect_entity_mentions` without the matched text: the node ids of people and projects."""
+    people, projects = detect_entity_mentions(text, g)
+    return [nid for nid, _ in people], [nid for nid, _ in projects]
+
+
+MINUTES_MODES = ("raise", "plain")
 
 
 def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None, project: str | None = None,
                  people: list[str] | None = None, kind: str = "project", g: kitgraph.Graph | None = None,
                  dry_run: bool = False, force: bool = False, daily: bool = False, actor: str = "process:kit-minutes",
-                 extra: dict[str, list[str]] | None = None) -> Minutes:
+                 extra: dict[str, list[str]] | None = None, mode: str = "raise") -> Minutes:
+    """File a recap as a meeting note. A note may raise its confidentiality, never lower it (#52).
+
+    `mode="raise"` links people and projects as the whole vault knows them; when one it links is a
+    confidential note, the meeting note is marked `sensitivity: confidential` too, so its links and
+    title are hidden wherever that note's are. `mode="plain"` links only notes that are not
+    confidential and keeps the template's sensitivity: every other name, confidential or unknown,
+    stays in `people:` as the recap or the caller wrote it, never as a confidential note's title or
+    path, and a confidential project is neither linked nor stored. Names in `people:` that are not
+    linked are also in `unresolved`.
+    """
+    if mode not in MINUTES_MODES:
+        raise ValueError(f"mode must be one of {', '.join(MINUTES_MODES)}, not {mode!r}")
     vault = Path(vault)
-    g = g or kitgraph.build_graph(vault)
+    full = g or kitgraph.build_graph(vault)
     date = date or dt.date.today()
-    resolver = kitgraph.Resolver(g.nodes, kitgraph.load_ontology(vault), g.nodes[kitgraph.SELF_ID].props.get("actor"))
+    self_actor = full.nodes[kitgraph.SELF_ID].props.get("actor")
+    # Links come from one graph: the whole vault to raise, the redacted one to stay plain. The
+    # redacted graph also decides detection, so a hidden project next to a visible one does not
+    # make the visible one ambiguous, and an explicit name never reaches a hidden note.
+    linkable = full if mode == "raise" else kitgraph.redact_vault(full, vault)
+    resolver = kitgraph.Resolver(linkable.nodes, kitgraph.load_ontology(vault), self_actor)
     m = Minutes(title=title, date=date, text=text)
-    found_people, found_projects = detect_entities(text, g)
+    found_people, found_projects = detect_entities(text, linkable)
     if people:
         for p in people:
             nid, _method, _cands = resolver.resolve(p, ["person"])
-            (m.people.append(nid) if nid else m.unresolved.append(p))
+            if nid:
+                m.people.append(nid); m.names.append(linkable.nodes[nid].title)
+            else:
+                m.names.append(p); m.unresolved.append(p)
     else:
         m.people = found_people
+        m.names = [linkable.nodes[p].title for p in found_people]
+        # In plain mode a name the recap mentions is only listed when it links to a visible note.
+        # Listing a confidential person found in the text, while an unknown name in the same text is
+        # never found, would tell the reader which names are confidential; the recap stays verbatim
+        # in the body, so nothing the meeting said is lost.
     if project:
         nid, _method, _cands = resolver.resolve(project, ["project", "area"])
         if nid:
@@ -633,6 +794,11 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
             m.unresolved.append(project)
     elif len(found_projects) == 1:
         m.project = found_projects[0]
+    if mode == "raise":
+        def confidential(rel: str) -> bool:
+            return kitlib.is_confidential(vault, rel)
+        m.confidential_links = [nid for nid in m.people + ([m.project] if m.project else [])
+                                if nid in full.nodes and kitgraph.node_confidential(full.nodes[nid], confidential)]
     m.actions, m.decisions, m.outcomes = extract_minutes(text)
     if extra:
         for k in ("actions", "decisions", "outcomes"):
@@ -663,11 +829,23 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     fm.update({
         "type": "meeting", "title": title, "date": date, "meeting_type": kind,
         "description": _describe(m),
-        "people": [g.nodes[p].title for p in m.people],
-        "project": f"[{g.nodes[m.project].title}]({_link(rel, m.project)})" if m.project else "",
+        # `people:` is a reference list (the ontology resolves each entry to a person note), so it
+        # holds only the names that were linked. A name that links to no readable note goes to
+        # `attendees:`, plain text: as a reference it would raise an unresolved_ref warning for an
+        # unknown name and none for a confidential one, which tells the two apart in the graph.
+        "people": [linkable.nodes[nid].title for nid in m.people],
+        "project": f"[{linkable.nodes[m.project].title}]({_link(rel, m.project)})" if m.project else "",
         "state": "open",
         "generated": {"by": actor, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds")},
     })
+    plain_names = [n for n in m.names if n in m.unresolved]
+    if plain_names:
+        fm["attendees"] = plain_names
+    # Raised, never lowered: a template that already says confidential keeps its own spelling, and
+    # `--force` over a note that is confidential (an earlier run raised it) keeps it confidential.
+    overwrites_confidential = out.exists() and kitlib.is_confidential(vault, rel)
+    if (m.confidential_links or overwrites_confidential) and str(fm.get("sensitivity", "")).strip().lower() != kitlib.CONFIDENTIAL:
+        fm["sensitivity"] = kitlib.CONFIDENTIAL
     rest = _fill_section(rest, "## Outcomes", m.outcomes)
     rest = _fill_section(rest, "## Decisions", m.decisions, hint_target=rel)
     rest = _fill_section(rest, "## Actions", m.actions, raw_lines=True)
@@ -675,7 +853,14 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     fm_text = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, default_flow_style=None).rstrip("\n")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(f"---\n{fm_text}\n---\n{rest}", encoding="utf-8", newline="\n")
-    m.skipped += _log_entry(vault, f"Filed meeting note [{title}]({rel}) from a recap ({len(m.actions)} actions, {len(m.decisions)} decisions)", "Creation", date)
+    # The template, or a confidential link in "raise" mode, decides the sensitivity. A confidential
+    # note is logged, and announced in the daily note, without its title or its path (which carries
+    # the title's slug): log.md and the daily note are ordinary files the bridge serves whole (#52).
+    # Judged on the file as written.
+    confidential = kitlib.is_confidential(vault, rel)
+    counts = f"({len(m.actions)} actions, {len(m.decisions)} decisions)"
+    filed = f"a meeting note marked confidential from a recap {counts}" if confidential else f"meeting note [{title}]({rel}) from a recap {counts}"
+    m.skipped += _log_entry(vault, f"Filed {filed}", "Creation", date)
     if daily:
         dpath = kitlib.daily_note_path(vault, date)
         if dpath.exists() and kitlib.read_text(dpath) is None:
@@ -694,7 +879,8 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
         with dpath.open("a", encoding="utf-8", newline="\n") as fh:
             if tail not in (b"", b"\n"):
                 fh.write("\n")
-            fh.write(f"- Meeting filed: [{title}]({_rel(dpath.relative_to(vault).as_posix(), rel)})\n")
+            fh.write("- Meeting filed: a note marked confidential (not linked here)\n" if confidential
+                     else f"- Meeting filed: [{title}]({_rel(dpath.relative_to(vault).as_posix(), rel)})\n")
     return m
 
 

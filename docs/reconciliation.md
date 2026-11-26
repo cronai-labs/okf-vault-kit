@@ -4,19 +4,21 @@ Everything here is deterministic, runs offline, and is **dry-run by default**. W
 
 ## The conflict policy (one paragraph)
 
-Structured frontmatter in the individual note is the **source of truth**. The hub pages (`03-projects/projects.md` one-liners, `06-decisions/decision-log.md` register, `00-home/priorities.md`) are views written for humans and for models that read literal text. When a view and a note disagree, the view is updated from the note; free-text cells (the "one line", "where decided") are never touched, rows are never deleted, and derived states (a decision that something newer `supersedes`) are written back to the note because the graph proves them. A task ticked in one note and open in another is a conflict resolved in favour of *done* — you can only complete something once. Anything the kit cannot decide mechanically is reported, not guessed.
+Structured frontmatter in the individual note is the **source of truth**. The hub pages (`03-projects/projects.md` one-liners, `06-decisions/decision-log.md` register, `00-home/priorities.md`) are views written for humans and for models that read literal text. When a view and a note disagree, the view is updated from the note; free-text cells (the "one line", "where decided") are never touched, rows are never deleted except one kind — a row whose link points at a note whose frontmatter says `sensitivity: confidential` is removed (a row whose note cannot be read or parsed is kept and reported), since the hub would otherwise copy that note's title and fields into an ordinary file (#52) — and derived states (a decision that something newer `supersedes`) are written back to the note because the graph proves them. A task ticked in one note and open in another is a conflict resolved in favour of *done* — you can only complete something once. Anything the kit cannot decide mechanically is reported, not guessed.
 
 ## `kit.py reconcile`
 
 ```bash
 uv run kit.py reconcile                 # report only; exit 2 when there is something to apply
-uv run kit.py reconcile --apply         # rewrite hub cells, add missing rows, set derived states, log it
+uv run kit.py reconcile --apply         # rewrite hub cells, add missing rows, remove rows for confidential notes, set derived states, log it
 ```
 
 | Finding | Meaning | `--apply` does |
 |---|---|---|
 | `hub_drift` | one-liner or register cell disagrees with the note's `health` / `state` / `milestone`+`due` / `date` | overwrite the cell from the note |
-| `hub_missing_row` | an active project or any decision has no row | append a row (`description` becomes the one-liner; register is re-sorted newest first) |
+| `hub_missing_row` | an active project or any decision that is not confidential has no row | append a row (`description` becomes the one-liner; register is re-sorted newest first) |
+| `hub_confidential_row` | a row links to a note marked `sensitivity: confidential`; the finding names the hub's line, not the row's cells | remove the row |
+| `hub_row_unverifiable` | a row links to a note that cannot be read or parsed, so the kit cannot tell whether it is confidential | nothing — the row is kept; fix the note, or delete the row yourself |
 | `hub_broken_row` | a row links to a note that does not exist | nothing — you decide whether to delete or re-link |
 | `priorities_missing_open_decision` | a decision note is `state: open` but not listed under *Open decisions* in Priorities | nothing — Priorities is prose you write |
 | `state_conflict` | decision B `supersedes` A, but A is not `state: superseded` | set `state: superseded` on A (then the register row follows in the same run) |
@@ -34,7 +36,10 @@ uv run kit.py todos                     # summary: overdue, due within 7 days, c
 uv run kit.py todos --owner Alex --json # scriptable
 uv run kit.py todos --digest            # writes 00-home/todo-digest.md (OKF-valid, linked, generated-by process:kit-todos)
 uv run kit.py todos --sync-done         # tick open copies of tasks that are already ticked in another note
+uv run kit.py todos --show-confidential # include tasks from notes marked sensitivity: confidential
 ```
+
+Tasks in notes marked `sensitivity: confidential` are left out of the summary, of `--json` and of the digest, with every duplicate and done/open conflict that involves one, and a count line says how many; a task's text and its note's path are as confidential as the note ([security.md](security.md#what-a-confidential-note-keeps-to-itself)). `--show-confidential` includes them in the summary and in `--json`, for output that stays with you; the digest never lists them.
 
 What it reconciles:
 
@@ -48,19 +53,20 @@ The digest page is a generated view: tick tasks where they live (each line links
 ## `kit.py minutes` — filing meeting notes
 
 ```bash
-uv run kit.py minutes recap.txt --title "Search relaunch sync" [--date 2026-09-16] [--project search-relaunch] [--people "Alex, Sam"] [--kind project] [--daily] [--llm] [--dry-run]
+uv run kit.py minutes recap.txt --title "Search relaunch sync" [--date 2026-09-16] [--project search-relaunch] [--people "Alex, Sam"] [--kind project] [--daily] [--llm] [--dry-run] [--keep-open]
 cat recap.txt | uv run kit.py minutes - --title "Sync"
 ```
 
 What happens, in order:
 
-1. **Entity resolution** through the graph: people and projects mentioned in the text (title, `aliases`, unique first names — the bare first name only where it is capitalised, so 'will' and 'mark' stay verbs) are resolved to notes; `--people`/`--project` override detection and are resolved the same way. Unresolved names are reported, never invented.
-2. **Extraction by pattern**: `Action:` / `TODO:` / `AI:` / `Task:` lines and `- [ ]` lines become actions in the vault's task format (owner and due parsed when present); `Decision:` / `Decided:` / `Agreed:` lines become decisions; `Outcome:` / `Result:` lines become outcomes.
-3. **Optional model pass** (`--llm`): the local endpoint gets the recap with a strict JSON schema and its outcomes/decisions/actions are merged (deduplicated) with the pattern results. If the endpoint is down, the deterministic result stands and you are told.
-4. **Note creation** from `90-templates/meeting.md` at `02-meetings/YYYY-MM-DD-<slug>.md`: frontmatter filled (`type`, `title`, `date`, `meeting_type`, `people`, `project` as a relative link, `description` from the first sentence, `generated.by: process:kit-minutes`), sections filled, recap kept verbatim under *Recap*. Existing files are never overwritten without `--force`.
-5. **Bookkeeping**: an entry in `log.md`; with `--daily`, a line in today's daily note (created from the daily template if missing).
+1. **Entity resolution** through the graph: people and projects mentioned in the text (title, `aliases`, unique first names — the bare first name only where it is capitalised, so 'will' and 'mark' stay verbs) are resolved to notes; `--people`/`--project` override detection and are resolved the same way. A name passed with `--people` that resolves to no note is kept in `people:` as you wrote it and reported as unresolved; nothing is invented.
+2. **Confidentiality**: a meeting note may raise its confidentiality, never lower it. By default every note is a candidate, and when the meeting links a person or project marked `sensitivity: confidential`, the meeting note is marked `sensitivity: confidential` too (a template that already says so stays so). The command prints that it did, and why: "marked confidential because it links N note(s) marked confidential; --keep-open files it open with their names as plain text". `--keep-open` links only notes that are not confidential and keeps the template's sensitivity. A name passed with `--people` that links to no such note, confidential or unknown alike, goes to `attendees:` exactly as written ("Alex", never the note's title or path); `people:` is a list of links, so it holds only linked names. A name the recap merely mentions is listed only when it links: only names of notes are found in a recap, so listing a confidential one would set it apart from an unknown one. The recap itself stays verbatim in the note. A confidential project is neither linked nor stored. In both modes an unknown name passed with `--people` is kept in `attendees:`, and `--force` over a meeting note that is confidential keeps it confidential.
+3. **Extraction by pattern**: `Action:` / `TODO:` / `AI:` / `Task:` lines and `- [ ]` lines become actions in the vault's task format (owner and due parsed when present); `Decision:` / `Decided:` / `Agreed:` lines become decisions; `Outcome:` / `Result:` lines become outcomes.
+4. **Optional model pass** (`--llm`): the local endpoint gets the recap with a strict JSON schema and its outcomes/decisions/actions are merged (deduplicated) with the pattern results. If the endpoint is down, the deterministic result stands and you are told.
+5. **Note creation** from `90-templates/meeting.md` at `02-meetings/YYYY-MM-DD-<slug>.md`: frontmatter filled (`type`, `title`, `date`, `meeting_type`, `people` as names, `project` as a relative link, `description` from the first sentence, `generated.by: process:kit-minutes`), sections filled, recap kept verbatim under *Recap*. Existing files are never overwritten without `--force`.
+6. **Bookkeeping**: an entry in `log.md`; with `--daily`, a line in today's daily note (created from the daily template if missing). For a meeting note that is confidential, both name it without its title or path.
 
-The same capability is an MCP tool (`file_meeting_minutes`), so in LM Studio you can paste a recap and say "file this as the Tuesday sync with Alex and Sam" — the model calls the tool, you confirm, the note appears with the extraction already done. `vault_todos` and the `graph_*` tools cover the surfacing side in chat.
+The same capability is an MCP tool (`file_meeting_minutes`), so in LM Studio you can paste a recap and say "file this as the Tuesday sync with Alex and Sam" — the model calls the tool, you confirm, the note appears with the extraction already done. Under the bridge's default policy the tool files the note as `--keep-open` does: it links only notes that are not confidential, and its result returns `people` as the names the note lists, never paths, with every name it did not link in `unresolved` (and in the note's `attendees:`), so a confidential name passed in `people` comes back exactly like an unknown one, and a confidential person the recap merely mentions is not listed, just as an unknown one is not. With `--show-confidential` the tool behaves like the CLI default: it links every note, returns paths, marks a meeting that links a confidential note confidential, and says so in `marked_confidential`. `vault_todos` and the `graph_*` tools cover the surfacing side in chat.
 
 ## Graph-assisted chat replies
 

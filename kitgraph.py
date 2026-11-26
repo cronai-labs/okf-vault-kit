@@ -11,15 +11,17 @@ Standard library + PyYAML only.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as dt
 import difflib
+import hashlib
 import json
 import os
 import re
 import sqlite3
 import urllib.parse
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -193,6 +195,9 @@ class Finding:
     node: str
     message: str
     suggestion: str = ""
+    # Every other node id the message or suggestion names. `redact` drops a finding that names a
+    # hidden note: its own `node` is not the only id a finding can carry (#52). Not exported.
+    refs: tuple[str, ...] = ()
 
     def render(self) -> str:
         s = f"{self.level:7} {self.code:26} {self.node}: {self.message}"
@@ -205,6 +210,8 @@ class Graph:
     edges: list[tuple[str, str, str, str]] = field(default_factory=list)   # src, pred, dst, origin
     findings: list[Finding] = field(default_factory=list)
     built_at: str = ""
+    signature: str = ""            # signature_digest of the note set the graph was built from; "" when unknown
+    redacted: bool = False         # True once `redact` dropped the confidential notes; recorded in exports
     _edge_set: set[tuple[str, str, str]] = field(default_factory=set, repr=False)
 
     def add_edge(self, src: str, pred: str, dst: str, origin: str = "frontmatter") -> bool:
@@ -342,6 +349,30 @@ class Resolver:
 
 # ---------------------------------------------------------------- build
 
+def note_set_signature(vault: Path) -> frozenset[tuple[str, int]]:
+    """Which notes exist and when each last changed: (vault-relative path, mtime_ns) per note.
+
+    The newest mtime alone misses a move and a delete, neither of which raises any mtime, and
+    moving a note into a `_`-folder is how a user hides it. Keying on the path set as well means a
+    graph built before such a change is never taken for current. The bridge's graph cache and
+    `kit.py graph query` must agree on what "changed" means, so this is the one definition.
+    """
+    vault = Path(vault)
+    return frozenset((p.relative_to(vault).as_posix(), p.stat().st_mtime_ns) for p in kitlib.iter_markdown(vault))
+
+
+def signature_digest(sig: frozenset[tuple[str, int]]) -> str:
+    """A note-set signature as one opaque string for a file on disk.
+
+    A digest, not the pairs: the graph database records it, and a database built without the
+    confidential notes must not list their paths in its meta table (#52).
+    """
+    h = hashlib.sha256()
+    for rel, mtime_ns in sorted(sig):
+        h.update(f"{rel}\0{mtime_ns}\n".encode())
+    return h.hexdigest()
+
+
 def _self_actor(vault: Path) -> str | None:
     """The vault owner's actor id: the `human:` actor the templates stamp (kit init --actor)."""
     folder = kitlib.template_folder(vault)[0]
@@ -378,7 +409,9 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
     vault = Path(vault)
     onto = onto or load_ontology(vault)
     now = now or dt.datetime.now(dt.UTC)
-    g = Graph(built_at=now.isoformat())
+    # Taken before the notes are read: a note that changes during the build leaves the graph
+    # looking stale, which costs a rebuild, rather than fresh, which would serve the old state.
+    g = Graph(built_at=now.isoformat(), signature=signature_digest(note_set_signature(vault)))
     self_actor = _self_actor(vault)
     g.nodes[SELF_ID] = Node(id=SELF_ID, kind="virtual", type="person", title="me", description="The vault owner", props={"actor": self_actor})
 
@@ -502,17 +535,19 @@ def _check_props(g: Graph, node: Node, specs: dict[str, PropSpec], onto: Ontolog
                     tnode = g.nodes[tid]
                     if spec.range and tid != SELF_ID and not any(onto.is_a(tnode.type, r) for r in spec.range):
                         g.findings.append(Finding("error", "range_violation", nid,
-                                                  f"`{name}` points at {tid} of type `{tnode.type}`; expected {spec.range}"))
+                                                  f"`{name}` points at {tid} of type `{tnode.type}`; expected {spec.range}",
+                                                  refs=(tid,)))
                     g.add_edge(nid, name, tid, "frontmatter")
                 elif method == "ambiguous":
                     g.findings.append(Finding("warning", "ambiguous_ref", nid, f"`{name}: {v}` matches several notes: {cands}",
-                                              "use a markdown link to the intended note"))
+                                              "use a markdown link to the intended note", refs=tuple(cands)))
                 elif method == "external":
                     continue
                 else:
                     level = "info" if spec.soft else "warning"
                     sugg = f"did you mean {', '.join(cands)}?" if cands else (f"create a `{spec.range[0]}` note for it" if spec.range else "")
-                    g.findings.append(Finding(level, "unresolved_ref", nid, f"`{name}: {v}` does not resolve to a note", sugg))
+                    g.findings.append(Finding(level, "unresolved_ref", nid, f"`{name}: {v}` does not resolve to a note", sugg,
+                                              refs=tuple(cands)))
     # unknown props are tolerated (OKF); nothing to report
 
 
@@ -574,13 +609,15 @@ def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
                 bad = [dst for src, p, dst, _ in g.out_edges(nid) if p in ("links_to", "cites") and dst in knowledge_bad]
                 node.derived["at_risk"] = bool(bad)
                 if bad:
-                    g.findings.append(Finding("warning", "at_risk", nid, f"relies on stale/deprecated knowledge: {bad}", "re-verify the cited notes or update this one"))
+                    g.findings.append(Finding("warning", "at_risk", nid, f"relies on stale/deprecated knowledge: {bad}",
+                                              "re-verify the cited notes or update this one", refs=tuple(bad)))
         for nid, node in g.nodes.items():
             if node.kind == "note" and node.type == "project":
                 dep = [src for src, p, dst, _ in g.in_edges(nid) if p == "project" and (g.nodes[src].derived.get("at_risk") or src in knowledge_bad)]
                 node.derived["at_risk"] = bool(dep)
                 if dep:
-                    g.findings.append(Finding("warning", "project_at_risk", nid, f"depends on at-risk or stale notes: {dep}"))
+                    g.findings.append(Finding("warning", "project_at_risk", nid, f"depends on at-risk or stale notes: {dep}",
+                                              refs=tuple(dep)))
     if onto.rule("superseded"):
         # direct edges only: the transitive closure above would otherwise point every node in a chain at the newest decision
         for src, pred, dst, origin in g.edges:
@@ -589,7 +626,7 @@ def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
                 old.derived["superseded_by"] = src
                 if old.props.get("state") != "superseded":
                     g.findings.append(Finding("warning", "state_conflict", dst, f"is superseded by {src} but has state `{old.props.get('state')}`",
-                                              "set state: superseded (kit.py reconcile --apply does this)"))
+                                              "set state: superseded (kit.py reconcile --apply does this)", refs=(src,)))
     if onto.rule("decision_needs_context"):
         for nid, node in g.nodes.items():
             if node.kind == "note" and node.type == "decision" and not any(p in ("project", "area") for _, p, _, _ in g.out_edges(nid)):
@@ -685,6 +722,74 @@ def context_pack(g: Graph, node: str, depth: int = 1) -> str:
         for p in sorted(grouped):
             lines.append(f"- {p}: " + "; ".join(sorted(set(grouped[p]))))
     return "\n".join(lines) + "\n"
+
+
+
+# ---------------------------------------------------------------- confidential redaction
+
+def node_confidential(node: Node, file_confidential: Callable[[str], bool]) -> bool:
+    """Is this graph node a confidential note? `file_confidential` answers for its vault-relative path.
+
+    Actors, sources and virtual nodes carry no note frontmatter. The normalised props are checked
+    first because the ontology can map an alias onto `sensitivity`; the file check is what catches a
+    note whose frontmatter did not parse, whose props are therefore empty.
+    """
+    if getattr(node, "kind", "") != "note":
+        return False
+    if str(node.props.get("sensitivity", "")).strip().lower() == kitlib.CONFIDENTIAL:
+        return True
+    return file_confidential(node.path or node.id)
+
+
+def redact(g: Graph, file_confidential: Callable[[str], bool]) -> Graph:
+    """A copy of `g` without its confidential notes, their edges and their findings.
+
+    One function for the bridge and the CLI, so what an agent's graph tools see and what
+    `kit.py graph` and `llm ask --graph` print or write cannot drift apart (#52). Filtering each
+    tool's output is not enough: the nodes table and the exports carry every note's title,
+    description and full frontmatter, and a context pack labels each neighbour by its title.
+
+    Dropping the hidden nodes is not enough either: a visible node's derived values and findings
+    name other nodes (`superseded_by`, a state conflict, a "did you mean" suggestion), so a value
+    or finding that names a hidden id goes as well. The kept nodes are copies: `g` is shared (the
+    bridge caches it, `llm ask` reads mentions from it) and must stay whole.
+    """
+    hidden = {nid for nid, n in g.nodes.items() if node_confidential(n, file_confidential)}
+    red = Graph(built_at=g.built_at, signature=g.signature, redacted=True)
+    red.nodes = {nid: dataclasses.replace(n, derived={k: v for k, v in n.derived.items() if not _names(v, hidden)})
+                 for nid, n in g.nodes.items() if nid not in hidden}
+    kept_edge: set[str] = set()
+    touched_hidden: set[str] = set()
+    for src, pred, dst, origin in g.edges:
+        if src not in hidden and dst not in hidden:
+            red.add_edge(src, pred, dst, origin)
+            kept_edge.update((src, dst))
+        else:
+            touched_hidden.update((src, dst))
+    # A source or actor exists because some note's frontmatter named it (`sources:`, `generated.by`).
+    # One that only confidential notes named carries their content — a term sheet's title and URL,
+    # a bot's name — so it goes with them. One a visible note also names stays.
+    for nid in touched_hidden - kept_edge - hidden:
+        if nid in red.nodes and red.nodes[nid].kind in ("source", "actor"):
+            del red.nodes[nid]
+            hidden.add(nid)
+    red.findings = [f for f in g.findings if f.node not in hidden and not hidden.intersection(f.refs)]
+    return red
+
+
+def _names(value: Any, ids: set[str]) -> bool:
+    """Does a derived value name one of `ids`? Exact ids only: a derived value is an id, a flag or a label."""
+    if isinstance(value, str):
+        return value in ids
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(isinstance(x, str) and x in ids for x in value)
+    return False
+
+
+def redact_vault(g: Graph, vault: Path) -> Graph:
+    """`redact` with the kit's shared predicate, for a graph built from `vault` on disk."""
+    vault = Path(vault)
+    return redact(g, lambda rel: kitlib.is_confidential(vault, rel))
 
 
 def mentions(g: Graph, text: str, types_excluded: Iterable[str] = ("system",)) -> list[str]:
@@ -843,6 +948,9 @@ def to_jsonld(g: Graph, context: dict[str, Any], base: str) -> dict[str, Any]:
 
 # ---------------------------------------------------------------- sqlite
 
+CONFIDENTIAL_HIDDEN = "hidden"
+CONFIDENTIAL_SHOWN = "shown"
+
 SCHEMA = """
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE nodes (id TEXT PRIMARY KEY, kind TEXT, type TEXT, title TEXT, description TEXT, path TEXT, mtime REAL, props TEXT);
@@ -890,6 +998,12 @@ def _fill_sqlite(con: sqlite3.Connection, g: Graph) -> None:
     con.execute("INSERT INTO meta VALUES ('built_at', ?)", (g.built_at,))
     con.execute("INSERT INTO meta VALUES ('nodes', ?)", (str(len(g.nodes)),))
     con.execute("INSERT INTO meta VALUES ('edges', ?)", (str(len(g.edges)),))
+    # What `kit.py graph query` checks before it serves a file on disk: a database built with
+    # --show-confidential, or by a kit that did not redact yet, must not answer a default query.
+    con.execute("INSERT INTO meta VALUES ('confidential', ?)", (CONFIDENTIAL_HIDDEN if g.redacted else CONFIDENTIAL_SHOWN,))
+    # And whether the notes are still those it was built from: a note marked confidential after the
+    # build is in the file, and a query must not answer from it (#52).
+    con.execute("INSERT INTO meta VALUES ('notes', ?)", (g.signature,))
     for n in g.nodes.values():
         con.execute("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?)",
                     (n.id, n.kind, n.type, n.title, n.description, n.path, n.mtime, json.dumps(_json_safe(n.props), ensure_ascii=False)))
@@ -905,6 +1019,31 @@ def _fill_sqlite(con: sqlite3.Connection, g: Graph) -> None:
     con.executemany("INSERT OR IGNORE INTO edges VALUES (?,?,?,?)", g.edges)
     con.executemany("INSERT INTO findings VALUES (?,?,?,?,?)", [(f.level, f.code, f.node, f.message, f.suggestion) for f in g.findings])
     con.commit()
+
+
+
+def sqlite_meta(path: Path, key: str) -> str | None:
+    """One value of a graph database's meta table on disk, or None when the file does not say."""
+    try:
+        con = sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
+def sqlite_confidential(path: Path) -> str | None:
+    """The `confidential` mode a graph database on disk was built in, or None when it does not say.
+
+    None covers a database from a kit before #52, which redacted nothing; callers treat it as
+    holding confidential notes.
+    """
+    return sqlite_meta(path, "confidential")
 
 
 def query_sqlite(con: sqlite3.Connection, sql: str, limit: int = 200) -> tuple[list[str], list[tuple]]:

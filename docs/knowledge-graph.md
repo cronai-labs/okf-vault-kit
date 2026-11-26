@@ -65,6 +65,8 @@ Deliverable: `kit.py validate --ontology` reports range and cardinality violatio
 
 Recursive CTEs make SQLite a perfectly good graph database at vault scale (thousands of notes): "every note that depends, transitively, on concept X", "decisions that touch project P through any edge", "people connected to more than three at-risk projects". `kit.py graph query "<sql>"` exposes it; `kit.py graph neighbors <note> --depth 2` is the shortcut.
 
+Notes marked `sensitivity: confidential` are not in these files by default: the build redacts them, their edges, and every derived value and finding that refers to one, as the bridge's graph tools do ([security.md](security.md#what-a-confidential-note-keeps-to-itself)); `--show-confidential` keeps them. `graph query` answers from `.kit/graph.sqlite`; a default query rebuilds the file first when it was built with `--show-confidential`, by a kit that did not redact yet, or from a different set of notes than the vault now holds. To be sure a query sees edits inside notes the file already holds (a note newly marked confidential, for one), run `graph build` or `graph query --rebuild`. `kit.py minutes` resolves the people and projects in a recap through the graph, and marks a meeting note that links a confidential note confidential (`--keep-open` links only the others instead); `kit.py todos --show-confidential` likewise lists the tasks of confidential notes that `todos` leaves out ([reconciliation.md](reconciliation.md)).
+
 ## Level 3 — semantics: a dozen rules, not OWL
 
 The rules live next to the schema in `ontology.yml` and run as SQL or Python passes after extraction:
@@ -125,8 +127,8 @@ uv run kit.py validate                       # + ontology section: ranges, enums
 uv run kit.py graph build                    # .kit/graph.json, graph.nt, graph.jsonld, graph.sqlite (+ findings)
 uv run kit.py graph query "select id from v_at_risk"
 uv run kit.py graph query "with recursive dep(id) as (select '07-knowledge/hybrid-search.md' union select e.src from edges e join dep on e.dst=dep.id where e.pred in ('links_to','cites','project')) select id from dep"
-uv run kit.py graph neighbors alex-example --pred owns,involved_in
-uv run kit.py graph path hybrid-search alex-example
+uv run kit.py graph neighbors alex-example --pred owns,involved_in --show-confidential   # alex-example is confidential: hidden without the flag
+uv run kit.py graph path hybrid-search alex-example --show-confidential
 uv run kit.py graph pack search-relaunch     # the context pack a model gets
 uv run kit.py graph export --format jsonld --out vault.jsonld
 ```

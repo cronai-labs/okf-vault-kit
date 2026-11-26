@@ -370,11 +370,11 @@ class KitCliGraphAndRecon(unittest.TestCase):
         try:
             r = run("graph", "build", "--vault", str(v)); self.assertEqual(r.returncode, 0, r.stderr); self.assertIn("0 finding(s)", r.stdout)
             self.assertTrue((v / ".kit/graph.sqlite").exists())
-            r = run("graph", "query", "select count(*) n from nodes", "--vault", str(v), "--json"); self.assertEqual(json.loads(r.stdout)[0]["n"], 28)   # 27: an open sample decision was added for the Open Decisions view (#10); 28: the sample month note
+            r = run("graph", "query", "select count(*) n from nodes", "--vault", str(v), "--json"); self.assertEqual(json.loads(r.stdout)[0]["n"], 26)   # 27: an open sample decision was added for the Open Decisions view (#10); 28: the sample month note; 26: the two confidential people notes are left out (#52)
             r = run("graph", "query", "drop table nodes", "--vault", str(v)); self.assertEqual(r.returncode, 1)
             r = run("graph", "export", "--format", "nt", "--vault", str(v)); self.assertIn("<http://purl.org/dc/terms/title>", r.stdout)
-            r = run("graph", "neighbors", "alex-example", "--pred", "owns", "--vault", str(v)); self.assertIn("—owns→", r.stdout)
-            r = run("graph", "path", "hybrid-search", "alex-example", "--vault", str(v)); self.assertEqual(r.returncode, 0)
+            r = run("graph", "neighbors", "alex-example", "--pred", "owns", "--vault", str(v), "--show-confidential"); self.assertIn("—owns→", r.stdout)
+            r = run("graph", "path", "hybrid-search", "alex-example", "--vault", str(v), "--show-confidential"); self.assertEqual(r.returncode, 0)
             r = run("graph", "pack", "search-relaunch", "--vault", str(v)); self.assertIn("## Relations", r.stdout)
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
@@ -401,7 +401,8 @@ class KitCliGraphAndRecon(unittest.TestCase):
     def test_llm_ask_graph_dry_run(self):
         r = run("llm", "ask", "who owns the search relaunch", "--vault", str(VAULT), "--graph", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("Facts from the vault graph", r.stdout); self.assertIn("- owner: Alex Example", r.stdout)
+        self.assertIn("Facts from the vault graph", r.stdout); self.assertIn("- milestone: Pilot go/no-go", r.stdout)
+        self.assertNotIn("(05-people/alex-example.md)", r.stdout, "the owner is a confidential note: no relation names it (#52)")
 
 
 class CrossPlatform(unittest.TestCase):
@@ -836,7 +837,7 @@ class ConfidentialStaysOutOfThePrompt(unittest.TestCase):
         r = run("llm", "ask", "what does Alex Example need from me", "--vault", str(VAULT),
                 "--search-provider", "naive", "--graph", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("05-people/alex-example.md", r.stdout, "it may still be cited")
+        self.assertNotIn("05-people/alex-example.md", r.stdout, "a confidential hit is dropped whole, path and title too (#52)")
         self.assertNotIn("Delegated authority", r.stdout, "note body leaked into the prompt")
         self.assertNotIn("Rolling 1:1 agenda", r.stdout)
         self.assertIn("sensitivity: confidential", r.stdout, "say when something was withheld")
