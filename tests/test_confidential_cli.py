@@ -400,12 +400,14 @@ class RedactionLeavesNoHiddenIdInVisibleNodes(unittest.TestCase):
 
     def test_redaction_copies_and_keeps_what_names_no_hidden_note(self):
         # llm ask reads mentions() from the full graph and the bridge caches it: redaction must not change it
+        red = kitgraph.redact_vault(self.full, self.vault)
         self.assertEqual(self.full.nodes[ADOPT].derived.get("superseded_by"), "06-decisions/zz-hidden-supersedes.md")
-        self.assertIsNot(self.red.nodes[ADOPT], self.full.nodes[ADOPT])
-        self.assertIn("trust_tier", self.red.nodes[ADOPT].derived, "only a value naming a hidden note goes")
-        kept = {f.render() for f in self.red.findings}
+        self.assertIsNot(red.nodes[ADOPT], self.full.nodes[ADOPT])
+        self.assertNotIn("superseded_by", red.nodes[ADOPT].derived)
+        self.assertIn("trust_tier", red.nodes[ADOPT].derived, "only a value naming a hidden note goes")
+        kept = {f.render() for f in red.findings}
         for f in self.full.findings:
-            if f.node not in self.red.nodes or names_hidden(f.message + f.suggestion):
+            if f.node not in red.nodes or names_hidden(f.message + f.suggestion):
                 continue
             self.assertIn(f.render(), kept, "a finding about visible notes only must survive the redaction")
         self.assertTrue(kept, "the redacted graph still reports")
