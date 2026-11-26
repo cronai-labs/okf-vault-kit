@@ -724,8 +724,9 @@ def cmd_minutes(args) -> int:
     if args.llm:
         extra = _llm_structure(text, args.base_url or DEFAULT_BASE_URL, args.model or DEFAULT_MODEL)
     try:
-        # Entity detection reads the graph; by default the redacted one, so a meeting note does not
-        # link or name a confidential person or project the recap happens to mention (#52).
+        # People and the project are resolved through the graph; by default the redacted one, so the
+        # meeting note's frontmatter does not link a confidential project or copy a confidential
+        # person's title (#52). The recap text itself is filed as written.
         m = kitrecon.file_minutes(vault, text, args.title, date, args.project, people, args.kind,
                                   dry_run=args.dry_run, force=args.force, daily=args.daily, extra=extra,
                                   hide_confidential=not args.show_confidential)
