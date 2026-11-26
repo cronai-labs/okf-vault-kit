@@ -519,6 +519,14 @@ def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any]) -> li
     reopening = sum(1 for a in allow if _reopens(root, a, plan.deny_read))
     if reopening:
         flags.append(f"{reopening} allowRead entr{'y' if reopening == 1 else 'ies'} re-open denied paths")
+    # A `Read(!…)` deny is a gitignore negation: it carves out of the rules before it in the same
+    # file (permissions docs), so one after the kit's rules in settings.json can re-open them.
+    deny = settings.get("permissions", {}).get("deny", [])
+    wanted = set(plan.deny)
+    first = next((i for i, e in enumerate(deny) if e in wanted), None)
+    negations = 0 if first is None else sum(1 for e in deny[first:] if e.replace(" ", "").startswith("Read(!"))
+    if negations:
+        flags.append(f"{negations} Read(!…) negation(s) after the kit's rules in settings.json")
     return flags
 
 

@@ -380,6 +380,16 @@ class Doctor(_Vault):
         write(self.v, kitagent.LOCAL_SETTINGS_REL, json.dumps({"sandbox": {"filesystem": {"allowRead": ["./"]}}}))
         self.assertEqual(self.row()[1], "ok")     # a wider allow does not beat a narrower deny
 
+    def test_a_negation_after_the_kits_rules_is_flagged(self):
+        agent(self.v, "--apply")
+        s = read_settings(self.v)
+        s["permissions"]["deny"].append("Read(!04-areas/board/agenda.md)")
+        write(self.v, SETTINGS, json.dumps(s))
+        self.assertIn("1 Read(!…) negation(s) after the kit's rules", self.row()[1])
+        s["permissions"]["deny"].insert(0, s["permissions"]["deny"].pop())     # listed first, it carves nothing
+        write(self.v, SETTINGS, json.dumps(s))
+        self.assertEqual(self.row()[1], "ok")
+
     def test_broken_inputs_never_raise(self):
         agent(self.v, "--apply")
         write(self.v, SETTINGS, "{")
