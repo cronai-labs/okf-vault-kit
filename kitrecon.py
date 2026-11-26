@@ -843,7 +843,9 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
         fm["attendees"] = plain_names
     # Raised, never lowered: a template that already says confidential keeps its own spelling, and
     # `--force` over a note that is confidential (an earlier run raised it) keeps it confidential.
-    overwrites_confidential = out.exists() and kitlib.is_confidential(vault, rel)
+    # The note's own label only: a folder floor keeps the note confidential without one, and a
+    # config that cannot be read must not leave a durable `sensitivity:` line behind (#120).
+    overwrites_confidential = out.exists() and kitlib.own_confidentiality(vault, rel) is not False
     if (m.confidential_links or overwrites_confidential) and str(fm.get("sensitivity", "")).strip().lower() != kitlib.CONFIDENTIAL:
         fm["sensitivity"] = kitlib.CONFIDENTIAL
     rest = _fill_section(rest, "## Outcomes", m.outcomes)

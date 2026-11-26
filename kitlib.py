@@ -11,12 +11,15 @@ Responsibilities:
 from __future__ import annotations
 
 import datetime
+import hashlib
 import importlib.metadata
 import json
 import os
+import posixpath
 import re
 import stat
 import sys
+import unicodedata
 import urllib.parse
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -498,7 +501,7 @@ def build_index(root: Path, title: str = "Vault index") -> str:
         except (UnicodeDecodeError, OSError):
             hidden += 1       # an index cannot describe a file no reader can decode, but it can count it
             continue
-        if note_confidential(note):
+        if note_confidential_in(root, note):
             hidden += 1
             continue
         fm = note.frontmatter or {}
@@ -707,8 +710,234 @@ def note_confidential(note: Note) -> bool:
     return note_confidentiality(note) is not False
 
 
+# ---------------------------------------------------------------- confidentiality floors (#120)
+
+CONFIG_REL = ".kit/config.yml"          # the vault's kit config; kitproviders reads the same file, leniently
+CONFIDENTIALITY_KEYS = ("confidential_folders", "confidential_paths")
+
+
+class PolicyConfigError(ValueError):
+    """The vault's `.kit/config.yml` cannot say what is confidential: unreadable, unparsable, or a
+    `confidentiality:` block of the wrong shape. Readers then treat every path as confidential."""
+
+
+def _match_form(rel: str) -> str:
+    """One spelling for matching: POSIX separators, normalised, NFC, case-folded, no `./` or edge `/`."""
+    rel = unicodedata.normalize("NFC", rel.replace("\\", "/"))
+    rel = posixpath.normpath(rel) if rel else rel
+    return rel.strip("/").casefold() if rel != "." else ""
+
+
+def _glob_regex(pattern: str) -> re.Pattern[str]:
+    """A vault-relative glob as a regex: `*` and `?` stay within one segment, `**` crosses them.
+
+    Written out, not fnmatch (whose `*` crosses `/`) and not `glob.translate` (Python 3.13+).
+    """
+    out: list[str] = []
+    segs = pattern.split("/")
+    for i, seg in enumerate(segs):
+        last = i == len(segs) - 1
+        if seg == "**":
+            out.append(".*" if last else "(?:.*/)?")
+            continue
+        out.append("".join("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c) for c in seg))
+        if not last:
+            out.append("/")
+    return re.compile("".join(out), re.DOTALL)
+
+
+@dataclass(frozen=True)
+class ConfidentialityPolicy:
+    """What `.kit/config.yml` declares confidential regardless of any note's own frontmatter.
+
+    `folders` are vault-relative folders: the folder and everything below it. `paths` are
+    vault-relative globs for single files of any type. Both are stored in match form.
+    """
+    folders: tuple[str, ...] = ()
+    paths: tuple[str, ...] = ()
+    _regexes: tuple[re.Pattern[str], ...] = field(default=(), compare=False, repr=False)
+
+    @classmethod
+    def build(cls, folders: Iterable[str] = (), paths: Iterable[str] = ()) -> ConfidentialityPolicy:
+        f = tuple(_match_form(x) for x in folders)
+        p = tuple(_match_form(x) for x in paths)
+        return cls(f, p, tuple(_glob_regex(x) for x in p))
+
+    def covers(self, rel: str) -> bool:
+        """Does a floor or a path rule make this vault-relative reference confidential? (`.md` optional)"""
+        if not (self.folders or self.paths):
+            return False
+        forms = {_match_form(rel)}
+        forms |= {f + ".md" for f in forms if not f.endswith(".md")}
+        for form in forms:
+            if form.startswith("../") or form == "..":
+                continue
+            if any(form == d or form.startswith(d + "/") for d in self.folders):
+                return True
+            if any(rx.fullmatch(form) for rx in self._regexes):
+                return True
+        return False
+
+
+_GLOB_CHARS = set("*?[]")
+
+
+def _policy_entries(block: dict, key: str) -> list[str]:
+    value = block.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} must be a list of strings (quote each entry)")
+    out = []
+    for raw in value:
+        entry = raw.strip().replace("\\", "/")
+        parts = [x for x in entry.split("/") if x not in ("", ".")]
+        if not parts:
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} has an empty entry {raw!r}")
+        if entry.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", entry):
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} entry {raw!r} must be relative to the vault")
+        if ".." in parts:
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} entry {raw!r} must not use `..`")
+        if key == "confidential_folders" and _GLOB_CHARS.intersection(entry):
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.confidential_folders entry {raw!r} is a pattern; "
+                                    "folders are literal, put patterns under confidential_paths")
+        out.append("/".join(parts))
+    return out
+
+
+def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
+    """The `confidentiality:` block of a parsed config, strictly. Missing block: no floors.
+
+    Strict where kitproviders is lenient: a block someone half-edited or misspelt must not read as
+    "nothing is confidential". A null block and an unknown key are errors, not an empty policy.
+    """
+    if data is None:
+        return ConfidentialityPolicy()
+    if not isinstance(data, dict):
+        raise PolicyConfigError(f"{CONFIG_REL}: the file must be a mapping of keys")
+    if "confidentiality" not in data:
+        return ConfidentialityPolicy()
+    block = data["confidentiality"]
+    if not isinstance(block, dict):
+        raise PolicyConfigError(f"{CONFIG_REL}: `confidentiality:` must be a mapping with "
+                                f"{' and/or '.join(CONFIDENTIALITY_KEYS)}")
+    unknown = sorted(str(k) for k in block if k not in CONFIDENTIALITY_KEYS)
+    if unknown:
+        raise PolicyConfigError(f"{CONFIG_REL}: unknown key(s) under confidentiality: {', '.join(unknown)} "
+                                f"(known: {', '.join(CONFIDENTIALITY_KEYS)})")
+    return ConfidentialityPolicy.build(_policy_entries(block, "confidential_folders"),
+                                       _policy_entries(block, "confidential_paths"))
+
+
+_POLICY_CACHE: dict[str, tuple[Any, ConfidentialityPolicy | PolicyConfigError]] = {}
+
+
+def confidentiality_policy(root: Path) -> ConfidentialityPolicy:
+    """The vault's declared floors and path rules; raises PolicyConfigError when they cannot be known.
+
+    A missing `.kit/config.yml` (or a `.kit` that is a file) means no floors. Anything else that
+    stops the file being read and parsed is an error, never an empty policy: "could not tell" is
+    not "nothing is confidential". Cached on the resolved root and the file's mtime_ns and size,
+    because every predicate call asks.
+    """
+    root = Path(root).resolve()
+    path = root / CONFIG_REL
+    try:
+        st = path.stat()
+        stamp: Any = (st.st_mtime_ns, st.st_size, st.st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        stamp = None
+    except OSError as exc:
+        raise PolicyConfigError(f"{CONFIG_REL}: cannot be read ({exc.__class__.__name__})") from exc
+    cached = _POLICY_CACHE.get(str(root))
+    if cached and cached[0] == stamp:
+        result = cached[1]
+    else:
+        result = _load_policy(path, stamp)
+        _POLICY_CACHE[str(root)] = (stamp, result)
+    if isinstance(result, PolicyConfigError):
+        raise result
+    return result
+
+
+def _load_policy(path: Path, stamp: Any) -> ConfidentialityPolicy | PolicyConfigError:
+    if stamp is None:
+        return ConfidentialityPolicy()
+    if not stat.S_ISREG(stamp[2]):
+        return PolicyConfigError(f"{CONFIG_REL}: is not a regular file")
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as exc:
+        return PolicyConfigError(f"{CONFIG_REL}: cannot be read as UTF-8 ({exc.__class__.__name__})")
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        return PolicyConfigError(f"{CONFIG_REL}: not valid YAML ({str(exc).splitlines()[0]})")
+    try:
+        return parse_confidentiality(data)
+    except PolicyConfigError as exc:
+        return exc
+
+
+def config_fingerprint(root: Path) -> int:
+    """A number that changes whenever `.kit/config.yml` appears, goes, or changes; never raises.
+
+    For the graph's note-set signature: declaring a floor changes what a redacted graph holds, so
+    a graph built before it must read as stale. From the bytes, not the parsed policy, so a broken
+    file has a fingerprint too, and fixing it changes the number.
+    """
+    try:
+        data = (Path(root) / CONFIG_REL).read_bytes()
+    except (FileNotFoundError, NotADirectoryError):
+        return -1
+    except OSError:
+        return -2         # there but unreadable: fixed, so a database on disk compares equal across runs
+    return int.from_bytes(hashlib.sha256(data).digest()[:8], "big")
+
+
+def confidential_floor(root: Path, rel: str) -> bool | None:
+    """Does the vault's config alone make this reference confidential? None when the config is broken."""
+    try:
+        return confidentiality_policy(root).covers(rel)
+    except PolicyConfigError:
+        return None
+
+
+def own_confidentiality(root: Path, rel: str) -> bool | None:
+    """What the referenced note's own frontmatter says, floors aside (`.md` optional).
+
+    True, False, or None for "could not tell" (unreadable, undecodable, unstatable, unparsable).
+    A reference to no file is False. A reference to an existing file that is not Markdown has no
+    frontmatter to raise it, so it is False too. Only a caller that must not act on a floor (one
+    that writes the note's own `sensitivity`) asks this; readers ask `confidentiality`.
+    """
+    root = Path(root)
+    is_md = rel.lower().endswith(".md")
+    try:
+        if not is_md:
+            try:
+                st = (root / rel).stat()
+            except (FileNotFoundError, NotADirectoryError):
+                st = None
+            if st is not None and stat.S_ISREG(st.st_mode):
+                return False      # a CSV, an image, a PDF: no frontmatter, the floor alone decides
+        path = root / (rel if is_md else rel + ".md")
+        if not stat.S_ISREG(path.stat().st_mode):
+            return False
+        note = parse_note(path, root)
+    except (FileNotFoundError, NotADirectoryError):
+        return False      # no such file, also when a parent of the path is a file
+    except Exception:  # noqa: BLE001 — unreadable or undecodable: we cannot prove it is safe
+        return None
+    return note_confidentiality(note)
+
+
 def confidentiality(root: Path, rel: str) -> bool | None:
-    """`note_confidentiality` for a vault-relative reference (`.md` optional).
+    """Is this vault-relative reference confidential? True, False, or None for "could not tell".
+
+    The floor first: a `.kit/config.yml` that cannot be read or parsed is None for every path, and
+    a folder or path rule it declares is True whatever the note says (a note may raise its level,
+    never lower it). Then the note's own frontmatter (`own_confidentiality`).
 
     A reference to no file is False: there is nothing to hide, and callers that must treat an
     unresolvable reference as the worst case (the bridge) check that before calling. A file we
@@ -716,22 +945,48 @@ def confidentiality(root: Path, rel: str) -> bool | None:
     `Path.is_file()` raises PermissionError up to Python 3.13 and returns False on 3.14, a
     traceback on one and "not confidential" on the other, so the stat is made here and judged.
     """
-    root = Path(root)
-    path = root / (rel if rel.endswith(".md") else rel + ".md")
-    try:
-        if not stat.S_ISREG(path.stat().st_mode):
-            return False
-        note = parse_note(path, root)
-    except (FileNotFoundError, NotADirectoryError):
-        return False      # no such file, also when a parent of the path is a file
-    except Exception:  # noqa: BLE001 \u2014 unreadable or undecodable: we cannot prove it is safe
-        return None
-    return note_confidentiality(note)
+    floor = confidential_floor(root, rel)
+    if floor is not False:
+        return floor
+    return own_confidentiality(root, rel)
 
 
 def is_confidential(root: Path, rel: str) -> bool:
-    """`note_confidential` for a vault-relative reference: anything but a proven "no" hides it."""
+    """`confidentiality` as a reader needs it: anything but a proven "no" hides the reference."""
     return confidentiality(root, rel) is not False
+
+
+def note_confidential_in(root: Path, note: Note) -> bool:
+    """`note_confidential` for a note parsed from `root`, with the vault's floors applied."""
+    return confidential_floor(root, note.rel) is not False or note_confidential(note)
+
+
+def check_confidentiality(root: Path) -> Report:
+    """`validate`'s view of the floors: a broken config, and notes that claim less than their floor.
+
+    A note inside a floor whose own `sensitivity` says something else stays confidential; the
+    warning is there so the label in the note does not mislead the person reading it.
+    """
+    root = Path(root)
+    rep = Report()
+    try:
+        policy = confidentiality_policy(root)
+    except PolicyConfigError as exc:
+        rep.errors.append(f"{exc} — until this is fixed every reader treats every note as confidential")
+        return rep
+    if not (policy.folders or policy.paths):
+        return rep
+    for note in load_vault(root):
+        rep.checked += 1
+        if not policy.covers(note.rel) or not note.frontmatter:
+            continue
+        own = note.frontmatter.get("sensitivity")
+        if own is None or str(own).strip() == "":
+            continue
+        if str(own).strip().lower() != CONFIDENTIAL:
+            rep.warnings.append(f"{note.rel}: `sensitivity: {own}` inside a folder or path `{CONFIG_REL}` declares "
+                                "confidential; the note stays confidential (a note may raise its level, never lower it)")
+    return rep
 
 
 def slugify(text: str, max_len: int = 60) -> str:
