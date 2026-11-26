@@ -102,9 +102,11 @@ jobs:
       - if: github.event_name != 'pull_request'
         run: echo "not a pull request; the title policy applies at the PR"
 
+  # CodeQL is not run here: the repository's code-scanning default setup runs it, and running
+  # it here as well would analyse the same code twice.
   security:
     runs-on: ubuntu-latest
-    permissions: { contents: read, security-events: write }
+    permissions: { contents: read }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with: { fetch-depth: 0 }      # gitleaks scans history, not just the tip
@@ -118,9 +120,6 @@ jobs:
           gitleaks detect --redact --no-banner --exit-code 1
       - name: python SAST
         run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py mcp -ll
-      - uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
-        with: { languages: python }
-      - uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d  # v4.38.3
 
   megalinter:
     # The single lint gate. `make lint` still byte-compiles and validates the
