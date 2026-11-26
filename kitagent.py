@@ -53,7 +53,14 @@ APPLY_HINT = f"run `{GENERATOR} --apply` with the same --vault"
 
 
 class AgentSettingsError(ValueError):
-    """The settings cannot be generated or merged; the message says why and what to do."""
+    """The settings cannot be generated or merged; the message says why and what to do.
+
+    `doctor` is the short reason doctor prints: it names a settings key at most, never a vault path.
+    """
+
+    def __init__(self, message: str, doctor: str = "cannot be generated for this vault"):
+        super().__init__(message)
+        self.doctor = doctor
 
 
 # ---------------------------------------------------------------- export
@@ -338,12 +345,14 @@ def _list_at(obj: dict, path: tuple[str, ...], where: str) -> list:
     cur: Any = obj
     for i, key in enumerate(path):
         if not isinstance(cur, dict):
-            raise AgentSettingsError(f"{where}: `{'.'.join(path[:i])}` must be an object — fix it by hand first")
+            raise AgentSettingsError(f"{where}: `{'.'.join(path[:i])}` must be an object — fix it by hand first",
+                                     f"`{'.'.join(path[:i])}` has the wrong type")
         cur = cur.get(key)
         if cur is None:
             return []
     if not isinstance(cur, list) or not all(isinstance(x, str) for x in cur):
-        raise AgentSettingsError(f"{where}: `{'.'.join(path)}` must be a list of strings — fix it by hand first")
+        raise AgentSettingsError(f"{where}: `{'.'.join(path)}` must be a list of strings — fix it by hand first",
+                                 f"`{'.'.join(path)}` has the wrong type")
     return cur
 
 
@@ -375,11 +384,13 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
     if existing is None:
         existing = {}
     if not isinstance(existing, dict):
-        raise AgentSettingsError(f"{SETTINGS_REL}: the top level must be a JSON object — fix it by hand first")
+        raise AgentSettingsError(f"{SETTINGS_REL}: the top level must be a JSON object — fix it by hand first",
+                                 "top level is not a JSON object")
     for path in (("permissions",), ("sandbox",), ("sandbox", "filesystem")):
         parent = existing if len(path) == 1 else existing.get(path[0])
         if isinstance(parent, dict) and path[-1] in parent and not isinstance(parent[path[-1]], dict):
-            raise AgentSettingsError(f"{SETTINGS_REL}: `{'.'.join(path)}` must be an object — fix it by hand first")
+            raise AgentSettingsError(f"{SETTINGS_REL}: `{'.'.join(path)}` must be an object — fix it by hand first",
+                                     f"`{'.'.join(path)}` has the wrong type")
     current_deny = _list_at(existing, ("permissions", "deny"), SETTINGS_REL)
     current_read = _list_at(existing, ("sandbox", "filesystem", "denyRead"), SETTINGS_REL)
     owned_deny = _owned(manifest, "permissions.deny")
@@ -446,18 +457,30 @@ def settings_text(settings: dict[str, Any]) -> str:
 
 # ---------------------------------------------------------------- files
 
+BOM = "\ufeff"
+
+
 def _read_json(path: Path, rel: str) -> tuple[Any, str | None]:
-    """(parsed, raw text); (None, None) when the file is not there. Raises AgentSettingsError otherwise."""
+    """(parsed, raw text); (None, None) when the file is not there. Raises AgentSettingsError otherwise.
+
+    A leading UTF-8 byte-order mark, which some Windows editors write, is accepted; the raw text
+    keeps it, so a write can keep it too.
+    """
     try:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None, None
     except (OSError, UnicodeDecodeError) as exc:
-        raise AgentSettingsError(f"{rel}: cannot be read ({exc.__class__.__name__})") from exc
+        raise AgentSettingsError(f"{rel}: cannot be read ({exc.__class__.__name__})", "cannot be read") from exc
     try:
-        return json.loads(raw), raw
+        return json.loads(raw.removeprefix(BOM)), raw
     except json.JSONDecodeError as exc:
-        raise AgentSettingsError(f"{rel}: not valid JSON (line {exc.lineno}) — fix or move it first") from exc
+        raise AgentSettingsError(f"{rel}: not valid JSON (line {exc.lineno}) — fix or move it first",
+                                 "not valid JSON") from exc
+
+
+def has_bom(raw: str | None) -> bool:
+    return bool(raw) and raw.startswith(BOM)
 
 
 def read_manifest(root: Path) -> Any:
@@ -528,7 +551,7 @@ def claude_code_state(root: Path, allow_git: bool | None = None) -> State:
 
 def diff_text(raw: str | None, settings: dict[str, Any] | None) -> str:
     old = (raw or "").splitlines(keepends=True)
-    new = settings_text(settings).splitlines(keepends=True) if settings is not None else []
+    new = ((BOM if has_bom(raw) else "") + settings_text(settings)).splitlines(keepends=True) if settings is not None else []
     return "".join(difflib.unified_diff(old, new, f"a/{SETTINGS_REL}", f"b/{SETTINGS_REL}"))
 
 
@@ -548,7 +571,7 @@ def apply(root: Path, state: State) -> bool:
     refuse_symlinked_settings(root)
     existing, _ = _read_json(root / SETTINGS_REL, SETTINGS_REL)
     if not same_json(existing, state.merge.settings):
-        write_atomic(root / SETTINGS_REL, settings_text(state.merge.settings))
+        write_atomic(root / SETTINGS_REL, (BOM if has_bom(state.raw_settings) else "") + settings_text(state.merge.settings))
     write_atomic(root / MANIFEST_REL, settings_text(state.merge.manifest))
     return True
 
@@ -608,7 +631,8 @@ def removal(existing: Any, manifest: Any) -> Removal:
     if existing is None:
         return Removal(None, [], [], True)
     if not isinstance(existing, dict):
-        raise AgentSettingsError(f"{SETTINGS_REL}: the top level must be a JSON object — fix it by hand first")
+        raise AgentSettingsError(f"{SETTINGS_REL}: the top level must be a JSON object — fix it by hand first",
+                                 "top level is not a JSON object")
     settings = copy.deepcopy(existing)
     removed: list[str] = []
     _drop_owned(settings, ("permissions", "deny"), owned_deny, removed)
@@ -642,15 +666,15 @@ def removal_state(root: Path) -> tuple[Removal | None, str | None]:
     return removal(existing, manifest), raw
 
 
-def remove_apply(root: Path, result: Removal, bom: bool = False) -> None:
+def remove_apply(root: Path, result: Removal) -> None:
     """Write settings.json, then delete the manifest: a run stopped between the two leaves the
     manifest, and the next --remove finds nothing more to take out and deletes it."""
     root = Path(root)
     refuse_symlinked_settings(root)
     if result.settings is not None:
-        existing, _ = _read_json(root / SETTINGS_REL, SETTINGS_REL)
+        existing, raw = _read_json(root / SETTINGS_REL, SETTINGS_REL)
         if not same_json(existing, result.settings):
-            write_atomic(root / SETTINGS_REL, ("\ufeff" if bom else "") + settings_text(result.settings))
+            write_atomic(root / SETTINGS_REL, (BOM if has_bom(raw) else "") + settings_text(result.settings))
     with contextlib.suppress(FileNotFoundError):
         (root / MANIFEST_REL).unlink()
 
@@ -770,8 +794,7 @@ def doctor_row(root: Path) -> tuple[str, str]:
         except kitlib.PolicyConfigError:
             return SETTINGS_REL, f"cannot check: {kitlib.CONFIG_REL} is broken (`kit.py validate` says why)"
         except AgentSettingsError as exc:
-            reason = "not valid JSON" if "JSON" in str(exc) else "cannot be generated for this vault"
-            return SETTINGS_REL, f"cannot check: {reason} — run `{GENERATOR}` with the same --vault"
+            return SETTINGS_REL, f"cannot check: {exc.doctor} — run `{GENERATOR}` with the same --vault"
         m = state.merge
         flags = state.plan.flags + state.local_flags
         if not m.changed and not flags:

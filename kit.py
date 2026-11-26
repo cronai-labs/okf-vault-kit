@@ -593,6 +593,8 @@ def cmd_agent_settings(args) -> int:
     summary = (f"{len(state.plan.deny)} deny rule(s) and {len(state.plan.deny_read)} sandbox denyRead entries wanted; "
                f"{len(m.added)} list entries to add, {len(m.removed)} stale")
     if args.check:
+        for flag in state.plan.flags:
+            print(f"warning: {flag} (docs/security.md §5)", file=sys.stderr)
         for line in local:
             print(line, file=sys.stderr)
         if not m.changed:
@@ -1365,7 +1367,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--vault")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="write settings.json and the kit's manifest (default: preview a diff)")
-    mode.add_argument("--check", action="store_true", help="exit 1 when settings.json differs from what --apply would write (with the .git choice the last --apply recorded); writes nothing")
+    mode.add_argument("--check", action="store_true", help="exit 1 when settings.json or the manifest differs from what --apply would write (with the .git choice the last --apply recorded); writes nothing")
     p.add_argument("--allow-git", action="store_true",
                    help="do not deny .git — confidential notes tracked in git then stay readable through the history")
     p.add_argument("--remove", action="store_true",

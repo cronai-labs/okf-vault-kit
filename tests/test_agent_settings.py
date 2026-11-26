@@ -414,6 +414,31 @@ class Merge(_Vault):
             self.put(bad)
             self.assertEqual(agent(self.v, "--apply").returncode, 2, bad)
 
+    def test_a_byte_order_mark_is_accepted_and_kept(self):
+        # Some Windows editors write one; the config loader already accepted it, this file did not.
+        (self.v / SETTINGS).parent.mkdir(parents=True, exist_ok=True)
+        (self.v / SETTINGS).write_bytes(b"\xef\xbb\xbf" + json.dumps(self.FOREIGN, indent=2).encode() + b"\n")
+        r = agent(self.v)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("-\ufeff", r.stdout, "the mark is not shown as a change")
+        r = agent(self.v, "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        raw = (self.v / SETTINGS).read_bytes()
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf{"), raw[:8])
+        self.assertEqual(json.loads(raw.decode("utf-8-sig"))["model"], "some-model")
+        self.assertIn("nothing to do", agent(self.v, "--apply").stdout)
+        self.assertEqual(agent(self.v, "--check").returncode, 0)
+        self.assertEqual(kitagent.doctor_row(self.v)[1], "ok")
+
+    def test_check_names_the_manifest_and_prints_the_plans_flags(self):
+        (self.v / ".git").write_text("gitdir: /elsewhere/.git/worktrees/v\n", encoding="utf-8")
+        self.assertEqual(agent(self.v, "--apply").returncode, 0)
+        r = agent(self.v, "--check")
+        self.assertEqual(r.returncode, 0)
+        self.assertIn("git history outside the vault not denied", r.stderr)
+        r = run("agent-settings", "claude-code", "--help")
+        self.assertRegex(" ".join(r.stdout.split()), r"settings\.json or the manifest differs")
+
     def test_a_broken_manifest_owns_nothing_and_is_rewritten(self):
         agent(self.v, "--apply")
         write(self.v, MANIFEST, "garbage")
@@ -581,6 +606,14 @@ class Doctor(_Vault):
         s["permissions"]["deny"].insert(0, s["permissions"]["deny"].pop())     # listed first, it carves nothing
         write(self.v, SETTINGS, json.dumps(s))
         self.assertEqual(self.row()[1], "ok")
+
+    def test_a_valid_settings_file_of_the_wrong_shape_is_not_called_invalid_json(self):
+        agent(self.v, "--apply")
+        for bad, reason in (([], "top level is not a JSON object"), ({"permissions": []}, "`permissions` has the wrong type"),
+                            ("{", "not valid JSON")):
+            write(self.v, SETTINGS, bad if isinstance(bad, str) else json.dumps(bad))
+            status = self.row()[1]
+            self.assertIn(f"cannot check: {reason}", status)
 
     def test_broken_inputs_never_raise(self):
         agent(self.v, "--apply")
