@@ -224,11 +224,16 @@ class Guarded:
             tpl = str(template).strip().replace("\\", "/")
             if posixpath.isabs(tpl) or re.match(r"^[A-Za-z]:", tpl) or ".." in tpl.split("/"):
                 raise PolicyError(f"{tool}: template `{template}` must be a name under 90-templates")
-            # The copy carries the template's text but not a floor over it, only a `sensitivity`
-            # line: a confidential template would come out as an ordinary note (#120).
+            # The copy carries the template's `sensitivity` line, so a labelled template comes out
+            # as a hidden note, as the kit's own person template does. A floor or path rule over the
+            # template does not travel, and neither does a label that could not be read: those
+            # would come out as an ordinary note (#120).
             tpl_rel = "90-templates/" + tpl.strip("/") + ("" if tpl.lower().endswith(".md") else ".md")
-            if self._confidential(tpl_rel):
-                raise PolicyError(f"{tool}: template `{template}` is confidential; agents do not copy it (policy)")
+            if self.policy.hide_confidential and (
+                    not self.vault or kitlib.confidential_floor(self.vault, tpl_rel) is not False
+                    or kitlib.own_confidentiality(self.vault, tpl_rel) is None):
+                raise PolicyError(f"{tool}: template `{template}` is under a confidential folder or path rule, or its "
+                                  "confidentiality cannot be told; agents do not copy it (policy)")
         if len(payload.encode("utf-8")) > self.policy.max_write_bytes:
             raise PolicyError(f"{tool}: payload of {len(payload.encode('utf-8'))} bytes exceeds the {self.policy.max_write_bytes}-byte limit; split it")
         now = time.monotonic()

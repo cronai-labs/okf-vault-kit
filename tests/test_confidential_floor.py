@@ -231,6 +231,21 @@ class TheFloorDecides(_FloorVault):
         self.assertFalse((self.vault / "00-inbox/x.md").exists())
         g.create_note("00-inbox/y", template="meeting")          # an open template still works
 
+    def test_the_bridge_copies_a_labelled_template_and_hides_the_copy(self):
+        # The kit's own person template says `sensitivity: confidential`; the label travels into the
+        # copy, so the copy is hidden as the template is. Refusing it broke the shipped templates.
+        g = guarded(self.vault)
+        self.assertIs(kitlib.own_confidentiality(self.vault, "90-templates/person.md"), True, "the fixture")
+        g.create_note("00-inbox/new-person", template="person")
+        self.assertIs(kitlib.confidentiality(self.vault, "00-inbox/new-person.md"), True)
+        with self.assertRaises(bp.PolicyError):
+            g.read_note("00-inbox/new-person")
+        # A template whose confidentiality cannot be told is refused: its label may be what failed to parse.
+        write(self.vault, "90-templates/broken.md", "---\ntitle: [unclosed\nsensitivity: confidential\n---\nBODY\n")
+        with self.assertRaisesRegex(bp.PolicyError, "template"):
+            g.create_note("00-inbox/from-broken", template="broken")
+        self.assertFalse((self.vault / "00-inbox/from-broken.md").exists())
+
     def test_a_forced_minutes_overwrite_writes_no_label_for_a_floor(self):
         set_config(self.vault, 'confidentiality:\n  confidential_folders: ["02-meetings"]\n')
         day = dt.date(2026, 9, 21)
