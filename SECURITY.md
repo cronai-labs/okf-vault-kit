@@ -18,7 +18,8 @@ So the reports we most want are **policy-layer bypasses** — any way to make th
 something the policy says it will not:
 
 - read a note marked `sensitivity: confidential` through *any* channel: read, search, list,
-  backlinks, todos, the four `graph_*` tools, or a context pack
+  backlinks, todos, the four `graph_*` tools, a context pack, or the result of
+  `file_meeting_minutes`
 - write into a denied folder, or escape the vault root, by any spelling of a path
 - defeat `--read-only`, `--propose`, the write limits, or the audit log
 - get `graph_query` to do anything other than read
