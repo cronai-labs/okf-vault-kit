@@ -189,7 +189,7 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     root = Path(root).resolve()
     plan = Plan(allow_git=allow_git)
     wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR)]
-    if (root / ".git").exists():
+    if (root / ".git").is_dir():
         if allow_git:
             plan.notes.append("--allow-git: `.git` is not denied, so confidential notes tracked in git stay readable "
                               "through the history (`git show`, `git grep HEAD`)")
@@ -242,7 +242,11 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
                           "permission rule cannot match literally")
     patterns = []
     for pat in export["confidential_paths"]:
-        if literal_safe(pat, PATTERN_UNSAFE):
+        if kitlib.ConfidentialityPolicy.build(paths=[pat]).covers(kitlib.CONFIG_REL):
+            plan.notes.append(f"path rule {pat!r} is not carried over as a pattern, since it would deny "
+                              f"{kitlib.CONFIG_REL}; the files it matches now are denied one by one, a file it "
+                              "matches later only after the next run")
+        elif literal_safe(pat, PATTERN_UNSAFE):
             patterns.append(pat)
         else:
             plan.notes.append(f"path rule {pat!r} is not carried over (it holds [ ] \\ ! # or edge spaces, which mean "
@@ -251,6 +255,9 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     chosen = sorted(set(folders))
     # A folder inside another chosen folder, and a file inside any, adds nothing.
     chosen = [f for f in chosen if not any(_under(f, g) for g in chosen)]
+    if any(_under(kitlib.CONFIG_REL, g) for g in chosen):
+        plan.notes.append(f"{kitlib.CONFIG_REL} is denied with the folder that holds it; the agent's own kit runs "
+                          "then cannot read the policy and hide everything from it")
     wanted += [("folder", f) for f in chosen]
     wanted += [("path", p) for p in patterns]
     wanted += [("file", f) for f in sorted(set(files)) if not any(_under(f, g) for g in chosen)]
@@ -321,6 +328,10 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
         existing = {}
     if not isinstance(existing, dict):
         raise AgentSettingsError(f"{SETTINGS_REL}: the top level must be a JSON object — fix it by hand first")
+    for path in (("permissions",), ("sandbox",), ("sandbox", "filesystem")):
+        parent = existing if len(path) == 1 else existing.get(path[0])
+        if isinstance(parent, dict) and path[-1] in parent and not isinstance(parent[path[-1]], dict):
+            raise AgentSettingsError(f"{SETTINGS_REL}: `{'.'.join(path)}` must be an object — fix it by hand first")
     current_deny = _list_at(existing, ("permissions", "deny"), SETTINGS_REL)
     current_read = _list_at(existing, ("sandbox", "filesystem", "denyRead"), SETTINGS_REL)
     owned_deny = _owned(manifest, "permissions.deny")
@@ -410,17 +421,24 @@ class State:
     local_flags: list[str]
 
 
+def recorded_allow_git(manifest: Any) -> bool:
+    """The `--allow-git` choice the last `--apply` recorded."""
+    return isinstance(manifest, dict) and manifest.get("allow_git") is True
+
+
 def claude_code_state(root: Path, allow_git: bool | None = None) -> State:
     """Read the vault and its settings; raises PolicyConfigError or AgentSettingsError.
 
-    `allow_git=None` takes the choice the manifest recorded (doctor), else the default: deny `.git`.
+    `allow_git=None` takes the choice the manifest recorded (doctor, `--check`); `False` is the
+    default of a run that writes: deny `.git`.
     """
     root = Path(root).resolve()
     export = policy_export(root)
     manifest = read_manifest(root)
-    if allow_git is None:
-        allow_git = bool(isinstance(manifest, dict) and manifest.get("allow_git") is True)
-    plan = claude_code_plan(root, export, allow_git=allow_git)
+    recorded = recorded_allow_git(manifest)
+    plan = claude_code_plan(root, export, allow_git=recorded if allow_git is None else allow_git)
+    if allow_git is False and recorded and (root / ".git").is_dir():
+        plan.notes.append("the last --apply used --allow-git; this run denies `.git` again (pass --allow-git to keep it)")
     existing, raw = _read_json(root / SETTINGS_REL, SETTINGS_REL)
     merge = merge_settings(existing, manifest, plan)
     local = local_override_flags(root, plan, merge.settings)

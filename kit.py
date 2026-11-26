@@ -547,7 +547,8 @@ def cmd_agent_settings(args) -> int:
         sys.exit("that vault is the kit's own sample, not yours — --apply would write into this checkout. "
                  "Pass your own: --vault ~/Notes/vault")
     try:
-        state = kitagent.claude_code_state(vault, allow_git=args.allow_git)
+        # --check answers for the choice the last --apply recorded, as doctor does, unless told otherwise.
+        state = kitagent.claude_code_state(vault, allow_git=(args.allow_git or None) if args.check else args.allow_git)
     except kitlib.PolicyConfigError as exc:
         return _refuse(f"{exc} — no settings are generated until it is fixed (`kit.py validate` reports it)")
     except kitagent.AgentSettingsError as exc:
@@ -1329,7 +1330,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--vault")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="write settings.json and the kit's manifest (default: preview a diff)")
-    mode.add_argument("--check", action="store_true", help="exit 1 when settings.json differs from what --apply would write; writes nothing")
+    mode.add_argument("--check", action="store_true", help="exit 1 when settings.json differs from what --apply would write (with the .git choice the last --apply recorded); writes nothing")
     p.add_argument("--allow-git", action="store_true",
                    help="do not deny .git — confidential notes tracked in git then stay readable through the history")
     p.set_defaults(fn=cmd_agent_settings)

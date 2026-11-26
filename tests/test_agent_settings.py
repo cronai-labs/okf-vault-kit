@@ -159,10 +159,17 @@ class Plan(_Vault):
         self.assertNotIn("Read(./.kit/config.yml)", plan.deny)   # the agent's own kit runs need it
 
     def test_a_path_rule_over_the_config_does_not_deny_it(self):
+        write(self.v, "99-system/extra.yml", "a: 1\n")
         set_config(self.v, 'confidentiality:\n  confidential_paths: ["**/*.yml"]\n')
         plan = kitagent.claude_code_plan(self.v, self.export())
-        self.assertNotIn("Read(./.kit/config.yml)", plan.deny)
-        self.assertTrue(any(".kit/config.yml" in n for n in plan.notes))
+        for entry in plan.deny_read:                 # neither as a file nor through the pattern
+            rel = entry.removeprefix("./")
+            denies = kitlib.ConfidentialityPolicy.build(paths=[rel]).covers(kitlib.CONFIG_REL) or \
+                kitlib.ConfidentialityPolicy.build(folders=[rel]).in_folder(kitlib.CONFIG_REL)
+            self.assertFalse(denies, entry)
+        self.assertNotIn("Read(./**/*.yml)", plan.deny)
+        self.assertIn("Read(./99-system/extra.yml)", plan.deny)       # what it matches now, one by one
+        self.assertTrue(any(".kit/config.yml" in n and "not carried over" in n for n in plan.notes))
 
     def test_a_name_a_rule_cannot_match_literally_denies_its_parent_folder(self):
         for name in ("odd [x]/n[1].md", "spaced/ lead.md", "bang/!x.md", "hash/#x.md"):
@@ -217,6 +224,19 @@ class Plan(_Vault):
         (self.v / ".git").write_text("gitdir: /elsewhere/.git/worktrees/v\n", encoding="utf-8")
         plan = kitagent.claude_code_plan(self.v, self.export())
         self.assertIn("git history outside the vault not denied", plan.flags)
+        self.assertFalse(any("cannot be read through the history" in n for n in plan.notes))
+
+    def test_allow_git_is_recorded_and_check_and_doctor_follow_it(self):
+        (self.v / ".git").mkdir()
+        self.assertEqual(agent(self.v, "--apply", "--allow-git").returncode, 0)
+        self.assertNotIn("Read(./.git/**)", read_settings(self.v)["permissions"]["deny"])
+        self.assertTrue(json.loads((self.v / MANIFEST).read_text(encoding="utf-8"))["allow_git"])
+        self.assertEqual(agent(self.v, "--check").returncode, 0)
+        self.assertEqual(kitagent.doctor_row(self.v)[1], "ok")
+        r = agent(self.v, "--apply")                 # without the flag: back to the default
+        self.assertIn("denies `.git` again", r.stdout)
+        self.assertIn("Read(./.git/**)", read_settings(self.v)["permissions"]["deny"])
+        self.assertEqual(agent(self.v, "--check").returncode, 0)
 
 
 class Merge(_Vault):
@@ -287,12 +307,12 @@ class Merge(_Vault):
         self.assertFalse((self.v / SETTINGS).exists())
         agent(self.v, "--apply")
         self.assertEqual(agent(self.v, "--check").returncode, 0)
-        write(self.v, "07-knowledge/new-secret.md", MARKED)
+        write(self.v, "07-knowledge/new-hidden.md", MARKED)
         before = (self.v / SETTINGS).read_bytes()
         r = agent(self.v, "--check")
         self.assertEqual(r.returncode, 1)
         self.assertIn("2 list entries to add", r.stdout)
-        self.assertNotIn("new-secret", r.stdout)
+        self.assertNotIn("new-hidden", r.stdout)
         self.assertEqual((self.v / SETTINGS).read_bytes(), before)
 
     def test_reformatting_by_hand_is_not_drift(self):
@@ -314,7 +334,8 @@ class Merge(_Vault):
         self.assertIn("not valid JSON", r.stderr)
         self.assertEqual((self.v / SETTINGS).read_text(encoding="utf-8"), "{ not json")
         for bad in ([], {"permissions": []}, {"permissions": {"deny": "Read(x)"}}, {"sandbox": {"filesystem": []}},
-                    {"sandbox": {"filesystem": {"denyRead": [1]}}}):
+                    {"sandbox": {"filesystem": {"denyRead": [1]}}}, {"permissions": None}, {"sandbox": None},
+                    {"sandbox": {"filesystem": None}}):
             self.put(bad)
             self.assertEqual(agent(self.v, "--apply").returncode, 2, bad)
 
@@ -355,12 +376,12 @@ class Doctor(_Vault):
 
     def test_drift_counts_without_paths(self):
         agent(self.v, "--apply")
-        write(self.v, "07-knowledge/new-secret.md", MARKED)
+        write(self.v, "07-knowledge/new-hidden.md", MARKED)
         (self.v / CSV_REL).unlink()
         status = self.row()[1]
         self.assertTrue(status.startswith("drift: 2 to add, 2 stale"), status)
         self.assertIn("--apply", status)
-        for name in ("new-secret", "payroll", "05-people", "04-areas"):
+        for name in ("new-hidden", "payroll", "05-people", "04-areas"):
             self.assertNotIn(name, status)
 
     def test_local_settings_that_switch_the_sandbox_off_are_drift(self):
@@ -401,14 +422,14 @@ class Doctor(_Vault):
 
     def test_doctor_row_and_report_name_no_confidential_path(self):
         agent(self.v, "--apply")
-        write(self.v, "07-knowledge/new-secret.md", MARKED)
+        write(self.v, "07-knowledge/new-hidden.md", MARKED)
         report = self.v.parent / "doctor.txt"
         r = run("doctor", "--vault", str(self.v), "--report", str(report), "--base-url", "http://127.0.0.1:9/v1")
         line = next(x for x in r.stdout.splitlines() if x.startswith("agent settings (claude-code)"))
         self.assertIn("drift: 2 to add", line)
         text = report.read_text(encoding="utf-8")
         self.assertIn("agent settings (claude-code)", text)
-        for name in ("new-secret", "harrier", "payroll", "heron"):
+        for name in ("new-hidden", "harrier", "payroll", "heron"):
             self.assertNotIn(name, line)
             self.assertNotIn(name, text)
 
