@@ -5,6 +5,7 @@ commands and `llm ask --graph` read the graph through the same redaction as the 
 tools, and `--show-confidential` opts back in with the bridge's meaning.
 """
 import json
+import os
 import re
 import shutil
 import sqlite3
@@ -404,6 +405,55 @@ class RedactionLeavesNoHiddenIdInVisibleNodes(unittest.TestCase):
                 continue
             self.assertIn(f.render(), kept, "a finding about visible notes only must survive the redaction")
         self.assertTrue(kept, "the redacted graph still reports")
+
+
+class GraphQueryFollowsTheNotes(unittest.TestCase):
+    """`graph query` answers from .kit/graph.sqlite only while the notes are those it was built from."""
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+        self.db = self.vault / ".kit/graph.sqlite"
+
+    def query_ids(self) -> set[str]:
+        r = run("graph", "query", "select id from nodes", "--json", "--limit", "1000", "--vault", str(self.vault))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return {row["id"] for row in json.loads(r.stdout)}
+
+    def meta(self, key: str) -> str:
+        con = sqlite3.connect(self.db)
+        try:
+            return con.execute("select value from meta where key=?", (key,)).fetchone()[0]
+        finally:
+            con.close()
+
+    def test_a_note_marked_confidential_after_the_build_is_not_answered(self):
+        rel = "03-projects/search-relaunch.md"
+        self.assertEqual(run("graph", "build", "--vault", str(self.vault)).returncode, 0)
+        self.assertIn(rel, self.query_ids())
+        p = self.vault / rel
+        p.write_text(p.read_text(encoding="utf-8").replace("sensitivity: internal", "sensitivity: confidential", 1),
+                     encoding="utf-8", newline="\n")
+        st = p.stat()
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))   # a coarse clock must not hide the edit
+        self.assertNotIn(rel, self.query_ids(), "graph query answered from a database built before the note turned confidential")
+        con = sqlite3.connect(self.db)
+        try:
+            self.assertIsNone(con.execute("select 1 from nodes where id=?", (rel,)).fetchone(), "and the file was rewritten")
+        finally:
+            con.close()
+
+    def test_an_unchanged_vault_is_answered_from_the_file(self):
+        self.assertEqual(run("graph", "build", "--vault", str(self.vault)).returncode, 0)
+        built = self.meta("built_at")
+        self.query_ids(); self.query_ids()
+        self.assertEqual(self.meta("built_at"), built, "a query on unchanged notes must not rebuild the graph")
+
+    def test_the_signature_is_the_bridges(self):
+        self.assertEqual(kitgraph.note_set_signature(self.vault), ob.FsBackend(self.vault)._note_set_signature())
+        # the database stores a digest, never the paths: a hidden build must not list confidential paths in meta
+        self.assertEqual(run("graph", "build", "--vault", str(self.vault)).returncode, 0)
+        self.assertNotIn("alex-example", self.meta("notes"))
 
 
 if __name__ == "__main__":
