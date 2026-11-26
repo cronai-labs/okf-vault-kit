@@ -102,6 +102,8 @@ class LlmAskLeavesConfidentialNotesOut(unittest.TestCase):
     def assert_no_confidential_field(self, prompt: str):
         for marker in FALCON_MARKERS:
             self.assertNotIn(marker, prompt, f"a field of {FALCON_REL} reached the prompt")
+        for marker in PEOPLE_DESC:
+            self.assertNotIn(marker, prompt, "a sample person's description reached the prompt")
         for rel in (FALCON_REL, *PEOPLE):
             self.assertFalse(labelled(prompt, rel), f"{rel} is cited or labelled in the prompt")
         self.assertNotIn("Delegated authority", prompt, "the body of 05-people/alex-example.md reached the prompt")
