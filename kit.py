@@ -724,16 +724,20 @@ def cmd_minutes(args) -> int:
     if args.llm:
         extra = _llm_structure(text, args.base_url or DEFAULT_BASE_URL, args.model or DEFAULT_MODEL)
     try:
-        # People and the project are resolved through the graph; by default the redacted one, so the
-        # meeting note's frontmatter does not link a confidential project or copy a confidential
-        # person's title (#52). The recap text itself is filed as written.
+        # A note may raise its confidentiality, never lower it (#52). By default people and the
+        # project are linked as the whole vault knows them, and a meeting that links a confidential
+        # note becomes confidential itself; --keep-open links only the notes that are not
+        # confidential and keeps every other name as written. The recap text is filed as written.
         m = kitrecon.file_minutes(vault, text, args.title, date, args.project, people, args.kind,
                                   dry_run=args.dry_run, force=args.force, daily=args.daily, extra=extra,
-                                  hide_confidential=not args.show_confidential)
+                                  mode="plain" if args.keep_open else "raise")
     except FileExistsError as exc:
         print(exc); return 1
     print(f"{'would write' if args.dry_run else 'wrote'} {m.path}")
-    print(f"  people: {m.people or '-'}   project: {m.project or '-'}   unresolved: {m.unresolved or '-'}")
+    print(f"  people: {', '.join(m.names) or '-'}   project: {m.project or '-'}   unresolved: {', '.join(m.unresolved) or '-'}")
+    if m.confidential_links:
+        print(f"  {'would be marked' if args.dry_run else 'marked'} confidential because it links {len(m.confidential_links)} note(s)"
+              " marked confidential; --keep-open files it open with their names as plain text")
     print(f"  {len(m.outcomes)} outcomes, {len(m.decisions)} decisions, {len(m.actions)} actions")
     for a in m.actions:
         print("  " + a)
@@ -1180,8 +1184,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("minutes", help="file a recap as a meeting note"); p.add_argument("file", help="text file or - for stdin"); p.add_argument("--title", required=True); p.add_argument("--vault"); p.add_argument("--date"); p.add_argument("--project"); p.add_argument("--people", help="comma-separated names")
     p.add_argument("--kind", default="project"); p.add_argument("--llm", action="store_true", help="also ask the local model to structure the recap"); p.add_argument("--base-url"); p.add_argument("--model"); p.add_argument("--daily", action="store_true", help="link the note from today's daily note")
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--force", action="store_true")
-    p.add_argument("--show-confidential", action="store_true",
-                   help="resolve people and projects against notes with sensitivity: confidential too (left out by default, as on the bridge)")
+    p.add_argument("--keep-open", action="store_true",
+                   help="link only people and projects that are not confidential, keep other names as written, and keep the "
+                        "template's sensitivity (by default a meeting that links a confidential note is marked confidential)")
     p.set_defaults(fn=cmd_minutes)
     p = sub.add_parser("log", help="append an entry to log.md"); p.add_argument("message"); p.add_argument("--vault"); p.add_argument("--kind", default="Update", help="Update | Creation | Deprecation"); p.set_defaults(fn=cmd_log)
     p = sub.add_parser("mcp-config", help="print or write a client's MCP config that registers the vault bridge (okf-vault)")

@@ -401,11 +401,12 @@ class Guarded:
         def run():
             daily_rel = self._daily_rel(date)
             daily_ok = bool(daily_rel) and self._side_write_ok(daily_rel)
-            # Entities are matched without the confidential notes, so neither the result nor the
-            # note it writes names one: a recap that mentions a hidden name must come back exactly
-            # like one that mentions a name the vault does not know (#52).
+            # Hiding confidential notes, the tool links only the others and keeps every other name
+            # as written ("plain"): a name passed in `people` that is confidential comes back exactly
+            # like one the vault does not know. With --show-confidential it links them all and marks
+            # a meeting that links a confidential note confidential itself ("raise") (#52).
             out = self.backend.file_minutes(text, title, date, project, people, kind, daily=daily_ok,
-                                            hide_confidential=self.policy.hide_confidential)
+                                            mode="plain" if self.policy.hide_confidential else "raise")
             if daily_rel and not daily_ok:
                 out["skipped"] = list(out.get("skipped", ())) + [f"{daily_rel} (write denied by policy)"]
             return out

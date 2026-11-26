@@ -668,8 +668,10 @@ class Minutes:
     title: str
     date: dt.date
     text: str
-    people: list[str] = field(default_factory=list)        # node ids
+    people: list[str] = field(default_factory=list)        # node ids of the people linked
     project: str | None = None                             # node id
+    names: list[str] = field(default_factory=list)         # the note's `people:`: linked titles, other names as written
+    confidential_links: list[str] = field(default_factory=list)  # linked notes marked confidential ("raise" marks the note)
     actions: list[str] = field(default_factory=list)
     decisions: list[str] = field(default_factory=list)
     outcomes: list[str] = field(default_factory=list)
@@ -708,12 +710,14 @@ def _format_action(text: str, owner: str, due: str) -> str:
     return f"- [ ] {text}" + (f" — {meta}" if meta else "")
 
 
-def detect_entities(text: str, g: kitgraph.Graph) -> tuple[list[str], list[str]]:
-    """People and projects mentioned in free text, by title/alias (word-boundary, case-insensitive).
+def detect_entity_mentions(text: str, g: kitgraph.Graph) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """People and projects mentioned in free text, as (node id, the text as written) pairs.
 
-    A bare first name is matched capitalised and case-sensitively instead: 'will', 'mark', 'max'
-    and 'grant' are ordinary English words, and a person named Will must not be an attendee of
-    every meeting whose recap contains a future tense.
+    Matched by title/alias (word-boundary, case-insensitive). A bare first name is matched
+    capitalised and case-sensitively instead: 'will', 'mark', 'max' and 'grant' are ordinary
+    English words, and a person named Will must not be an attendee of every meeting whose recap
+    contains a future tense. The second element is the matched span of `text`, never the note's
+    title: a caller that must not copy a note's title can still keep the name the text used.
     """
     people, projects = [], []
     for nid, n in g.nodes.items():
@@ -726,34 +730,64 @@ def detect_entities(text: str, g: kitgraph.Graph) -> tuple[list[str], list[str]]
                 names.append((first[:1].upper() + first[1:], 0))
         for name, mode in names:
             clean = re.sub(r"\s*\(example\)", "", name, flags=re.I).strip()
-            if clean and re.search(r"(?<![\w-])" + re.escape(clean) + r"(?![\w-])", text, mode):
-                (people if n.type == "person" else projects).append(nid); break
+            hit = re.search(r"(?<![\w-])" + re.escape(clean) + r"(?![\w-])", text, mode) if clean else None
+            if hit:
+                (people if n.type == "person" else projects).append((nid, hit.group(0))); break
     return people, projects
+
+
+def detect_entities(text: str, g: kitgraph.Graph) -> tuple[list[str], list[str]]:
+    """`detect_entity_mentions` without the matched text: the node ids of people and projects."""
+    people, projects = detect_entity_mentions(text, g)
+    return [nid for nid, _ in people], [nid for nid, _ in projects]
+
+
+MINUTES_MODES = ("raise", "plain")
 
 
 def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None, project: str | None = None,
                  people: list[str] | None = None, kind: str = "project", g: kitgraph.Graph | None = None,
                  dry_run: bool = False, force: bool = False, daily: bool = False, actor: str = "process:kit-minutes",
-                 extra: dict[str, list[str]] | None = None, hide_confidential: bool = True) -> Minutes:
+                 extra: dict[str, list[str]] | None = None, mode: str = "raise") -> Minutes:
+    """File a recap as a meeting note. A note may raise its confidentiality, never lower it (#52).
+
+    `mode="raise"` links people and projects as the whole vault knows them; when one it links is a
+    confidential note, the meeting note is marked `sensitivity: confidential` too, so its links and
+    title are hidden wherever that note's are. `mode="plain"` links only notes that are not
+    confidential and keeps the template's sensitivity: every other name, confidential or unknown,
+    stays in `people:` as the recap or the caller wrote it, never as a confidential note's title or
+    path, and a confidential project is neither linked nor stored. Names in `people:` that are not
+    linked are also in `unresolved`.
+    """
+    if mode not in MINUTES_MODES:
+        raise ValueError(f"mode must be one of {', '.join(MINUTES_MODES)}, not {mode!r}")
     vault = Path(vault)
-    g = g or kitgraph.build_graph(vault)
+    full = g or kitgraph.build_graph(vault)
     date = date or dt.date.today()
-    self_actor = g.nodes[kitgraph.SELF_ID].props.get("actor")
-    # People and projects are matched against the graph without its confidential notes (#52). The
-    # note's `people:`/`project:` and the bridge tool's result would otherwise name exactly the
-    # confidential notes a recap mentions, an oracle for which names are confidential; a hidden
-    # name, detected or passed explicitly, ends up exactly like one the vault does not know.
-    if hide_confidential:
-        g = kitgraph.redact_vault(g, vault)
-    resolver = kitgraph.Resolver(g.nodes, kitgraph.load_ontology(vault), self_actor)
+    self_actor = full.nodes[kitgraph.SELF_ID].props.get("actor")
+    # Links come from one graph: the whole vault to raise, the redacted one to stay plain. The
+    # redacted graph also decides detection, so a hidden project next to a visible one does not
+    # make the visible one ambiguous, and an explicit name never reaches a hidden note.
+    linkable = full if mode == "raise" else kitgraph.redact_vault(full, vault)
+    resolver = kitgraph.Resolver(linkable.nodes, kitgraph.load_ontology(vault), self_actor)
     m = Minutes(title=title, date=date, text=text)
-    found_people, found_projects = detect_entities(text, g)
+    found_people, found_projects = detect_entities(text, linkable)
     if people:
         for p in people:
             nid, _method, _cands = resolver.resolve(p, ["person"])
-            (m.people.append(nid) if nid else m.unresolved.append(p))
+            if nid:
+                m.people.append(nid); m.names.append(linkable.nodes[nid].title)
+            else:
+                m.names.append(p); m.unresolved.append(p)
     else:
         m.people = found_people
+        m.names = [linkable.nodes[p].title for p in found_people]
+        if mode == "plain":
+            # A confidential person the recap mentions keeps the name as the recap wrote it: the
+            # whole graph only finds that span of the text, and nothing of the note is copied.
+            for nid, written in detect_entity_mentions(text, full)[0]:
+                if nid not in linkable.nodes and written.casefold() not in {x.casefold() for x in m.names}:
+                    m.names.append(written); m.unresolved.append(written)
     if project:
         nid, _method, _cands = resolver.resolve(project, ["project", "area"])
         if nid:
@@ -762,6 +796,11 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
             m.unresolved.append(project)
     elif len(found_projects) == 1:
         m.project = found_projects[0]
+    if mode == "raise":
+        def confidential(rel: str) -> bool:
+            return kitlib.is_confidential(vault, rel)
+        m.confidential_links = [nid for nid in m.people + ([m.project] if m.project else [])
+                                if nid in full.nodes and kitgraph.node_confidential(full.nodes[nid], confidential)]
     m.actions, m.decisions, m.outcomes = extract_minutes(text)
     if extra:
         for k in ("actions", "decisions", "outcomes"):
@@ -792,11 +831,14 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     fm.update({
         "type": "meeting", "title": title, "date": date, "meeting_type": kind,
         "description": _describe(m),
-        "people": [g.nodes[p].title for p in m.people],
-        "project": f"[{g.nodes[m.project].title}]({_link(rel, m.project)})" if m.project else "",
+        "people": list(m.names),
+        "project": f"[{linkable.nodes[m.project].title}]({_link(rel, m.project)})" if m.project else "",
         "state": "open",
         "generated": {"by": actor, "at": dt.datetime.now().astimezone().isoformat(timespec="seconds")},
     })
+    # Raised, never lowered: a template that already says confidential keeps its own spelling.
+    if m.confidential_links and str(fm.get("sensitivity", "")).strip().lower() != kitlib.CONFIDENTIAL:
+        fm["sensitivity"] = kitlib.CONFIDENTIAL
     rest = _fill_section(rest, "## Outcomes", m.outcomes)
     rest = _fill_section(rest, "## Decisions", m.decisions, hint_target=rel)
     rest = _fill_section(rest, "## Actions", m.actions, raw_lines=True)
@@ -804,9 +846,10 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     fm_text = yaml.safe_dump(fm, sort_keys=False, allow_unicode=True, default_flow_style=None).rstrip("\n")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(f"---\n{fm_text}\n---\n{rest}", encoding="utf-8", newline="\n")
-    # The template decides the sensitivity. A note it made confidential is logged, and announced in
-    # the daily note, without its title or its path (which carries the title's slug): log.md and the
-    # daily note are ordinary files the bridge serves whole (#52). Judged on the file as written.
+    # The template, or a confidential link in "raise" mode, decides the sensitivity. A confidential
+    # note is logged, and announced in the daily note, without its title or its path (which carries
+    # the title's slug): log.md and the daily note are ordinary files the bridge serves whole (#52).
+    # Judged on the file as written.
     confidential = kitlib.is_confidential(vault, rel)
     counts = f"({len(m.actions)} actions, {len(m.decisions)} decisions)"
     filed = f"a meeting note marked confidential from a recap {counts}" if confidential else f"meeting note [{title}]({rel}) from a recap {counts}"
