@@ -14,6 +14,7 @@ import contextlib
 import dataclasses
 import datetime as dt
 import difflib
+import hashlib
 import json
 import os
 import re
@@ -209,6 +210,7 @@ class Graph:
     edges: list[tuple[str, str, str, str]] = field(default_factory=list)   # src, pred, dst, origin
     findings: list[Finding] = field(default_factory=list)
     built_at: str = ""
+    signature: str = ""            # signature_digest of the note set the graph was built from; "" when unknown
     redacted: bool = False         # True once `redact` dropped the confidential notes; recorded in exports
     _edge_set: set[tuple[str, str, str]] = field(default_factory=set, repr=False)
 
@@ -347,6 +349,30 @@ class Resolver:
 
 # ---------------------------------------------------------------- build
 
+def note_set_signature(vault: Path) -> frozenset[tuple[str, int]]:
+    """Which notes exist and when each last changed: (vault-relative path, mtime_ns) per note.
+
+    The newest mtime alone misses a move and a delete, neither of which raises any mtime, and
+    moving a note into a `_`-folder is how a user hides it. Keying on the path set as well means a
+    graph built before such a change is never taken for current. The bridge's graph cache and
+    `kit.py graph query` must agree on what "changed" means, so this is the one definition.
+    """
+    vault = Path(vault)
+    return frozenset((p.relative_to(vault).as_posix(), p.stat().st_mtime_ns) for p in kitlib.iter_markdown(vault))
+
+
+def signature_digest(sig: frozenset[tuple[str, int]]) -> str:
+    """A note-set signature as one opaque string for a file on disk.
+
+    A digest, not the pairs: the graph database records it, and a database built without the
+    confidential notes must not list their paths in its meta table (#52).
+    """
+    h = hashlib.sha256()
+    for rel, mtime_ns in sorted(sig):
+        h.update(f"{rel}\0{mtime_ns}\n".encode())
+    return h.hexdigest()
+
+
 def _self_actor(vault: Path) -> str | None:
     """The vault owner's actor id: the `human:` actor the templates stamp (kit init --actor)."""
     folder = kitlib.template_folder(vault)[0]
@@ -383,7 +409,9 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
     vault = Path(vault)
     onto = onto or load_ontology(vault)
     now = now or dt.datetime.now(dt.UTC)
-    g = Graph(built_at=now.isoformat())
+    # Taken before the notes are read: a note that changes during the build leaves the graph
+    # looking stale, which costs a rebuild, rather than fresh, which would serve the old state.
+    g = Graph(built_at=now.isoformat(), signature=signature_digest(note_set_signature(vault)))
     self_actor = _self_actor(vault)
     g.nodes[SELF_ID] = Node(id=SELF_ID, kind="virtual", type="person", title="me", description="The vault owner", props={"actor": self_actor})
 
@@ -727,7 +755,7 @@ def redact(g: Graph, file_confidential: Callable[[str], bool]) -> Graph:
     bridge caches it, `llm ask` reads mentions from it) and must stay whole.
     """
     hidden = {nid for nid, n in g.nodes.items() if node_confidential(n, file_confidential)}
-    red = Graph(built_at=g.built_at, redacted=True)
+    red = Graph(built_at=g.built_at, signature=g.signature, redacted=True)
     red.nodes = {nid: dataclasses.replace(n, derived={k: v for k, v in n.derived.items() if not _names(v, hidden)})
                  for nid, n in g.nodes.items() if nid not in hidden}
     for src, pred, dst, origin in g.edges:
@@ -961,6 +989,9 @@ def _fill_sqlite(con: sqlite3.Connection, g: Graph) -> None:
     # What `kit.py graph query` checks before it serves a file on disk: a database built with
     # --show-confidential, or by a kit that did not redact yet, must not answer a default query.
     con.execute("INSERT INTO meta VALUES ('confidential', ?)", (CONFIDENTIAL_HIDDEN if g.redacted else CONFIDENTIAL_SHOWN,))
+    # And whether the notes are still those it was built from: a note marked confidential after the
+    # build is in the file, and a query must not answer from it (#52).
+    con.execute("INSERT INTO meta VALUES ('notes', ?)", (g.signature,))
     for n in g.nodes.values():
         con.execute("INSERT INTO nodes VALUES (?,?,?,?,?,?,?,?)",
                     (n.id, n.kind, n.type, n.title, n.description, n.path, n.mtime, json.dumps(_json_safe(n.props), ensure_ascii=False)))
@@ -979,23 +1010,28 @@ def _fill_sqlite(con: sqlite3.Connection, g: Graph) -> None:
 
 
 
+def sqlite_meta(path: Path, key: str) -> str | None:
+    """One value of a graph database's meta table on disk, or None when the file does not say."""
+    try:
+        con = sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        row = con.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+    except sqlite3.Error:
+        return None
+    finally:
+        con.close()
+    return row[0] if row else None
+
+
 def sqlite_confidential(path: Path) -> str | None:
     """The `confidential` mode a graph database on disk was built in, or None when it does not say.
 
     None covers a database from a kit before #52, which redacted nothing; callers treat it as
     holding confidential notes.
     """
-    try:
-        con = sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)
-    except sqlite3.Error:
-        return None
-    try:
-        row = con.execute("SELECT value FROM meta WHERE key='confidential'").fetchone()
-    except sqlite3.Error:
-        return None
-    finally:
-        con.close()
-    return row[0] if row else None
+    return sqlite_meta(path, "confidential")
 
 
 def query_sqlite(con: sqlite3.Connection, sql: str, limit: int = 200) -> tuple[list[str], list[tuple]]:

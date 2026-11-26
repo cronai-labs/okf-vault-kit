@@ -569,11 +569,15 @@ def cmd_graph_query(args) -> int:
     want = kitgraph.CONFIDENTIAL_SHOWN if args.show_confidential else kitgraph.CONFIDENTIAL_HIDDEN
     import sqlite3
     have = kitgraph.sqlite_confidential(db) if db.exists() else None
+    # Nor from a file built from other notes than those on disk now: a note marked confidential
+    # since the build is still in it (#52). A file that records no signature counts as stale.
+    stale = db.exists() and kitgraph.sqlite_meta(db, "notes") != kitgraph.signature_digest(kitgraph.note_set_signature(vault))
     # A default query must not be answered from a file built with --show-confidential, or by a kit
     # that redacted nothing yet (no mode recorded): rewrite it redacted, which also takes the
     # confidential nodes off the disk. --show-confidential never writes them as a side effect of a
     # query unless --rebuild asks for it; `graph build --show-confidential` is the deliberate way.
-    if args.rebuild or (not args.show_confidential and have != want):
+    # A stale file is rewritten in the mode it already has, so that never adds them either.
+    if args.rebuild or (not args.show_confidential and have != want) or (have == want and stale):
         if db.exists() and have != want and not args.rebuild:
             print(f"{db} was built with confidential notes in it; rebuilding it without them", file=sys.stderr)
         onto = kitgraph.load_ontology(vault)
