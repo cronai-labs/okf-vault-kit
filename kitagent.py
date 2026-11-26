@@ -395,16 +395,22 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
     sandbox = settings.setdefault("sandbox", {})
     overrides, flags_set = [], []
     for key, value in SANDBOX_FLAGS.items():
-        if sandbox.get(key, None) != value or key not in sandbox:
+        # `is`, not `==`: 1 == True in Python, and a switch must be a JSON boolean to count.
+        if key not in sandbox or sandbox[key] is not value:
             flags_set.append(f"sandbox.{key}")
-        if key in sandbox and sandbox[key] != value:
+        if key in sandbox and sandbox[key] is not value:
             overrides.append(f"sandbox.{key}: {json.dumps(sandbox[key])} -> {json.dumps(value)}")
         sandbox[key] = value
     sandbox.setdefault("filesystem", {})["denyRead"] = read
     new_manifest = {"version": 1, "generated_by": GENERATOR, "allow_git": plan.allow_git,
                     "permissions.deny": own_deny, "sandbox.filesystem.denyRead": own_read}
-    changed = settings != existing or new_manifest != manifest
+    changed = bool(flags_set) or not same_json(settings, existing) or not same_json(new_manifest, manifest)
     return Merge(settings, new_manifest, add_d + add_r, rm_d + rm_r, flags_set, overrides, warnings, changed)
+
+
+def same_json(a: Any, b: Any) -> bool:
+    """Equal as JSON, key order aside: unlike `==`, `1` and `true` differ."""
+    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
 
 
 def settings_text(settings: dict[str, Any]) -> str:
@@ -509,7 +515,7 @@ def apply(root: Path, state: State) -> bool:
         return False
     root = Path(root)
     existing, _ = _read_json(root / SETTINGS_REL, SETTINGS_REL)
-    if existing != state.merge.settings:
+    if not same_json(existing, state.merge.settings):
         write_atomic(root / SETTINGS_REL, settings_text(state.merge.settings))
     write_atomic(root / MANIFEST_REL, settings_text(state.merge.manifest))
     return True
@@ -517,10 +523,11 @@ def apply(root: Path, state: State) -> bool:
 
 # ---------------------------------------------------------------- overrides elsewhere
 
+# Any value other than the safe JSON boolean weakens the setting: `0`, `"false"` and `null` included.
 _LOCAL_WEAKENING = {
-    "enabled": (False, "settings.local.json turns the sandbox off"),
-    "allowUnsandboxedCommands": (True, "settings.local.json allows unsandboxed commands"),
-    "failIfUnavailable": (False, "settings.local.json lets commands run unsandboxed when the sandbox cannot start"),
+    "enabled": (True, "settings.local.json turns the sandbox off"),
+    "allowUnsandboxedCommands": (False, "settings.local.json allows unsandboxed commands"),
+    "failIfUnavailable": (True, "settings.local.json lets commands run unsandboxed when the sandbox cannot start"),
 }
 
 
@@ -596,8 +603,8 @@ def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any]) -> li
         if not isinstance(sandbox, dict):
             continue
         if source is local:
-            for key, (bad, flag) in _LOCAL_WEAKENING.items():
-                if sandbox.get(key) is bad:
+            for key, (safe, flag) in _LOCAL_WEAKENING.items():
+                if key in sandbox and sandbox[key] is not safe:
                     flags.append(flag)
         fs = sandbox.get("filesystem")
         if isinstance(fs, dict) and isinstance(fs.get("allowRead"), list):

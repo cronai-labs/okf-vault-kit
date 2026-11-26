@@ -358,6 +358,23 @@ class Merge(_Vault):
         for own in (SETTINGS, kitagent.LOCAL_SETTINGS_REL, MANIFEST):
             self.assertNotIn(own, files)
 
+    def test_sandbox_switches_must_be_json_booleans(self):
+        # 1 == True in Python, so integers passed --check and doctor and stayed in the file.
+        self.assertEqual(agent(self.v, "--apply").returncode, 0)
+        s = read_settings(self.v)
+        s["sandbox"].update({"enabled": 1, "allowUnsandboxedCommands": 0, "failIfUnavailable": 1})
+        write(self.v, SETTINGS, json.dumps(s, indent=2) + "\n")
+        self.assertEqual(agent(self.v, "--check").returncode, 1)
+        self.assertNotEqual(kitagent.doctor_row(self.v)[1], "ok")
+        r = agent(self.v, "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("overrides your value: sandbox.enabled: 1 -> true", r.stdout)
+        raw = (self.v / SETTINGS).read_text(encoding="utf-8")
+        self.assertIn('"enabled": true', raw)
+        self.assertIn('"allowUnsandboxedCommands": false', raw)
+        self.assertIn('"failIfUnavailable": true', raw)
+        self.assertEqual(agent(self.v, "--check").returncode, 0)
+
     def test_check_exit_codes_and_writes_nothing(self):
         r = agent(self.v, "--check")
         self.assertEqual(r.returncode, 1, r.stdout)
@@ -451,6 +468,14 @@ class Doctor(_Vault):
         self.assertNotEqual(status, "ok")
         r = agent(self.v, "--check")
         self.assertIn("turns the sandbox off", r.stderr)
+
+    def test_local_settings_with_false_ish_values_are_flagged(self):
+        agent(self.v, "--apply")
+        write(self.v, kitagent.LOCAL_SETTINGS_REL,
+              json.dumps({"sandbox": {"enabled": 0, "allowUnsandboxedCommands": 1, "failIfUnavailable": "no"}}))
+        status = self.row()[1]
+        for flag in ("turns the sandbox off", "allows unsandboxed commands", "lets commands run unsandboxed"):
+            self.assertIn(flag, status)
 
     def test_an_allow_read_inside_a_denied_folder_is_flagged(self):
         agent(self.v, "--apply")
