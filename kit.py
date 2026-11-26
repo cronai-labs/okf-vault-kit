@@ -312,6 +312,11 @@ def cmd_validate(args) -> int:
     print("== Links, wikilinks, Bases embeds ==")
     print(links.render())
     hygiene = [links]
+    floors = kitlib.check_confidentiality(vault)
+    if floors.errors or floors.warnings or floors.checked:
+        print(f"== Confidentiality: floors and path rules in {kitlib.CONFIG_REL} ==")
+        print(floors.render())
+    hygiene.append(floors)
     use_onto = not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)
     if use_onto:
         g = kitgraph.build_graph(vault)
@@ -1028,7 +1033,8 @@ def cmd_llm_smoke(args) -> int:
 
 
 def _confidential(vault: Path, rel: str) -> bool:
-    """True when the note carries `sensitivity: confidential` — the line the MCP bridge enforces."""
+    """True when the note is confidential — by its own `sensitivity`, or by a folder floor or path
+    rule in `.kit/config.yml` — the line the MCP bridge enforces."""
     if not rel or rel.startswith(("http://", "https://")):
         return False
     # The shared predicate fails closed like the bridge: an unreadable note, a YAML error or a
