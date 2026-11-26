@@ -35,6 +35,13 @@ LOCAL_SETTINGS_REL = ".claude/settings.local.json"
 MANIFEST_DIR = ".kit/agent-settings"
 MANIFEST_REL = f"{MANIFEST_DIR}/claude-code.json"
 GENERATOR = "kit.py agent-settings claude-code"
+# The files this generator writes or the agent's own harness reads: never listed as confidential,
+# or a path rule such as `**/*.json` would make each run see the last one's output as new (#120).
+AGENT_OWN = frozenset({SETTINGS_REL, LOCAL_SETTINGS_REL, MANIFEST_REL})
+# Files the kit derives from the notes, denied whatever the policy says: written before a floor was
+# declared (or by a graph built with --show-confidential), they still hold its notes' titles,
+# frontmatter and, in the audit log, text a tool served. `kit.py graph build` rewrites the graph.
+DERIVED = (("path", ".kit/graph.*"), ("file", ".kit/bridge-audit.jsonl"), ("folder", ".kit/proposals"))
 # What --apply sets in `sandbox`, whatever was there: without these the deny lists are best effort.
 SANDBOX_FLAGS = {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True}
 # A permission rule is a gitignore pattern with no documented escape: a file name holding one of
@@ -133,6 +140,8 @@ def policy_export(root: Path) -> dict[str, Any]:
         dirnames[:] = keep
         for name in sorted(filenames):
             rel = posixpath.join(rel_dir, name) if rel_dir else name
+            if rel in AGENT_OWN:
+                continue
             verdict = kitlib.confidentiality(root, rel)
             if verdict is False:
                 continue
@@ -196,6 +205,19 @@ def git_outside(root: Path) -> Path | None:
     return None
 
 
+def _derived(rel: str) -> bool:
+    """Does one of the DERIVED entries deny this path as written? (Literal: no case folding, no `.trash`.)"""
+    for kind, entry in DERIVED:
+        if kind == "folder" and (rel == entry or _under(rel, entry)):
+            return True
+        if kind == "file" and rel == entry:
+            return True
+        if kind == "path" and posixpath.dirname(rel) == posixpath.dirname(entry) and \
+                posixpath.basename(rel).startswith(posixpath.basename(entry).rstrip("*")):
+            return True
+    return False
+
+
 @dataclass
 class Plan:
     deny: list[str] = field(default_factory=list)          # permissions.deny entries the kit wants
@@ -209,7 +231,7 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     """The entries for an export. Raises AgentSettingsError when a file would need the whole vault denied."""
     root = Path(root).resolve()
     plan = Plan(allow_git=allow_git)
-    wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR)]
+    wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED]
     if (root / ".git").is_dir():
         if allow_git:
             plan.notes.append("--allow-git: `.git` is not denied, so confidential notes tracked in git stay readable "
@@ -239,6 +261,8 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     for rel in export["confidential_files"]:
         is_dir = rel.endswith("/")
         rel = rel.rstrip("/")
+        if rel in AGENT_OWN or _under(rel, MANIFEST_DIR) or _derived(rel):
+            continue           # the kit's own files: denied above, or never denied
         if rel == kitlib.CONFIG_REL:
             plan.notes.append(f"not denied: {kitlib.CONFIG_REL} (a path rule covers it, but the agent's own kit runs "
                               "need it, and a policy they cannot read hides everything from them)")

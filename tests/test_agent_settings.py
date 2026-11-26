@@ -175,6 +175,21 @@ class Plan(_Vault):
         self.assertEqual(len(plan.deny), len(plan.deny_read))
         self.assertNotIn("Read(./.kit/config.yml)", plan.deny)   # the agent's own kit runs need it
 
+    def test_files_the_kit_derives_are_always_denied(self):
+        # The graph files, the bridge's audit log and pending proposals are written before a floor
+        # is declared and can hold a confidential note's title, frontmatter or text.
+        set_config(self.v, "providers:\n  search: naive\n")
+        write(self.v, ".kit/graph.json", "{}")
+        plan = kitagent.claude_code_plan(self.v, self.export())
+        for perm, sbx in (("Read(./.kit/graph.*)", "./.kit/graph.*"),
+                          ("Read(./.kit/bridge-audit.jsonl)", "./.kit/bridge-audit.jsonl"),
+                          ("Read(./.kit/proposals/**)", "./.kit/proposals")):
+            self.assertIn(perm, plan.deny)
+            self.assertIn(sbx, plan.deny_read)
+        set_config(self.v, 'confidentiality:\n  confidential_paths: ["**/*.json"]\n')
+        plan = kitagent.claude_code_plan(self.v, self.export())
+        self.assertNotIn("Read(./.kit/graph.json)", plan.deny, "covered by the pattern already")
+
     def test_a_path_rule_over_the_config_does_not_deny_it(self):
         write(self.v, "99-system/extra.yml", "a: 1\n")
         set_config(self.v, 'confidentiality:\n  confidential_paths: ["**/*.yml"]\n')
@@ -325,6 +340,23 @@ class Merge(_Vault):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertIn("nothing to do", r.stdout)
         self.assertEqual(((self.v / SETTINGS).read_bytes(), (self.v / MANIFEST).read_bytes()), before)
+
+    def test_second_apply_is_a_no_op_with_a_rule_that_matches_the_settings_themselves(self):
+        # `**/*.json` covers .claude/settings.json and the manifest, which the first --apply creates:
+        # the next export listed both, so the run only settled the third time.
+        set_config(self.v, 'confidentiality:\n  confidential_paths: ["**/*.json"]\n')
+        write(self.v, kitagent.LOCAL_SETTINGS_REL, "{}\n")
+        self.assertEqual(agent(self.v, "--apply").returncode, 0)
+        before = ((self.v / SETTINGS).read_bytes(), (self.v / MANIFEST).read_bytes())
+        r = agent(self.v, "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("nothing to do", r.stdout)
+        self.assertEqual(((self.v / SETTINGS).read_bytes(), (self.v / MANIFEST).read_bytes()), before)
+        self.assertEqual(agent(self.v, "--check").returncode, 0)
+        self.assertEqual(kitagent.doctor_row(self.v)[1], "ok")
+        files = self.export()["confidential_files"]
+        for own in (SETTINGS, kitagent.LOCAL_SETTINGS_REL, MANIFEST):
+            self.assertNotIn(own, files)
 
     def test_check_exit_codes_and_writes_nothing(self):
         r = agent(self.v, "--check")
