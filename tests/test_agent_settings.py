@@ -25,6 +25,7 @@ from tests.test_confidential_floor import (
     RAISED_REL,
     floor_vault,
     set_config,
+    symlink,
     write,
 )
 
@@ -133,6 +134,22 @@ class PolicyExport(_Vault):
                 if exported and not folders.in_folder(rel):
                     self.assertFalse(policy.in_folder(rel), rel)
         self.assertGreater(seen, 50)
+
+    def test_symlinked_files_and_folders_are_followed(self):
+        outside = self.v.parent / "elsewhere"
+        write(outside, "x.md", MARKED)                                  # marked, in a folder outside the vault
+        symlink(self, self.v / "03-projects/shared", outside)
+        symlink(self, self.v / "03-projects/board", Path("../04-areas/board"))     # into the declared folder
+        symlink(self, self.v / "03-projects/kestrel.md", Path("../04-areas/board/kestrel-plan.md"))
+        symlink(self, self.v / "03-projects/loop", Path(".."))         # a cycle: not followed again
+        e = self.export()
+        self.assertIn("03-projects/shared/x.md", e["confidential_files"])
+        self.assertIn("03-projects/board/", e["confidential_files"], "a link into a floor is denied whole")
+        self.assertIn("03-projects/kestrel.md", e["confidential_files"])
+        self.assertFalse([f for f in e["confidential_files"] if f.startswith("03-projects/loop/")])
+        plan = kitagent.claude_code_plan(self.v, e)
+        self.assertIn("Read(./03-projects/board/**)", plan.deny)
+        self.assertIn("Read(./03-projects/shared/x.md)", plan.deny)
 
     def test_refuses_a_broken_config_with_nothing_on_stdout(self):
         set_config(self.v, "confidentiality:\n  confidential_folder: [x]\n")

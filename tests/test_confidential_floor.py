@@ -207,6 +207,53 @@ class TheFloorDecides(_FloorVault):
         self.assertTrue(kitlib.is_confidential(self.vault, m.path))
 
 
+def symlink(test: unittest.TestCase, link: Path, target: Path | str) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        link.symlink_to(target, target_is_directory=Path(link.parent, target).is_dir())
+    except (OSError, NotImplementedError) as exc:     # Windows without the privilege
+        test.skipTest(f"cannot create a symlink here ({exc.__class__.__name__})")
+
+
+class LinksAndTrashKeepTheFloor(unittest.TestCase):
+    """A floor travels with the file: a link to it and its copy in `.trash` are judged as it is."""
+
+    PERSON = "# Alice\n\nALICE-BODY\n"         # no sensitivity line: only the floor hides it
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+        set_config(self.vault, 'confidentiality:\n  confidential_folders: ["05-people"]\n')
+        write(self.vault, "05-people/alice.md", self.PERSON)
+
+    def test_a_link_outside_the_floor_to_a_note_inside_it(self):
+        symlink(self, self.vault / "03-projects/alice.md", Path("../05-people/alice.md"))
+        for ref in ("03-projects/alice.md", "03-projects/alice"):
+            self.assertIs(kitlib.confidentiality(self.vault, ref), True, ref)
+        hits = guarded(self.vault).search("ALICE-BODY")
+        self.assertFalse([h for h in hits if "alice" in h["file"] or "ALICE-BODY" in json.dumps(h)], hits)
+        self.assertNotIn("03-projects/alice", kitlib.build_index(self.vault))
+
+    def test_a_linked_folder_into_the_floor(self):
+        symlink(self, self.vault / "03-projects/shared", Path("../05-people"))
+        self.assertIs(kitlib.confidentiality(self.vault, "03-projects/shared/alice.md"), True)
+
+    def test_a_link_out_of_the_vault_is_judged_by_its_own_path(self):
+        outside = self.vault.parent / "elsewhere"
+        write(outside, "05-people/bob.md", "# Bob\n")       # a folder of that name, but not the vault's
+        symlink(self, self.vault / "03-projects/ext", outside)
+        self.assertIs(kitlib.confidentiality(self.vault, "03-projects/ext/05-people/bob.md"), False)
+        symlink(self, self.vault / "05-people/ext", outside)
+        self.assertIs(kitlib.confidentiality(self.vault, "05-people/ext/05-people/bob.md"), True, "the lexical floor")
+
+    def test_a_note_in_the_trash_keeps_its_floor(self):
+        write(self.vault, ".trash/05-people/alice.md", self.PERSON)
+        self.assertIs(kitlib.confidentiality(self.vault, ".trash/05-people/alice.md"), True)
+        self.assertTrue(kitlib.ConfidentialityPolicy.build(paths=["exports/*.csv"]).covers(".trash/exports/x.csv"))
+        with self.assertRaises(bp.PolicyError):
+            guarded(self.vault).read_note(".trash/05-people/alice")
+
+
 BROKEN = {
     "yaml": "confidentiality: [unclosed\n",
     "top level not a mapping": "- confidentiality\n",

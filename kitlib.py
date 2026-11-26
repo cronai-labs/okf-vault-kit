@@ -714,6 +714,7 @@ def note_confidential(note: Note) -> bool:
 
 CONFIG_REL = ".kit/config.yml"          # the vault's kit config; kitproviders reads the same file, leniently
 CONFIDENTIALITY_KEYS = ("confidential_folders", "confidential_paths")
+TRASH_PREFIX = ".trash/"                # judged as well with this removed, in match form
 
 
 class PolicyConfigError(ValueError):
@@ -792,6 +793,8 @@ class ConfidentialityPolicy:
         if not (self.folders or self.paths):
             return False
         forms = {_match_form(rel)}
+        # Obsidian's trash: a deleted note keeps the verdict of the place it came from.
+        forms |= {f[len(TRASH_PREFIX):] for f in forms if f.startswith(TRASH_PREFIX)}
         forms |= {f + ".md" for f in forms if not f.endswith(".md")}
         for form in forms:
             if form.startswith("../") or form == "..":
@@ -976,12 +979,42 @@ def confidentiality_config_error(root: Path) -> str | None:
     return None
 
 
-def confidential_floor(root: Path, rel: str) -> bool | None:
-    """Does the vault's config alone make this reference confidential? None when the config is broken."""
+def _real_rels(root: Path, rel: str) -> list[str]:
+    """Where a reference lands once symlinks are resolved, relative to the resolved vault root.
+
+    Only targets inside the vault: one outside it has no vault-relative path to judge, so the
+    reference is judged by its own spelling alone.
+    """
     try:
-        return confidentiality_policy(root).covers(rel)
+        real_root = os.path.realpath(root)
+        cands = (rel,) if rel.lower().endswith(".md") else (rel, rel + ".md")
+        out = []
+        for cand in cands:
+            real = os.path.realpath(os.path.join(real_root, cand))
+            inner = os.path.relpath(real, real_root)
+            if inner != "." and not inner.startswith(".." + os.sep) and inner != ".." and not os.path.isabs(inner):
+                out.append(inner.replace(os.sep, "/"))
+        return out
+    except (OSError, ValueError):      # ValueError: another drive on Windows
+        return []
+
+
+def confidential_floor(root: Path, rel: str) -> bool | None:
+    """Does the vault's config alone make this reference confidential? None when the config is broken.
+
+    Judged on the path as written and on where it lands once symlinks are resolved: a link outside
+    a floor to a note inside it, or a linked folder, would otherwise carry the note past the floor,
+    since only a `sensitivity` line travels with the content.
+    """
+    try:
+        policy = confidentiality_policy(root)
     except PolicyConfigError:
         return None
+    if not (policy.folders or policy.paths):
+        return False
+    if policy.covers(rel):
+        return True
+    return any(policy.covers(r) for r in _real_rels(root, rel))
 
 
 def own_confidentiality(root: Path, rel: str) -> bool | None:

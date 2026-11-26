@@ -83,6 +83,10 @@ def policy_export(root: Path) -> dict[str, Any]:
     or a file it could not read (fail closed; also in `unreadable`). Not `iter_markdown`: an agent's
     tools read attachments, `.trash` and `_`-prefixed folders like any other file. A folder the walk
     cannot list is listed with a trailing `/`, in both lists: what is in it cannot be told.
+
+    Symlinked folders are followed, since an agent reads through them; one that points into a declared
+    folder is listed whole with a trailing `/`, and one that points back up its own path (a cycle) is
+    not followed again, its target being walked already.
     """
     root = Path(root).resolve()
     policy = kitlib.confidentiality_policy(root)
@@ -100,7 +104,11 @@ def policy_export(root: Path) -> dict[str, Any]:
         files.append(rel + "/")
         unreadable.append(rel + "/")
 
-    for dirpath, dirnames, filenames in os.walk(root, onerror=unlisted):
+    real_root = os.path.realpath(root)
+    # The resolved folders on the way down to each folder: a link to one of them is a cycle.
+    chains: dict[str, tuple[str, ...]] = {str(root): (real_root,)}
+    for dirpath, dirnames, filenames in os.walk(root, onerror=unlisted, followlinks=True):
+        chain = chains.pop(dirpath, (os.path.realpath(dirpath),))
         rel_dir = Path(dirpath).relative_to(root).as_posix()
         rel_dir = "" if rel_dir == "." else rel_dir
         keep = []
@@ -108,6 +116,19 @@ def policy_export(root: Path) -> dict[str, Any]:
             rel = posixpath.join(rel_dir, d) if rel_dir else d
             if (not rel_dir and d == ".git") or policy.in_folder(rel):
                 continue           # .git: its own entry; a declared folder: covered whole
+            full = os.path.join(dirpath, d)
+            real = os.path.realpath(full)
+            if real in chain:
+                continue           # a link back up its own path
+            if os.path.islink(full):
+                try:
+                    inner = os.path.relpath(real, real_root).replace(os.sep, "/")
+                except ValueError:
+                    inner = ".."                  # another drive (Windows): outside the vault
+                if not inner.startswith("../") and inner != ".." and policy.in_folder(inner):
+                    files.append(rel + "/")       # a link into a declared folder: denied whole
+                    continue
+            chains[full] = (*chain, real)
             keep.append(d)
         dirnames[:] = keep
         for name in sorted(filenames):
