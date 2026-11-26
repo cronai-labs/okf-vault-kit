@@ -438,6 +438,82 @@ class Merge(_Vault):
         self.assertEqual((added, removed), (["kit-new"], ["kit-old"]))
 
 
+class Reverse(_Vault):
+    """--apply records what it replaced, refuses to replace a symlink, and --remove undoes it."""
+
+    FOREIGN = Merge.FOREIGN
+    put = Merge.put
+
+    def test_a_symlinked_settings_file_is_not_replaced(self):
+        real = self.v.parent / "dotfiles-settings.json"
+        real.write_text('{"model": "x"}\n', encoding="utf-8")
+        symlink(self, self.v / SETTINGS, real)
+        r = agent(self.v, "--apply")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("symlink", r.stderr)
+        self.assertTrue((self.v / SETTINGS).is_symlink())
+        self.assertEqual(real.read_text(encoding="utf-8"), '{"model": "x"}\n')
+        self.assertFalse((self.v / MANIFEST).exists())
+        self.assertEqual(agent(self.v).returncode, 0, "the dry run still previews")
+
+    def test_the_manifest_records_what_apply_replaced_and_keeps_it(self):
+        self.put(self.FOREIGN)
+        agent(self.v, "--apply")
+        m = json.loads((self.v / MANIFEST).read_text(encoding="utf-8"))
+        self.assertEqual(m["sandbox.prior"], {"enabled": False})
+        self.assertEqual(m["sandbox.added"], ["allowUnsandboxedCommands", "failIfUnavailable"])
+        agent(self.v, "--apply")
+        self.assertEqual(json.loads((self.v / MANIFEST).read_text(encoding="utf-8")), m, "the kit's own values are not 'prior'")
+
+    def test_remove_restores_the_settings_and_is_idempotent(self):
+        self.put(self.FOREIGN)
+        self.assertEqual(agent(self.v, "--apply").returncode, 0)
+        applied = (self.v / SETTINGS).read_bytes()
+        r = agent(self.v, "--remove")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("dry run", r.stdout)
+        self.assertEqual((self.v / SETTINGS).read_bytes(), applied)
+        self.assertTrue((self.v / MANIFEST).exists())
+        set_config(self.v, "confidentiality: [")          # removing needs no policy
+        r = agent(self.v, "--remove", "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(read_settings(self.v), self.FOREIGN)
+        self.assertFalse((self.v / MANIFEST).exists())
+        before = (self.v / SETTINGS).read_bytes()
+        r = agent(self.v, "--remove", "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("nothing to remove", r.stdout)
+        self.assertEqual((self.v / SETTINGS).read_bytes(), before)
+
+    def test_remove_from_a_vault_that_had_no_settings(self):
+        self.assertEqual(agent(self.v, "--apply").returncode, 0)
+        self.assertEqual(agent(self.v, "--remove", "--apply").returncode, 0)
+        self.assertEqual(read_settings(self.v), {})
+        self.assertFalse((self.v / MANIFEST).exists())
+
+    def test_remove_leaves_a_value_changed_since_and_the_users_entries(self):
+        self.put(self.FOREIGN)
+        agent(self.v, "--apply")
+        s = read_settings(self.v)
+        s["sandbox"]["failIfUnavailable"] = False            # changed by hand after the kit set it
+        s["permissions"]["deny"].append("Read(./mine.md)")
+        write(self.v, SETTINGS, json.dumps(s))
+        self.assertEqual(agent(self.v, "--remove", "--apply").returncode, 0)
+        s = read_settings(self.v)
+        self.assertIs(s["sandbox"]["failIfUnavailable"], False)
+        self.assertIs(s["sandbox"]["enabled"], False)
+        self.assertNotIn("allowUnsandboxedCommands", s["sandbox"])
+        self.assertEqual(s["permissions"]["deny"], ["Bash(rm:*)", f"Read(./{RAISED_REL})", "Read(./mine.md)"])
+
+    def test_remove_refuses_a_foreign_manifest_and_check(self):
+        agent(self.v, "--apply")
+        write(self.v, MANIFEST, "[]\n")
+        r = agent(self.v, "--remove", "--apply")
+        self.assertEqual(r.returncode, 2)
+        self.assertIn("by hand", r.stderr)
+        self.assertEqual(agent(self.v, "--remove", "--check").returncode, 2)
+
+
 class Doctor(_Vault):
     def row(self) -> tuple[str, str]:
         return kitagent.doctor_row(self.v)

@@ -393,6 +393,7 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
     settings = copy.deepcopy(existing)
     settings.setdefault("permissions", {})["deny"] = deny
     sandbox = settings.setdefault("sandbox", {})
+    prior, added_keys = _sandbox_record(sandbox, manifest)
     overrides, flags_set = [], []
     for key, value in SANDBOX_FLAGS.items():
         # `is`, not `==`: 1 == True in Python, and a switch must be a JSON boolean to count.
@@ -403,9 +404,35 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
         sandbox[key] = value
     sandbox.setdefault("filesystem", {})["denyRead"] = read
     new_manifest = {"version": 1, "generated_by": GENERATOR, "allow_git": plan.allow_git,
-                    "permissions.deny": own_deny, "sandbox.filesystem.denyRead": own_read}
+                    "permissions.deny": own_deny, "sandbox.filesystem.denyRead": own_read,
+                    "sandbox.prior": prior, "sandbox.added": added_keys}
     changed = bool(flags_set) or not same_json(settings, existing) or not same_json(new_manifest, manifest)
     return Merge(settings, new_manifest, add_d + add_r, rm_d + rm_r, flags_set, overrides, warnings, changed)
+
+
+def _sandbox_record(sandbox: dict, manifest: Any) -> tuple[dict[str, Any], list[str]]:
+    """What --remove restores for the sandbox switches: (values the kit replaced, keys it added).
+
+    Taken from the settings before this run. A switch that already holds the kit's value keeps what
+    the manifest recorded (the kit set it, or the user had it so), never the kit's own value; one
+    that holds anything else is recorded as it is now, since this run replaces it.
+    """
+    old_prior = manifest.get("sandbox.prior") if isinstance(manifest, dict) else None
+    old_added = manifest.get("sandbox.added") if isinstance(manifest, dict) else None
+    old_prior = old_prior if isinstance(old_prior, dict) else {}
+    old_added = old_added if isinstance(old_added, list) else []
+    prior: dict[str, Any] = {}
+    added: list[str] = []
+    for key, value in SANDBOX_FLAGS.items():
+        if key not in sandbox:
+            added.append(key)
+        elif sandbox[key] is not value:
+            prior[key] = sandbox[key]
+        elif key in old_prior:
+            prior[key] = old_prior[key]
+        elif key in old_added:
+            added.append(key)
+    return prior, added
 
 
 def same_json(a: Any, b: Any) -> bool:
@@ -499,10 +526,14 @@ def claude_code_state(root: Path, allow_git: bool | None = None) -> State:
     return State(plan, merge, raw, local)
 
 
-def diff(state: State) -> str:
-    old = (state.raw_settings or "").splitlines(keepends=True)
-    new = settings_text(state.merge.settings).splitlines(keepends=True)
+def diff_text(raw: str | None, settings: dict[str, Any] | None) -> str:
+    old = (raw or "").splitlines(keepends=True)
+    new = settings_text(settings).splitlines(keepends=True) if settings is not None else []
     return "".join(difflib.unified_diff(old, new, f"a/{SETTINGS_REL}", f"b/{SETTINGS_REL}"))
+
+
+def diff(state: State) -> str:
+    return diff_text(state.raw_settings, state.merge.settings)
 
 
 def apply(root: Path, state: State) -> bool:
@@ -514,11 +545,114 @@ def apply(root: Path, state: State) -> bool:
     if not state.merge.changed:
         return False
     root = Path(root)
+    refuse_symlinked_settings(root)
     existing, _ = _read_json(root / SETTINGS_REL, SETTINGS_REL)
     if not same_json(existing, state.merge.settings):
         write_atomic(root / SETTINGS_REL, settings_text(state.merge.settings))
     write_atomic(root / MANIFEST_REL, settings_text(state.merge.manifest))
     return True
+
+
+def refuse_symlinked_settings(root: Path) -> None:
+    """--apply and --remove --apply rename a new file into place, which would turn a symlinked
+    settings.json (one kept with dotfiles, say) into a regular file and leave its target as it was."""
+    if (Path(root) / SETTINGS_REL).is_symlink():
+        raise AgentSettingsError(f"{SETTINGS_REL} is a symlink; writing would replace the link with a regular file. "
+                                 "Merge the dry run's diff into its target by hand, or replace the link with a copy first")
+
+
+@dataclass
+class Removal:
+    settings: dict[str, Any] | None      # None: there is no settings.json to change
+    removed: list[str]
+    restored: list[str]
+    changed: bool
+
+
+def _drop_owned(settings: dict, path: tuple[str, ...], owned: set[str], removed: list[str]) -> None:
+    current = _list_at(settings, path, SETTINGS_REL)
+    if not current:
+        return
+    keep = [e for e in current if e not in owned]
+    removed += [e for e in current if e in owned]
+    parent = settings
+    for key in path[:-1]:
+        parent = parent[key]
+    if keep:
+        parent[path[-1]] = keep
+    else:
+        del parent[path[-1]]               # emptied by the removal: gone, as before the kit added to it
+
+
+def _prune_emptied(settings: dict, before: dict, path: tuple[str, ...]) -> None:
+    """Remove an object at `path` that the removal emptied (one that was empty before stays)."""
+    parent, old = settings, before
+    for key in path[:-1]:
+        parent, old = parent.get(key), (old.get(key) if isinstance(old, dict) else None)
+        if not isinstance(parent, dict):
+            return
+    key = path[-1]
+    if parent.get(key) == {} and isinstance(old, dict) and old.get(key) not in ({}, None):
+        del parent[key]
+
+
+def removal(existing: Any, manifest: Any) -> Removal:
+    """What `--remove` leaves: settings.json without the entries the manifest owns, and the sandbox
+    switches the kit set put back as recorded. Pure; raises AgentSettingsError when the manifest
+    cannot say what the kit owns."""
+    owned_deny = _owned(manifest, "permissions.deny")
+    owned_read = _owned(manifest, "sandbox.filesystem.denyRead")
+    if not isinstance(manifest, dict) or owned_deny is None or owned_read is None:
+        raise AgentSettingsError(f"{MANIFEST_REL} is not a manifest this kit wrote, so which entries are the kit's "
+                                 "cannot be told; remove them by hand, then delete the manifest")
+    if existing is None:
+        return Removal(None, [], [], True)
+    if not isinstance(existing, dict):
+        raise AgentSettingsError(f"{SETTINGS_REL}: the top level must be a JSON object — fix it by hand first")
+    settings = copy.deepcopy(existing)
+    removed: list[str] = []
+    _drop_owned(settings, ("permissions", "deny"), owned_deny, removed)
+    _drop_owned(settings, ("sandbox", "filesystem", "denyRead"), owned_read, removed)
+    prior = manifest.get("sandbox.prior") if isinstance(manifest.get("sandbox.prior"), dict) else {}
+    added = manifest.get("sandbox.added") if isinstance(manifest.get("sandbox.added"), list) else []
+    restored: list[str] = []
+    sandbox = settings.get("sandbox")
+    if isinstance(sandbox, dict):
+        for key, value in SANDBOX_FLAGS.items():
+            if key not in sandbox or sandbox[key] is not value:
+                continue                   # changed since the kit set it: whoever did, it is theirs
+            if key in prior:
+                sandbox[key] = prior[key]
+                restored.append(f"sandbox.{key}: {json.dumps(value)} -> {json.dumps(prior[key])}")
+            elif key in added:
+                del sandbox[key]
+                restored.append(f"sandbox.{key}: removed")
+    for path in (("sandbox", "filesystem"), ("sandbox",), ("permissions",)):
+        _prune_emptied(settings, existing, path)
+    return Removal(settings, removed, restored, True)
+
+
+def removal_state(root: Path) -> tuple[Removal | None, str | None]:
+    """(what --remove would leave, settings.json as it is); (None, None) when there is no manifest."""
+    root = Path(root).resolve()
+    manifest, manifest_raw = _read_json(root / MANIFEST_REL, MANIFEST_REL)
+    if manifest_raw is None:
+        return None, None
+    existing, raw = _read_json(root / SETTINGS_REL, SETTINGS_REL)
+    return removal(existing, manifest), raw
+
+
+def remove_apply(root: Path, result: Removal, bom: bool = False) -> None:
+    """Write settings.json, then delete the manifest: a run stopped between the two leaves the
+    manifest, and the next --remove finds nothing more to take out and deletes it."""
+    root = Path(root)
+    refuse_symlinked_settings(root)
+    if result.settings is not None:
+        existing, _ = _read_json(root / SETTINGS_REL, SETTINGS_REL)
+        if not same_json(existing, result.settings):
+            write_atomic(root / SETTINGS_REL, ("\ufeff" if bom else "") + settings_text(result.settings))
+    with contextlib.suppress(FileNotFoundError):
+        (root / MANIFEST_REL).unlink()
 
 
 # ---------------------------------------------------------------- overrides elsewhere

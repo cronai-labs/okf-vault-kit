@@ -541,11 +541,39 @@ def cmd_policy_export(args) -> int:
     return 0
 
 
+def _agent_settings_remove(vault: Path, args) -> int:
+    if args.check or args.allow_git:
+        return _refuse("--remove takes only --vault and --apply")
+    try:
+        result, raw = kitagent.removal_state(vault)
+    except kitagent.AgentSettingsError as exc:
+        return _refuse(str(exc))
+    if result is None:
+        print(f"nothing to remove: there is no {kitagent.MANIFEST_REL}, so the kit owns nothing in {kitagent.SETTINGS_REL}")
+        return 0
+    counts = (f"{len(result.removed)} list entries the kit added, {len(result.restored)} sandbox switch(es) it set, "
+              f"and {kitagent.MANIFEST_REL}")
+    for line in result.restored:
+        print(f"puts back: {line}")
+    if not args.apply:
+        sys.stdout.write(kitagent.diff_text(raw, result.settings) if result.settings is not None and raw is not None else "")
+        print(f"dry run: would take out {counts} — add --apply to write")
+        return 0
+    try:
+        kitagent.remove_apply(vault, result)
+    except kitagent.AgentSettingsError as exc:
+        return _refuse(str(exc))
+    print(f"took out {counts}")
+    return 0
+
+
 def cmd_agent_settings(args) -> int:
     vault = _vault(args.vault)
     if args.apply and vault == TEMPLATE_VAULT.resolve():
         sys.exit("that vault is the kit's own sample, not yours — --apply would write into this checkout. "
                  "Pass your own: --vault ~/Notes/vault")
+    if args.remove:
+        return _agent_settings_remove(vault, args)
     try:
         # --check answers for the choice the last --apply recorded, as doctor does, unless told otherwise.
         state = kitagent.claude_code_state(vault, allow_git=(args.allow_git or None) if args.check else args.allow_git)
@@ -553,6 +581,11 @@ def cmd_agent_settings(args) -> int:
         return _refuse(f"{exc} — no settings are generated until it is fixed (`kit.py validate` reports it)")
     except kitagent.AgentSettingsError as exc:
         return _refuse(str(exc))
+    if args.apply:
+        try:
+            kitagent.refuse_symlinked_settings(vault)
+        except kitagent.AgentSettingsError as exc:
+            return _refuse(str(exc))
     m = state.merge
     for line in m.warnings:
         print(f"warning: {line}", file=sys.stderr)
@@ -1335,6 +1368,9 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--check", action="store_true", help="exit 1 when settings.json differs from what --apply would write (with the .git choice the last --apply recorded); writes nothing")
     p.add_argument("--allow-git", action="store_true",
                    help="do not deny .git — confidential notes tracked in git then stay readable through the history")
+    p.add_argument("--remove", action="store_true",
+                   help="take out what the kit added (the entries its manifest owns, the sandbox switches as recorded) "
+                        "and delete the manifest; a dry run unless --apply is given too")
     p.set_defaults(fn=cmd_agent_settings)
 
     args = ap.parse_args(argv)
