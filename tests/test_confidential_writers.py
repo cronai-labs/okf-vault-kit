@@ -84,7 +84,7 @@ class _TempVault(unittest.TestCase):
 
 
 class Index(_TempVault):
-    COUNT = re.compile(r"^(\d+) note\(s\) marked `sensitivity: confidential` are not listed\.$", re.M)
+    COUNT = re.compile(r"^(\d+) file\(s\) not listed: marked `sensitivity: confidential`, or unreadable\.$", re.M)
 
     def _expected_hidden(self) -> int:
         return sum(1 for p in kitlib.iter_markdown(self.v)
@@ -118,6 +118,30 @@ class Index(_TempVault):
         index = kitlib.build_index(self.v)
         _assert_none_of(self, index, "brokenfront")
         self.assertEqual(int(self.COUNT.search(index).group(1)), before + 1)
+
+    def test_an_undecodable_file_is_counted(self):
+        """The count says the index is incomplete; a file it skipped without counting made it lie."""
+        before = int(self.COUNT.search(kitlib.build_index(self.v)).group(1))
+        (self.v / "07-knowledge/utf16-note.md").write_bytes("---\ntitle: Widechar\n---\n# Widechar\n".encode("utf-16"))
+        index = kitlib.build_index(self.v)
+        _assert_none_of(self, index, "widechar", "utf16-note")
+        self.assertEqual(int(self.COUNT.search(index).group(1)), before + 1)
+
+    def test_an_unreadable_file_is_counted(self):
+        _skip_unless_modes_bite(self)
+        before = int(self.COUNT.search(kitlib.build_index(self.v)).group(1))
+        _lock(self, self.v / "07-knowledge/hybrid-search.md", 0o644)
+        index = kitlib.build_index(self.v)
+        self.assertNotIn("07-knowledge/hybrid-search.md", index)
+        self.assertEqual(int(self.COUNT.search(index).group(1)), before + 1)
+
+    def test_a_template_marked_confidential_stays_out(self):
+        """The bridge hides a confidential template like any note; the index must not list it either."""
+        tpl = self.v / "90-templates/meeting.md"
+        self.assertIn("90-templates/meeting.md", kitlib.build_index(self.v), "templates are listed as such")
+        tpl.write_text(tpl.read_text(encoding="utf-8").replace("sensitivity: internal", "sensitivity: confidential"),
+                       encoding="utf-8", newline="\n")
+        self.assertNotIn("90-templates/meeting.md", kitlib.build_index(self.v))
 
 
 class Hubs(_TempVault):
