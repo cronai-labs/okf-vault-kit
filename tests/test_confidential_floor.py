@@ -378,6 +378,29 @@ class ABrokenConfigHidesEverything(unittest.TestCase):
         self.assertNotRegex(index, r"(?m)^\* \[")
         self.assertTrue(kitlib.is_confidential(self.vault, "07-knowledge/hybrid-search.md"))
 
+    def test_minutes_in_raise_mode_refuse_to_file(self):
+        # Every link reads as confidential while the config is broken, so "raise" would write a
+        # `sensitivity: confidential` line into the new note that stays after the config is fixed.
+        set_config(self.vault, BROKEN["unknown key"])
+        recap = self.vault.parent / "recap.txt"
+        recap.write_text("Alex and Sam met about the search relaunch.\n", encoding="utf-8")
+        r = run("minutes", str(recap), "--title", "Broken sync", "--vault", str(self.vault), "--date", "2026-09-21")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn(".kit/config.yml", r.stderr)
+        self.assertFalse((self.vault / "02-meetings/2026-09-21-broken-sync.md").exists())
+        with self.assertRaisesRegex(ob.BridgeError, r"\.kit/config\.yml"):
+            ob.FsBackend(self.vault).file_minutes("We met.", "Broken sync", "2026-09-21", mode="raise")
+        g = bp.Guarded(ob.FsBackend(self.vault), bp.Policy(audit_path=None, hide_confidential=False), self.vault)
+        with self.assertRaisesRegex(ob.BridgeError, r"\.kit/config\.yml"):
+            g.file_minutes("We met.", "Broken sync", "2026-09-21")
+        self.assertFalse((self.vault / "02-meetings/2026-09-21-broken-sync.md").exists())
+        # --keep-open writes no label, so it may still file; the predicate hides the note meanwhile.
+        r = run("minutes", str(recap), "--title", "Broken sync", "--vault", str(self.vault), "--date", "2026-09-21",
+                "--keep-open")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        note = kitlib.parse_note(self.vault / "02-meetings/2026-09-21-broken-sync.md", self.vault)
+        self.assertNotEqual(str(note.frontmatter.get("sensitivity", "")).lower(), "confidential")
+
     def test_validate_reports_it(self):
         set_config(self.vault, BROKEN["escapes"])
         r = run("validate", "--vault", str(self.vault))

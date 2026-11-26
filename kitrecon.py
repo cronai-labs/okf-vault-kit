@@ -765,10 +765,19 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     stays in `people:` as the recap or the caller wrote it, never as a confidential note's title or
     path, and a confidential project is neither linked nor stored. Names in `people:` that are not
     linked are also in `unresolved`.
+
+    Raises kitlib.PolicyConfigError in "raise" mode while `.kit/config.yml` is broken: every note
+    then reads as confidential, and the label this mode writes would outlive the fix (#120).
     """
     if mode not in MINUTES_MODES:
         raise ValueError(f"mode must be one of {', '.join(MINUTES_MODES)}, not {mode!r}")
     vault = Path(vault)
+    if mode == "raise":
+        broken = kitlib.confidentiality_config_error(vault)
+        if broken:
+            raise kitlib.PolicyConfigError(f"{broken} — minutes are not filed with linked notes until it is fixed, "
+                                           "since every note reads as confidential meanwhile and the meeting would be "
+                                           "marked confidential for good")
     full = g or kitgraph.build_graph(vault)
     date = date or dt.date.today()
     self_actor = full.nodes[kitgraph.SELF_ID].props.get("actor")

@@ -332,7 +332,7 @@ class FsBackend:
         try:
             m = kitrecon.file_minutes(self.vault, text, title, day, project or None, ppl, kind, g=self.graph(), daily=daily,
                                       mode=mode)
-        except FileExistsError as exc:
+        except (FileExistsError, kitlib.PolicyConfigError) as exc:
             raise BridgeError(str(exc)) from exc
         self._graph_cache = None
         # also_written names what the vault actually took: the log entry is skipped when log.md

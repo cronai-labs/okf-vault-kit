@@ -816,6 +816,8 @@ def cmd_minutes(args) -> int:
                                   mode="plain" if args.keep_open else "raise")
     except FileExistsError as exc:
         print(exc); return 1
+    except kitlib.PolicyConfigError as exc:
+        return _refuse(f"{exc} (`kit.py validate` reports it; --keep-open files without linking)")
     print(f"{'would write' if args.dry_run else 'wrote'} {m.path}")
     print(f"  people: {', '.join(m.names) or '-'}   project: {m.project or '-'}   unresolved: {', '.join(m.unresolved) or '-'}")
     if m.confidential_links:
