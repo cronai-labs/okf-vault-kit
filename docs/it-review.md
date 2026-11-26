@@ -53,7 +53,7 @@ starts it on stdin/stdout and it has no socket.
 
 | Path | What |
 |---|---|
-| the vault folder | your notes; `.kit/` inside it holds the graph, the audit log, any proposals and `config.yml` (the qmd collection name and provider choices for this vault) |
+| the vault folder | your notes; `.kit/` inside it holds the graph, the audit log, any proposals and `config.yml` (the qmd collection name, provider choices, and the folders and files that are confidential as a whole) |
 | `~/.lmstudio/mcp.json`, `%APPDATA%\Claude\…`, `~/.cursor/mcp.json` | only when you run `kit.py mcp-config --write`; the previous file is backed up alongside. With `--bridge-http` and a token, the bearer token is stored there in plain text, and the kit sets the file and its backup to `0600` on macOS and Linux; the default stdio setup stores no token |
 | `~/.cache/qmd`, `~/.config/qmd` | qmd's index and models, if installed |
 
@@ -73,8 +73,9 @@ bridge's tools, and nothing else:
 - Writes append by default and never overwrite without an explicit flag.
 - Write targets are checked against deny and allow lists; people notes and system folders are denied
   out of the box.
-- Notes marked `sensitivity: confidential` are invisible to the bridge's reads, searches, listings,
-  task queries and graph context. Their title, description, path and tasks count as confidential
+- Notes marked `sensitivity: confidential`, and every file in a folder or path `.kit/config.yml`
+  declares confidential (a broken declaration hides everything), are invisible to the bridge's reads,
+  searches, listings, task queries and graph context. Their title, description, path and tasks count as confidential
   too: `index.md`, the project and decision hubs, the todo digest, `kit.py todos`, the graph files
   and graph commands, and the prompts of `kit.py llm ask` leave them out (`--show-confidential`
   includes them where a command offers it). A meeting note `kit.py minutes` files that links one

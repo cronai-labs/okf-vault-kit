@@ -17,7 +17,8 @@ of what it was told to do.
 So the reports we most want are **policy-layer bypasses** — any way to make the bridge do
 something the policy says it will not:
 
-- read a note marked `sensitivity: confidential` through *any* channel: read, search, list,
+- read a note marked `sensitivity: confidential`, or a file a confidential folder or path rule in
+  `.kit/config.yml` covers, through *any* channel: read, search, list,
   backlinks, todos, the four `graph_*` tools, a context pack, or the result of
   `file_meeting_minutes`
 - write into a denied folder, or escape the vault root, by any spelling of a path

@@ -21,30 +21,53 @@ The layer is enforced inside the bridge and nowhere else. Everything in this sec
 | Read-only | `--read-only` | off — write tools are then **not registered at all**, so the model cannot even attempt them |
 | Write deny-list (folder prefixes, file names) | `--deny-write a,b` | `05-people, 99-system, 90-templates, 09-archive, .obsidian, .kit, index.md, log.md, context.jsonld` |
 | Write allow-list (only these are writable; deny still applies) | `--allow-write 02-meetings,01-journal` | everything not denied |
-| Confidential hiding | `--show-confidential` to disable | **on**: notes with `sensitivity: confidential` are invisible to the bridge's read, search, list, backlinks and todos tools, the `graph_*` tools and context packs, and `file_meeting_minutes` links neither people nor projects to them and returns names, never paths. Not to anything that reads the files directly (§5) |
+| Confidential hiding | `--show-confidential` to disable | **on**: notes with `sensitivity: confidential`, and every file a confidential folder or path rule in `.kit/config.yml` covers ([below](#scoped-hiding-confidential-folders-and-path-rules)), are invisible to the bridge's read, search, list, backlinks and todos tools, the `graph_*` tools and context packs, and `file_meeting_minutes` links neither people nor projects to them and returns names, never paths. Not to anything that reads the files directly (§5) |
 | Size limit per write | `--max-write-bytes N` | 20 000 |
 | Rate limit | `--max-writes-per-minute N` | 20 |
 | Propose mode | `--propose` | off — with it, every write is recorded under `.kit/proposals/` and nothing changes until a human runs `kit.py proposals apply <id>` |
 | Audit log | `--audit PATH` / `--no-audit` | `<vault>/.kit/bridge-audit.jsonl`: one JSON line per read, two per write (the attempt, then the outcome), each with tool, truncated args, ok/error and detail; a write whose attempt line cannot be written does not happen |
 | Never | — | no delete tool exists; overwrite needs an explicit `overwrite=true`; paths cannot escape the vault; `graph_query` is `SELECT`-only on an in-memory copy |
 
+### Scoped hiding: confidential folders and path rules
+
+`sensitivity: confidential` marks one note. A whole folder, or a kind of file, can be confidential too, declared in the vault's `.kit/config.yml`:
+
+```yaml
+# <vault>/.kit/config.yml
+confidentiality:
+  confidential_folders: ["05-people", "finance"]        # the folder and everything below it
+  confidential_paths: ["08-resources/exports/*.csv"]    # single files, of any type
+```
+
+- **The folder or path rule sets the floor; a note's own `sensitivity` may raise it, never lower it.** A note in a confidential folder is confidential with no frontmatter at all, and also when its frontmatter says `sensitivity: internal`; `kit.py validate` warns about the second, because the label misleads whoever reads the note. A note that says `sensitivity: confidential` is confidential in any folder. Only `confidential` hides; there are no levels.
+- **Entries are vault-relative**, with `/` between folders. A folder entry is literal and covers the folder and everything below it, not a sibling whose name merely starts the same (`finance` does not cover `finance-public/`). A path entry is a glob: `*` and `?` stay within one folder or file name, `**` spans any number of folders. Matching ignores case.
+- **Path rules cover files without frontmatter** — CSV exports, attachments, PDFs. The bridge's `vault_list_files` lists only Markdown with the `fs` backend; with the `cli` backend it lists whatever Obsidian indexes, and a path rule hides such a file there as it hides a note.
+- **Quote every entry.** Unquoted, `*.csv` is a YAML error and `2024` is a number rather than a folder name; either makes the block invalid, which hides everything (below).
+- The bridge's default write deny-list includes `.kit`, so an agent cannot change the block through the bridge. It can with its own file tools unless you deny them (§5).
+
+**Fail closed.** A missing `.kit/config.yml`, or one without a `confidentiality:` block, declares no floors. A file that is there but cannot be read or parsed, or a block of the wrong shape — not a mapping (an empty `confidentiality:` included), an unknown key such as `confidential_folder:`, an entry that is not a string, an absolute path or one starting with `~`, an entry with `..`, an empty entry, a pattern under `confidential_folders` — makes every reader treat every path as confidential until it is fixed. The bridge then lists, finds and reads nothing, `index.md` lists nothing, and `kit.py validate` reports the problem as an error. The provider settings in the same file (`providers:`, `collection:`) are read as leniently as before; only this block is strict.
+
+The rule lives in the one predicate every reader shares, `kitlib.confidentiality`, so the bridge, `index.md`, the hubs, the todo digest, the graph, `kit.py minutes` and `kit.py llm ask` agree without any of them working it out on its own. The graph's change check covers `.kit/config.yml`: after you declare a folder, `graph query` rebuilds `.kit/graph.sqlite` and the bridge's graph tools leave the folder's notes out from their next call. The other generated files are snapshots, as below: after changing the block, run `kit.py index`, `kit.py reconcile --apply` and `kit.py todos --digest` again. A floor makes a meeting note `kit.py minutes` files into the folder confidential without writing a `sensitivity:` line into it.
+
+These floors are enforced by the kit's own readers. A coding agent's own tools read the folders like any other file; §5 covers that.
+
 ### What a confidential note keeps to itself
 
-A confidential note's title, description, path and tasks are confidential too, not only its body: a title such as "Performance plan" says enough on its own. The bridge already treated them so (a confidential node is redacted from the graph tools, and `vault_todos` drops its tasks). The kit's own generated files and commands follow the same rule, and decide it with the predicate the bridge uses (`kitlib.note_confidential`):
+A confidential note's title, description, path and tasks are confidential too, not only its body: a title such as "Performance plan" says enough on its own. The bridge already treated them so (a confidential node is redacted from the graph tools, and `vault_todos` drops its tasks). The kit's own generated files and commands follow the same rule, and decide it with the predicate the bridge uses (`kitlib.confidentiality`), floors included:
 
 | Where | What happens to a confidential note |
 |---|---|
 | `index.md` (`kit.py index`, `init`, `examples remove`) | left out |
-| `03-projects/projects.md` and `06-decisions/decision-log.md` (`kit.py reconcile --apply`) | gets no row; `reconcile` reports an existing row whose linked note's frontmatter says `sensitivity: confidential` as `hub_confidential_row`, and `--apply` removes it |
+| `03-projects/projects.md` and `06-decisions/decision-log.md` (`kit.py reconcile --apply`) | gets no row; `reconcile` reports an existing row whose linked note is confidential (its frontmatter says `sensitivity: confidential`, or a folder or path rule covers it) as `hub_confidential_row`, and `--apply` removes it |
 | `00-home/todo-digest.md` (`kit.py todos --digest`) | its tasks are left out |
 | what `kit.py todos` prints, on the terminal and with `--json` | its tasks are left out, unless you pass `--show-confidential` |
 | a meeting note `kit.py minutes` or the bridge's `file_meeting_minutes` files | a note may raise its confidentiality, never lower it. `kit.py minutes` (and the tool under `--show-confidential`) links it and marks the meeting note confidential, so log.md and the daily note name the meeting without title or path. `kit.py minutes --keep-open` (and the tool by default) does not link it: a name passed in `people` is kept as written in `attendees:` (plain text, exactly as an unknown name is), a name the recap merely mentions is not listed (as an unknown one is not), a project is left out, and the meeting keeps its template's sensitivity |
 | the graph files (`kit.py graph build`) and what the `kit.py graph` commands print | left out, with every derived value and finding that refers to it and every source or actor only confidential notes name, unless you pass `--show-confidential` |
 | the prompt `kit.py llm ask` sends to the model | neither its body nor its title or path |
 
-A count line says how much was left out in `index.md` ("N file(s) not listed: marked `sensitivity: confidential`, or unreadable."), in the todo digest, in what `kit.py todos` prints, in the output of `kit.py graph build`, and in the console line of `kit.py llm ask`. The other `kit.py graph` commands (`export`, `query`, `neighbors`, `path`, `pack`) leave confidential notes out without saying so, and the hub passes of `reconcile` add no row for one without a finding; only the removal of an existing row is reported.
+A count line says how much was left out in `index.md` ("N file(s) not listed: confidential, or unreadable."), in the todo digest, in what `kit.py todos` prints, in the output of `kit.py graph build`, and in the console line of `kit.py llm ask`. The other `kit.py graph` commands (`export`, `query`, `neighbors`, `path`, `pack`) leave confidential notes out without saying so, and the hub passes of `reconcile` add no row for one without a finding; only the removal of an existing row is reported.
 
-A note the kit cannot read or parse (broken frontmatter, a frontmatter block hidden behind a byte-order mark, a file that is not UTF-8) counts as confidential: "could not tell" is not "not confidential". One exception: `reconcile` removes an existing hub row only when the linked note's frontmatter says `sensitivity: confidential`. A row whose note cannot be read or parsed stays, and is reported as `hub_row_unverifiable` for you to check: a row is deleted on what the note says, never on a guess.
+A note the kit cannot read or parse (broken frontmatter, a frontmatter block hidden behind a byte-order mark, a file that is not UTF-8) counts as confidential: "could not tell" is not "not confidential". One exception: `reconcile` removes an existing hub row only when the linked note's frontmatter says `sensitivity: confidential` or a folder or path rule covers it. A row whose note cannot be read or parsed stays, as does every row while `.kit/config.yml` is broken, and is reported as `hub_row_unverifiable` for you to check: a row is deleted on what the note says, never on a guess.
 
 The generated files are snapshots. When you mark a note confidential, its title, description and tasks stay in `index.md`, the hubs, the digest and the graph files until they are generated again, and until then `kit.py llm ask`, the bridge and anything you attach read them as ordinary text. So after marking a note confidential, and once after upgrading from a kit without this rule, run `kit.py index`, `kit.py reconcile --apply`, `kit.py todos --digest` and `kit.py graph build`. The vault's git history, and every clone of it, keeps the old lines regardless. `kit.py validate` and `kit.py reconcile` report problems per file on your terminal and may name a confidential note's path there; `reconcile` names no confidential note in a state conflict it reports.
 
@@ -164,7 +187,7 @@ A vault's own `.claude/settings.json` applies only to sessions started in the va
 
 On 2.1.296, with the agent started in the folder above the vault, a deny rule for the whole vault in `//` form (`Read(//<absolute path>/vault/**)`) plus `sandbox.enabled` refused the Read tool and `grep -r`. The `~/` form, the two extra sandbox keys in that setup and this exact file were not tested. The bridge keeps working with it: MCP servers run outside Claude Code's sandbox ([sandboxing](https://code.claude.com/docs/en/sandboxing.md)), and on 2.1.296 the bridge still served a note while the agent's Read and `grep -r` were refused. The bridge then enforces its own policy, as in §1.
 
-**The lists name paths; the kit marks notes.** Claude Code knows nothing about `sensitivity: confidential`. On 2.1.330 the control note above, confidential but in a folder on neither list, was read through Grep, `grep -r`, `cat` and a subagent. Keep confidential notes in folders you deny — the template keeps people notes in `05-people/` — and deny those folders. Deny entries for single files were not tested. Deriving the lists from the vault is what #120 tracks.
+**The lists name paths; the kit marks notes.** Claude Code knows nothing about `sensitivity: confidential`, nor about the folders `.kit/config.yml` declares confidential. On 2.1.330 the control note above, confidential but in a folder on neither list, was read through Grep, `grep -r`, `cat` and a subagent. Keep confidential notes in folders you deny — the template keeps people notes in `05-people/` — and deny those folders; declaring them in `.kit/config.yml` as well ([§1](#scoped-hiding-confidential-folders-and-path-rules)) makes the kit's own readers hide them, whatever each note says. Deny entries for single files were not tested. Deriving the lists from the vault is what #120 tracks.
 
 ### What these controls are not
 

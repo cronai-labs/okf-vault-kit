@@ -29,6 +29,8 @@ providers:
   search: naive        # or qmd, or auto
 ```
 
+The same file declares which folders and files are confidential as a whole, whatever their notes say (`confidentiality:`, with `confidential_folders` and `confidential_paths`). That block is read strictly, and a broken one hides every note from every reader until it is fixed: [security.md](security.md#scoped-hiding-confidential-folders-and-path-rules).
+
 `auto` takes the first provider that reports itself usable. That is what makes a locked-down
 machine survivable: if the package registry is blocked and qmd never installs, the search slot
 falls back to `naive` — term frequency over the files, no index, no dependencies — and everything
@@ -128,7 +130,7 @@ uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault          # MCP ser
 uv run mcp/vault_bridge.py --backend cli --vault-name "vault"          # MCP server via official CLI
 ```
 
-Notes marked `sensitivity: confidential` stay out of what `kit.py` hands a model or writes to disk, as they stay out of the bridge's tools:
+Notes marked `sensitivity: confidential`, and the files a confidential folder or path rule in `.kit/config.yml` covers ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)), stay out of what `kit.py` hands a model or writes to disk, as they stay out of the bridge's tools:
 
 - `llm ask` leaves a confidential search hit out of the prompt whole (no path, no title, no snippet) and only prints how many it left out: the confidential hits that ranked ahead of the last source it sends. It asks the search for more hits than it uses, so the hits it leaves out do not shrink the list of sources the model gets. With `--graph`, the context packs come from the redacted graph, so a visible note's pack does not name a confidential neighbour either. A confidential note's title counts as confidential, on the bridge and in the CLI alike.
 - `graph build`, `export`, `query`, `neighbors`, `path` and `pack` use the same redacted graph as the bridge's graph tools by default: confidential notes, their edges, their findings, and every derived value or finding of another note that refers to one are left out of `.kit/graph.json`, `graph.jsonld`, `graph.nt`, `graph.sqlite` and the printed output. `graph build` prints how many notes it left out; the other graph commands do not. `--show-confidential` includes them, with the same meaning as the bridge's flag; use it only for output that stays with you.
