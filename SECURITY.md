@@ -25,11 +25,8 @@ something the policy says it will not:
 - make a write land with no audit line
 
 Also in scope: anything that makes `kit.py doctor --report` disclose what it promises not to
-(note content, paths from inside a vault, a username, endpoint credentials); a confidential
-note's title, description, path or tasks in a file the kit generates (`index.md`, the project and
-decision hubs, the todo digest, the graph) after that file was regenerated, or in a
-`kit.py llm ask` prompt; and anything that causes the kit to make a network connection other than
-to the endpoint you configured.
+(note content, paths from inside a vault, a username, endpoint credentials), and anything that
+causes the kit to make a network connection other than to the endpoint you configured.
 
 ## What is deliberately not a vulnerability
 

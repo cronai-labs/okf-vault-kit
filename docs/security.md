@@ -40,7 +40,7 @@ A confidential note's title, description, path and tasks are confidential too, n
 | the graph files (`kit.py graph build`) and what the `kit.py graph` commands print | left out, unless you pass `--show-confidential` |
 | the prompt `kit.py llm ask` sends to the model | neither its body nor its title or path |
 
-Where something was left out, a count line says how many notes, without naming them. A note the kit cannot read or parse (broken frontmatter, a frontmatter block hidden behind a byte-order mark, a file that is not UTF-8) counts as confidential: "could not tell" is not "not confidential".
+Where something was left out, a count line says so. A note the kit cannot read or parse (broken frontmatter, a frontmatter block hidden behind a byte-order mark, a file that is not UTF-8) counts as confidential: "could not tell" is not "not confidential".
 
 Files generated before this rule keep their old lines until they are generated again. To clean a vault after upgrading, run `kit.py index`, `kit.py reconcile --apply`, `kit.py todos --digest` and `kit.py graph build`. The vault's git history, and every clone of it, keeps the old lines regardless.
 
@@ -100,20 +100,20 @@ The policy layer in §1 sees only calls that reach the bridge. A coding agent �
 
 The kit ships no setting for this and writes nothing into an agent's configuration. A generator for Claude Code's settings is tracked in [#120](https://github.com/cronai-labs/okf-vault-kit/issues/120); it does not exist yet. Until then, set it yourself as below, and check the result with the canary run in [testing.md](testing.md#canary-check-your-own-agent-settings).
 
-Where this section speaks about Claude Code it says what each statement rests on: a run on a named version (all on macOS), or the vendor docs — [permissions](https://code.claude.com/docs/en/permissions.md), [permission modes](https://code.claude.com/docs/en/permission-modes.md), [sandboxing](https://code.claude.com/docs/en/sandboxing.md), [settings](https://code.claude.com/docs/en/settings.md) and the [settings reference](https://code.claude.com/docs/en/settings-reference.md), read on 2026-11-26 against Claude Code 2.1.330.
+Each statement below about Claude Code names what it rests on: a run on a named version (all on macOS), or the linked vendor docs page — [permissions](https://code.claude.com/docs/en/permissions.md), [permission modes](https://code.claude.com/docs/en/permission-modes.md), [sandboxing](https://code.claude.com/docs/en/sandboxing.md), [settings](https://code.claude.com/docs/en/settings.md) or the [settings reference](https://code.claude.com/docs/en/settings-reference.md), all read on 2026-11-26, when the installed Claude Code was 2.1.330.
 
 ### Make the bridge the agent's only way in
 
 Do not start the agent in the vault or in a parent of it, and do not add the vault as a working directory (in Claude Code: `--add-dir`, `/add-dir`, `permissions.additionalDirectories`). Register the bridge instead, so the agent reaches notes through `vault_read_note`, `vault_search` and the other bridge tools, where §1 applies.
 
-What that achieves is a prompt, not a refusal. In Claude Code's default (manual) mode, file reads and the built-in read-only shell commands (`cat`, `grep`, `find` among them) need no approval inside the working directories, and ask outside them (vendor docs). On 2.1.296, a session started in another directory asked before both `Read` and `grep` on the confidential note. In auto mode, reads outside the working directories run without a prompt after a one-time question, and in `-p` runs without even that, unless `permissions.blockReadsOutsideWorkingDirectories` is on; `bypassPermissions` skips the prompt too (vendor docs, not tested here). Keeping the agent elsewhere is the right default; it is not enforcement.
+What that achieves is at best a prompt, not a refusal. Claude Code's file tools read without approval inside the working directories and, in the default (manual) mode, ask outside them ([permissions](https://code.claude.com/docs/en/permissions.md)). On 2.1.296, a session started in another directory asked before both `Read` and `grep` on the confidential note. The current permissions page, however, says the built-in read-only shell commands (`cat`, `grep`, `find` among them) run without a prompt in every mode, apart from what `permissions.blockReadsOutsideWorkingDirectories` changes outside the working directories; that was not re-tested on 2.1.330, so do not count on a prompt from the shell. In auto mode, file reads outside the working directories run after a one-time question, and in `-p` runs without even that, unless `permissions.blockReadsOutsideWorkingDirectories` is on ([permission modes](https://code.claude.com/docs/en/permission-modes.md)); `bypassPermissions` skips permission prompts altogether ([permissions](https://code.claude.com/docs/en/permissions.md)). None of this was tested here. Keeping the agent elsewhere is the right default; it is not enforcement.
 
 ### Claude Code: a read deny rule and the sandbox, together
 
 Two settings, and neither enforces anything on its own:
 
-- **A `Read(...)` deny rule** in `permissions.deny`. It covers Claude Code's file tools (Read, Grep, Glob) and the file commands it recognizes in Bash, such as `cat`; it does not cover a command that reads files without naming them, such as `grep -r pattern .`, or a script that opens files itself (vendor docs). On 2.1.296 a deny rule in `//` form refused the Read tool, while `grep -r` through Bash still printed a line of the confidential note, with no prompt. Without the sandbox, a deny rule is best effort.
-- **The sandbox** (`sandbox.enabled`) wraps shell commands at the OS level. By default a sandboxed command can still read most of the machine (vendor docs), and on 2.1.296 the sandbox without a deny rule let the same `grep -r` print the line: the sandbox alone does not restrict reads. What it enforces is a read deny list, `sandbox.filesystem.denyRead`, to which Claude Code adds the paths of your `Read(...)` deny rules (vendor docs). On 2.1.296, the deny rule plus `sandbox.enabled` stopped `grep -r` with `Operation not permitted`.
+- **A `Read(...)` deny rule** in `permissions.deny`. It covers Claude Code's file tools (Read, Grep, Glob) and the file commands it recognizes in Bash, such as `cat`; it does not cover a command that reads files without naming them, such as `grep -r pattern .`, or a script that opens files itself ([permissions](https://code.claude.com/docs/en/permissions.md)). On 2.1.296 a deny rule in `//` form refused the Read tool, while `grep -r` through Bash still printed a line of the confidential note, with no prompt. Without the sandbox, a deny rule is best effort.
+- **The sandbox** (`sandbox.enabled`) wraps shell commands at the OS level. By default a sandboxed command can still read most of the machine ([sandboxing](https://code.claude.com/docs/en/sandboxing.md)), and on 2.1.296 the sandbox without a deny rule let the same `grep -r` print the line: the sandbox alone does not restrict reads. What it enforces is a read deny list, `sandbox.filesystem.denyRead`, to which Claude Code adds the paths of your `Read(...)` deny rules ([settings reference](https://code.claude.com/docs/en/settings-reference.md)). On 2.1.296, the deny rule plus `sandbox.enabled` stopped `grep -r` with `Operation not permitted`.
 
 The tested setup: Claude Code 2.1.330 on macOS, 2026-11-26, a throwaway vault, the settings in the vault's `.claude/settings.json`, the agent started in the vault with `claude -p --setting-sources project`. `secret` stands for the folder that holds the confidential notes:
 
@@ -129,11 +129,11 @@ The tested setup: Claude Code 2.1.330 on macOS, 2026-11-26, a throwaway vault, t
 }
 ```
 
-With it, a string planted in `secret/` reached the agent by no route tried: the Read, Grep and Glob tools; `cat` through Bash (refused by the permission rule); `grep -r` and a Python `open()` (refused by the sandbox); a subagent; and `--permission-mode bypassPermissions`. The names of the files inside `secret/` did not show in `ls -R` or Glob; the folder's own name did. Adding a folder to both lists while a session ran took effect at its next tool call. A `PreToolUse` hook fired for Read, Grep, Glob and Bash, and inside the subagent. That run had the folder on both lists, so it does not say which list stopped which route on its own: put it on both.
+With it, a string planted in `secret/` reached the agent by no route tried: the Read, Grep and Glob tools; `cat` through Bash (refused by the permission rule); `grep -r` and a Python `open()` (refused by the sandbox); a subagent; and `--permission-mode bypassPermissions`. The names of the files inside `secret/` did not show in `ls -R` or Glob; the folder's own name did. Adding a folder to both lists while a session ran took effect at its next tool call. A `PreToolUse` hook fired for Read, Grep, Glob and Bash, and inside the subagent. Both lists named the folder, so the run does not show whether the sandbox's refusals came from `denyRead` or from the `Read` rule merged into it: put the folder on both.
 
-The two sandbox keys matter. `failIfUnavailable: true` makes Claude Code exit at startup instead of running commands unsandboxed when the sandbox cannot start, and `allowUnsandboxedCommands: false` removes the retry outside the sandbox that Claude can otherwise ask for when a command fails (vendor docs).
+The two sandbox keys matter. `failIfUnavailable: true` makes Claude Code exit at startup instead of running commands unsandboxed when the sandbox cannot start, and `allowUnsandboxedCommands: false` removes the retry outside the sandbox that Claude can otherwise ask for when a command fails ([sandboxing](https://code.claude.com/docs/en/sandboxing.md)).
 
-**Paths are the trap**, because the two lists write them differently (vendor docs):
+**Paths are the trap**, because the two lists write them differently ([permissions](https://code.claude.com/docs/en/permissions.md) for the rules, the [settings reference](https://code.claude.com/docs/en/settings-reference.md) for `denyRead`):
 
 | Form | In a `Read(...)` rule | In `sandbox.filesystem.denyRead` |
 |---|---|---|
@@ -142,7 +142,7 @@ The two sandbox keys matter. `failIfUnavailable: true` makes Claude Code exit at
 | `~/path` | from your home directory | from your home directory |
 | `./path` or `path` | relative to the current directory | relative to the project root in project settings, to `~/.claude` in user settings |
 
-A vault's own `.claude/settings.json` applies only to sessions started in the vault: Claude Code reads project settings from the session's primary working directory (vendor docs). For the recommended setup, an agent that works elsewhere and never reads the vault directly, deny the whole vault in your user settings (`~/.claude/settings.json`) or in the project you do start the agent in:
+A vault's own `.claude/settings.json` applies only to sessions started in the vault: Claude Code reads project settings from the session's primary working directory ([settings](https://code.claude.com/docs/en/settings.md)). For the recommended setup, an agent that works elsewhere and never reads the vault directly, deny the whole vault in your user settings (`~/.claude/settings.json`) or in the project you do start the agent in:
 
 ```json
 {
@@ -156,7 +156,7 @@ A vault's own `.claude/settings.json` applies only to sessions started in the va
 }
 ```
 
-On 2.1.296 the same shape with the `//` form (`Read(//<absolute path>/vault/**)`, passed with `--settings`) and `sandbox.enabled` refused the Read tool and `grep -r`. The `~/` form and this exact file were not tested. The bridge keeps working with it: MCP servers run outside Claude Code's sandbox (vendor docs), and on 2.1.296 the bridge still served a note while the agent's Read and `grep -r` were refused. The bridge then enforces its own policy, as in §1.
+On 2.1.296, with the agent started in the folder above the vault, a deny rule for the whole vault in `//` form (`Read(//<absolute path>/vault/**)`) plus `sandbox.enabled` refused the Read tool and `grep -r`. The `~/` form, the two extra sandbox keys in that setup and this exact file were not tested. The bridge keeps working with it: MCP servers run outside Claude Code's sandbox ([sandboxing](https://code.claude.com/docs/en/sandboxing.md)), and on 2.1.296 the bridge still served a note while the agent's Read and `grep -r` were refused. The bridge then enforces its own policy, as in §1.
 
 **The lists name paths; the kit marks notes.** Claude Code knows nothing about `sensitivity: confidential`. On 2.1.330 a confidential note in a folder that was on neither list was read by every route. Keep confidential notes in folders you deny — the template keeps people notes in `05-people/` — and deny those folders. Deny entries for single files were not tested. Deriving the lists from the vault is what #120 tracks.
 
@@ -164,7 +164,7 @@ On 2.1.296 the same shape with the `//` form (`Read(//<absolute path>/vault/**)`
 
 - **Not a boundary against you.** They are the agent's own controls, in settings files that you, and anything running as you, can edit. They keep the agent's model away from a folder; they do not protect the vault from your account. Whether an agent can edit its own settings file was not tested.
 - **Not retroactive.** What an agent has read stays in its context for the session and in its transcripts on disk, and with a hosted model it has reached the host. Denying a folder afterwards does not take any of that back.
-- **Not tested everywhere.** Not tested: Linux, WSL2, native Windows (where Claude Code has no sandbox at all, per the vendor docs), single-file deny entries, the `~/` form, an agent editing its own settings file, auto mode, and other agents. For another agent, look for the same two things in its own docs — a read deny for its file tools and an OS-level restriction for its shell — and run the canary.
+- **Not tested everywhere.** Not tested: Linux, WSL2, native Windows (where Claude Code has no sandbox at all, per [sandboxing](https://code.claude.com/docs/en/sandboxing.md)), single-file deny entries, the `~/` form, an agent editing its own settings file, auto mode, and other agents. For another agent, look for the same two things in its own docs — a read deny for its file tools and an OS-level restriction for its shell — and run the canary.
 
 ### Without an agent-side control: a separate OS user
 
