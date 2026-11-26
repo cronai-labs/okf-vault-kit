@@ -895,6 +895,15 @@ def config_fingerprint(root: Path) -> int:
     return int.from_bytes(hashlib.sha256(data).digest()[:8], "big")
 
 
+def confidentiality_config_error(root: Path) -> str | None:
+    """Why `.kit/config.yml` cannot say what is confidential, or None when it can (or is not there)."""
+    try:
+        confidentiality_policy(root)
+    except PolicyConfigError as exc:
+        return str(exc)
+    return None
+
+
 def confidential_floor(root: Path, rel: str) -> bool | None:
     """Does the vault's config alone make this reference confidential? None when the config is broken."""
     try:

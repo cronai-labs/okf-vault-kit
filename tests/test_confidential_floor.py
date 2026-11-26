@@ -200,6 +200,34 @@ BROKEN = {
 }
 
 
+class HubRowsFollowTheFloor(unittest.TestCase):
+    """reconcile removes a hub row on a declared floor, and keeps every row while the config is broken."""
+
+    ROW = "[Search relaunch](search-relaunch.md)"
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+
+    def codes(self, changes) -> list[str]:
+        return [c.code for c in changes if c.file == kitrecon.PROJECT_HUB]
+
+    def test_a_path_rule_removes_the_row(self):
+        set_config(self.vault, 'confidentiality:\n  confidential_paths: ["03-projects/search-relaunch.md"]\n')
+        self.assertIn("hub_confidential_row", self.codes(kitrecon.reconcile(self.vault)))
+        kitrecon.reconcile(self.vault, apply=True, today=dt.date(2026, 9, 14))
+        self.assertNotIn(self.ROW, (self.vault / kitrecon.PROJECT_HUB).read_text(encoding="utf-8"))
+
+    def test_a_broken_config_removes_no_row(self):
+        set_config(self.vault, BROKEN["yaml"])
+        changes = kitrecon.reconcile(self.vault, apply=True, today=dt.date(2026, 9, 14))
+        self.assertNotIn("hub_confidential_row", self.codes(changes))
+        self.assertIn("hub_row_unverifiable", self.codes(changes))
+        self.assertEqual([c.file for c in changes if c.code == "confidentiality_config"], [kitlib.CONFIG_REL],
+                         "the cause is named once, where it is")
+        self.assertIn(self.ROW, (self.vault / kitrecon.PROJECT_HUB).read_text(encoding="utf-8"))
+
+
 class ABrokenConfigHidesEverything(unittest.TestCase):
     def setUp(self):
         self.vault = temp_vault()

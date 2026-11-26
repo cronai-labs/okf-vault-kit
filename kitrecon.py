@@ -6,7 +6,8 @@ Three concerns, all deterministic, all dry-run by default:
              and derived-state conflicts from the graph (superseded decisions). Policy: structured frontmatter in the
              note is the source of truth; hub rows are views. --apply rewrites hub cells, adds missing rows, sets
              derived states; it never touches free-text cells, and the only row it deletes is one that links to a
-             note whose frontmatter says `sensitivity: confidential` (#52).
+             note whose frontmatter says `sensitivity: confidential`, or that a folder or path rule in
+             `.kit/config.yml` covers (#52, #120).
   todos      every `- [ ]` / `- [x]` in the vault with owner and due parsed from `— owner, due YYYY-MM-DD`;
              overdue / due-soon / duplicates / done-in-one-place-open-in-another; digest page; --sync-done.
   minutes    file a pasted recap as a meeting note: entities resolved through the graph, actions and decisions
@@ -170,7 +171,7 @@ def _row_confidentiality(vault: Path, g: kitgraph.Graph, hub: str, cell: str) ->
 
 def _confidential_row(hub: str, line_no: int, apply: bool) -> Change:
     """The one row reconcile deletes. Named by its line, never by its cells: they are what leaked."""
-    return Change("hub_confidential_row", hub, f"line {line_no} links to a note marked confidential"
+    return Change("hub_confidential_row", hub, f"line {line_no} links to a confidential note"
                   + (" — row removed" if apply else " — run with --apply to remove the row"), applied=apply)
 
 
@@ -189,6 +190,12 @@ def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None,
     vault = Path(vault)
     g = g or kitgraph.build_graph(vault)
     changes: list[Change] = []
+    broken = kitlib.confidentiality_config_error(vault)
+    if broken:
+        # Every note reads as "could not tell", so every hub row is kept and reported unverifiable;
+        # this line says where the cause is, since the row findings point at the notes (#120).
+        changes.append(Change("confidentiality_config", kitlib.CONFIG_REL,
+                              f"{broken} — every note counts as confidential and no hub row is added or removed until it is fixed"))
     changes += _reconcile_superseded(vault, g, apply)       # derived states first …
     if apply and any(c.applied for c in changes):
         g = kitgraph.build_graph(vault)                      # … so the hub passes see the new states
