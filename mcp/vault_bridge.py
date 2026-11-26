@@ -280,7 +280,8 @@ class FsBackend:
 
         The newest mtime alone misses a move and a delete — neither raises any mtime — and moving
         a note into a `_`-folder is how a user hides it. Keying on the path set as well means the
-        graph tools stop answering about such a note on the very next call.
+        graph tools stop answering about such a note on the very next call. The vault's
+        `.kit/config.yml` is part of it, so a newly declared folder floor takes effect as well.
         """
         return kitgraph.note_set_signature(self.vault)   # one definition, shared with `kit.py graph query`
 
