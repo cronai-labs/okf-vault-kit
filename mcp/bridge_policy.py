@@ -7,7 +7,9 @@ the MCP tools and the backend:
   * write allow/deny lists  vault-relative folder prefixes, checked against the path the backend resolves to
                             (case-insensitively); people notes and system folders are denied by default
   * confidential hiding     notes with `sensitivity: confidential` are invisible to reads, searches, listings and every
-                            graph tool, and agents may not write them or set the `sensitivity` property
+                            graph tool, and agents may not write them or set the `sensitivity` property. This holds
+                            for this bridge only: a tool that opens the vault's files itself is not stopped by it
+                            (docs/security.md §5)
   * size and rate limits    per write call and per minute
   * propose mode            writes are recorded as proposals under .kit/proposals/ and applied by a human
                             (`kit.py proposals list|apply|reject`)

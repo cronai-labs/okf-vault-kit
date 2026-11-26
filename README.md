@@ -67,7 +67,7 @@ assert things about CI and the git checkout and skip cleanly when run from it.
 | [docs/testing.md](docs/testing.md) | what is tested, switches, CI |
 | [docs/knowledge-graph.md](docs/knowledge-graph.md) | the vault as a graph: ontology, exports (JSON / N-Triples / JSON-LD / SQLite), derived facts, queries |
 | [docs/reconciliation.md](docs/reconciliation.md) | hubs vs notes, todo surfacing and sync, filing meeting minutes, graph-assisted chat, conflict policy |
-| [docs/security.md](docs/security.md) | threat model, the bridge policy layer (read-only, allow/deny, confidential hiding, propose mode, audit, bearer token), and why OS-level isolation instead of containers |
+| [docs/security.md](docs/security.md) | threat model, the bridge policy layer (read-only, allow/deny, confidential hiding, propose mode, audit, bearer token), coding agents' own file tools and how to restrict them, and why OS-level isolation instead of containers |
 | [docs/faq.md](docs/faq.md) | the questions that come up |
 | [docs/platforms/wsl2.md](docs/platforms/wsl2.md) · [macos.md](docs/platforms/macos.md) · [windows.md](docs/platforms/windows.md) · [linux.md](docs/platforms/linux.md) | per-OS install; WSL2 is the recommended lane on Windows |
 | [docs/platforms/proxy.md](docs/platforms/proxy.md) | managed machines: corporate proxy, company CA, blocked registries |

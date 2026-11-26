@@ -125,8 +125,8 @@ uv run kit.py validate                       # + ontology section: ranges, enums
 uv run kit.py graph build                    # .kit/graph.json, graph.nt, graph.jsonld, graph.sqlite (+ findings)
 uv run kit.py graph query "select id from v_at_risk"
 uv run kit.py graph query "with recursive dep(id) as (select '07-knowledge/hybrid-search.md' union select e.src from edges e join dep on e.dst=dep.id where e.pred in ('links_to','cites','project')) select id from dep"
-uv run kit.py graph neighbors alex-example --pred owns,involved_in
-uv run kit.py graph path hybrid-search alex-example
+uv run kit.py graph neighbors alex-example --pred owns,involved_in --show-confidential   # alex-example is confidential: hidden without the flag
+uv run kit.py graph path hybrid-search alex-example --show-confidential
 uv run kit.py graph pack search-relaunch     # the context pack a model gets
 uv run kit.py graph export --format jsonld --out vault.jsonld
 ```
