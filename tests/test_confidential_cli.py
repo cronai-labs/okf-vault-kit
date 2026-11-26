@@ -456,5 +456,60 @@ class GraphQueryFollowsTheNotes(unittest.TestCase):
         self.assertNotIn("alex-example", self.meta("notes"))
 
 
+class TodosLeaveConfidentialTasksOut(unittest.TestCase):
+    SECRET_TASK = "- [ ] SECRET-TASK sign the term sheet — me, due 2026-09-25\n"
+    # one commitment in two notes: done in a visible note, still open in the confidential one
+    SHARED_OPEN = "- [ ] Renew the shared certificate bundle — me, due 2026-10-01\n"
+    SHARED_DONE = "- [x] Renew the shared certificate bundle — me, due 2026-10-01\n"
+    LEFT_OUT = re.compile(r"^(\d+) task\(s\) in notes marked sensitivity: confidential left out "
+                          r"\(--show-confidential includes them\)$", re.M)
+
+    def setUp(self):
+        self.vault = falcon_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+        with (self.vault / FALCON_REL).open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n" + self.SECRET_TASK + self.SHARED_OPEN)
+        with (self.vault / "03-projects/search-relaunch.md").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write("\n" + self.SHARED_DONE)
+
+    def todos(self, *args):
+        r = run("todos", "--vault", str(self.vault), *args)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return r
+
+    def confidential_tasks(self) -> int:
+        """Tasks in confidential notes: the Falcon note's two and those of the sample's people notes."""
+        everything = json.loads(self.todos("--json", "--all", "--show-confidential").stdout)
+        n = sum(1 for t in everything if t["file"] in (FALCON_REL, *PEOPLE))
+        self.assertGreater(n, 2, "the sample's people notes carry tasks too")
+        return n
+
+    def test_the_summary_leaves_them_out_and_counts_them(self):
+        r = self.todos()
+        self.assertNotIn("SECRET-TASK", r.stdout)
+        for rel in (FALCON_REL, *PEOPLE):
+            self.assertNotIn(rel, r.stdout)
+        self.assertEqual(int(self.LEFT_OUT.search(r.stdout).group(1)), self.confidential_tasks())
+        shown = self.todos("--show-confidential")
+        self.assertIn("SECRET-TASK", shown.stdout)
+        self.assertIsNone(self.LEFT_OUT.search(shown.stdout))
+
+    def test_json_leaves_them_out_and_counts_them_on_stderr(self):
+        r = self.todos("--json", "--all")
+        files = {t["file"] for t in json.loads(r.stdout)}
+        self.assertFalse(files & {FALCON_REL, *PEOPLE})
+        self.assertEqual(int(self.LEFT_OUT.search(r.stderr).group(1)), self.confidential_tasks(),
+                         "the count goes to stderr: stdout stays JSON")
+        shown = self.todos("--json", "--all", "--show-confidential")
+        self.assertIn(FALCON_REL, {t["file"] for t in json.loads(shown.stdout)})
+
+    def test_sync_done_still_ticks_a_task_in_a_confidential_note(self):
+        r = self.todos("--sync-done")
+        self.assertIn("synced 1 task(s) to done", r.stdout)
+        self.assertNotIn("nda-secret", r.stdout)
+        self.assertIn(self.SHARED_DONE, (self.vault / FALCON_REL).read_text(encoding="utf-8"),
+                      "--sync-done works on every task, whatever the listing shows")
+
+
 if __name__ == "__main__":
     unittest.main()
