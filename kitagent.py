@@ -92,7 +92,7 @@ def _on_disk(root: Path, declared: str) -> list[str]:
 def policy_export(root: Path) -> dict[str, Any]:
     """What is confidential in this vault, as the vault spells it. Raises kitlib.PolicyConfigError.
 
-    `confidential_files` holds every file under the vault, `.git` aside, that `kitlib.confidentiality`
+    `confidential_files` holds every file under the vault, `.git` and AGENT_OWN aside, that `kitlib.confidentiality`
     does not clear and that no listed folder already covers: a note's own `sensitivity`, a path rule,
     or a file it could not read (fail closed; also in `unreadable`). Not `iter_markdown`: an agent's
     tools read attachments, `.trash` and `_`-prefixed folders like any other file. A folder the walk

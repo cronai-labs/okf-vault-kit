@@ -20,7 +20,7 @@
   python kit.py minutes recap.txt --title "Sync"  file a recap as a meeting note
   python kit.py proposals list|show|apply|reject   human-in-the-loop writes from a --propose bridge (docs/security.md)
   python kit.py policy export [--out FILE]  what is confidential in the vault, as JSON
-  python kit.py agent-settings claude-code [--apply|--check]   deny it to Claude Code's own tools (docs/security.md §5)
+  python kit.py agent-settings claude-code [--apply|--check|--remove]   deny it to Claude Code's own tools (docs/security.md §5)
 
 Every command also runs as `uv run kit.py ...` with no manual dependency setup (inline script metadata above).
 """
