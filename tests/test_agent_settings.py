@@ -459,6 +459,18 @@ class Doctor(_Vault):
         write(self.v, kitagent.LOCAL_SETTINGS_REL, json.dumps({"sandbox": {"filesystem": {"allowRead": ["./"]}}}))
         self.assertEqual(self.row()[1], "ok")     # a wider allow does not beat a narrower deny
 
+    def test_reopens_is_conservative_about_globs_case_and_symlinked_prefixes(self):
+        root = self.v.resolve()
+        denied = ["./05-people", "./08-resources/exports/*.csv"]
+        for allow in ("./0*/alice.md", "./05-peo*/**", "./05-PEOPLE/x.md", "./**", "./08-resources/exports/a.csv",
+                      f"{root}/05-people/x.md"):
+            self.assertTrue(kitagent._reopens(root, allow, denied), allow)
+        alias = self.v.parent / "alias"
+        symlink(self, alias, self.v)
+        self.assertTrue(kitagent._reopens(root, f"{alias}/05-people/x.md", denied), "an absolute path through a link")
+        for allow in ("./", "./04-areas/**", "./05", "./06-*/x.md"):
+            self.assertFalse(kitagent._reopens(root, allow, denied), allow)
+
     def test_a_negation_after_the_kits_rules_is_flagged(self):
         agent(self.v, "--apply")
         s = read_settings(self.v)

@@ -525,35 +525,55 @@ _LOCAL_WEAKENING = {
 
 
 def _resolve_sandbox_path(root: Path, entry: str) -> Path | None:
-    """A sandbox path as Claude Code resolves it in project settings (`./x` and `x` from the project root)."""
+    """A sandbox path as Claude Code resolves it in project settings (`./x` and `x` from the project root).
+
+    An absolute or home entry is resolved through symlinks too, as the vault root is, so `/tmp/v`
+    and `/private/tmp/v` compare equal on macOS.
+    """
     if entry.startswith("//"):
-        return Path(entry[1:])
+        return Path(os.path.realpath(entry[1:]))
     if entry.startswith("/"):
-        return Path(entry)
+        return Path(os.path.realpath(entry))
     if entry.startswith("~/") or entry == "~":
-        return Path(entry).expanduser()
+        return Path(os.path.realpath(Path(entry).expanduser()))
     return Path(root) / entry
 
 
+_WILDCARDS = "*?["
+
+
 def _literal_prefix(entry: str) -> str:
-    cut = min((i for i, c in enumerate(entry) if c in "*?["), default=len(entry))
+    cut = min((i for i, c in enumerate(entry) if c in _WILDCARDS), default=len(entry))
     return entry[:cut].rstrip("/") or "/"
 
 
+def _form(root: Path, entry: str) -> str | None:
+    """The literal part of an entry as an absolute, normalised, case-folded string."""
+    p = _resolve_sandbox_path(root, _literal_prefix(entry))
+    return None if p is None else os.path.normpath(str(p)).casefold()
+
+
 def _reopens(root: Path, allow: str, denied: list[str]) -> bool:
-    """Could this `allowRead` entry re-open part of a denied path? (A narrower allow wins.)"""
-    a = _resolve_sandbox_path(root, _literal_prefix(allow))
-    has_glob = _literal_prefix(allow) != allow.rstrip("/")
-    if a is None:
+    """Could this `allowRead` entry re-open part of a denied path? (A narrower allow wins.)
+
+    Conservative, since doctor's "ok" must mean ok: an entry at or under a denied path is flagged,
+    and so is a glob whose literal start (the text before its first wildcard, compared as a string,
+    so `./0*` reaches `./05-people`) is a prefix of a denied path or lies under one. Case is ignored.
+    """
+    a_form = _form(root, allow)
+    if a_form is None:
         return True
-    a_form = os.path.normpath(str(a)).casefold()
+    a_glob = any(c in _WILDCARDS for c in allow)
     for d in denied:
-        dp = _resolve_sandbox_path(root, _literal_prefix(d))
-        if dp is None:
+        d_form = _form(root, d)
+        if d_form is None:
             continue
-        d_form = os.path.normpath(str(dp)).casefold()
-        inside = a_form == d_form or a_form.startswith(d_form.rstrip(os.sep) + os.sep)
-        if inside or (has_glob and d_form.startswith(a_form.rstrip(os.sep) + os.sep)):
+        d_glob = any(c in _WILDCARDS for c in d)
+        if a_form == d_form or a_form.startswith(d_form.rstrip(os.sep) + os.sep):
+            return True
+        if a_glob and (d_form.startswith(a_form) or a_form.startswith(d_form)):
+            return True
+        if d_glob and a_form.startswith(d_form):
             return True
     return False
 
