@@ -166,14 +166,9 @@ class Guarded:
             return False
         if rel == _UNRESOLVED or not self.vault:
             return True
-        p = self.vault / (rel if rel.endswith(".md") else rel + ".md")
-        if not p.exists():
-            return False
-        try:
-            note = kitlib.parse_note(p, self.vault)
-        except Exception:  # noqa: BLE001 — undecodable or unreadable: we cannot prove it is safe
-            return True
-        return kitlib.note_confidential(note)
+        # The shared predicate, not a copy: this one called `Path.exists()` outside its try, which
+        # raises PermissionError under a chmod-000 folder up to Python 3.13.
+        return kitlib.is_confidential(self.vault, rel)
 
     def _resolve_rel(self, file: str, must_exist: bool = True) -> str:
         """Vault-relative path of a note reference, using the backend's resolver when it has one.

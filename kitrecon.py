@@ -6,7 +6,7 @@ Three concerns, all deterministic, all dry-run by default:
              and derived-state conflicts from the graph (superseded decisions). Policy: structured frontmatter in the
              note is the source of truth; hub rows are views. --apply rewrites hub cells, adds missing rows, sets
              derived states; it never touches free-text cells, and the only row it deletes is one that links to a
-             confidential note (#52).
+             note whose frontmatter says `sensitivity: confidential` (#52).
   todos      every `- [ ]` / `- [x]` in the vault with owner and due parsed from `— owner, due YYYY-MM-DD`;
              overdue / due-soon / duplicates / done-in-one-place-open-in-another; digest page; --sync-done.
   minutes    file a pasted recap as a meeting note: entities resolved through the graph, actions and decisions
@@ -145,27 +145,44 @@ def _node_confidential(vault: Path, g: kitgraph.Graph, nid: str) -> bool:
     return bool(n) and n.kind == "note" and kitlib.is_confidential(vault, n.path or nid)
 
 
-def _row_confidential(vault: Path, g: kitgraph.Graph, hub: str, cell: str) -> bool:
-    """Does a hub row link to a confidential note?
+def _row_confidentiality(vault: Path, g: kitgraph.Graph, hub: str, cell: str) -> bool | None:
+    """Does a hub row link to a confidential note? True, False, or None for "could not tell".
 
     Asked of the file the link names before the graph resolves it, so a target the graph reads
     differently (frontmatter that does not parse) is still judged by the shared predicate; then of
     the node the row resolves to, because a resolution by stem or title can land somewhere else.
+    Three answers, not two: the caller deletes the row on True, and a row is hand-written text
+    that exists nowhere else, so an unreadable target or a YAML error must not count as a yes.
     """
     target = _first_link_target(cell)
     if not target:
         return False
     rel = posixpath.normpath(f"{Path(hub).parent.as_posix()}/{target}")
-    if not rel.startswith("..") and kitlib.is_confidential(vault, rel):
-        return True
+    answers = [kitlib.confidentiality(vault, rel)] if not rel.startswith("..") else []
     nid = kitgraph.resolve_id(g, rel)
-    return bool(nid) and _node_confidential(vault, g, nid)
+    n = g.nodes.get(nid) if nid else None
+    if n and n.kind == "note":            # actors, sources and virtual nodes are no notes
+        answers.append(kitlib.confidentiality(vault, n.path or nid))
+    if True in answers:
+        return True
+    return None if None in answers else False
 
 
 def _confidential_row(hub: str, line_no: int, apply: bool) -> Change:
     """The one row reconcile deletes. Named by its line, never by its cells: they are what leaked."""
     return Change("hub_confidential_row", hub, f"line {line_no} links to a note marked confidential"
                   + (" — row removed" if apply else " — run with --apply to remove the row"), applied=apply)
+
+
+def _unverifiable_row(hub: str, line_no: int) -> Change:
+    """A row whose target the kit cannot read or parse: kept as written, never rewritten.
+
+    Not deleted, because its free-text cells would be lost with it; not reconciled either, because
+    a note without readable frontmatter has no health, state or date to copy, and drift would
+    blank the cells. Named by its line, like a confidential row: the target may be one.
+    """
+    return Change("hub_row_unverifiable", hub, f"line {line_no} links to a note the kit cannot read or parse"
+                  " — row left as written; fix the note's permissions or frontmatter and run reconcile again")
 
 
 def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None, today: dt.date | None = None) -> list[Change]:
@@ -235,12 +252,19 @@ def _reconcile_projects(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Cha
         # The one deliberate exception to "reconcile never deletes" (#52): the hub is an ordinary
         # file the bridge serves whole, so a row naming a confidential note is a leak, and
         # rewriting its cells would only keep it current. Earlier versions of reconcile wrote
-        # such rows themselves; removing them is what cleans those vaults up.
-        if _row_confidential(vault, g, PROJECT_HUB, cells[col["project"]]):
+        # such rows themselves; removing them is what cleans those vaults up. Only on a certain
+        # yes: a target we cannot read or parse leaves the row alone (_unverifiable_row).
+        verdict = _row_confidentiality(vault, g, PROJECT_HUB, cells[col["project"]])
+        if verdict:
             changes.append(_confidential_row(PROJECT_HUB, i + 1, apply))
             drop.append(i)
             continue
         nid = _row_target_id(g, PROJECT_HUB, cells[col["project"]])
+        if verdict is None:
+            changes.append(_unverifiable_row(PROJECT_HUB, i + 1))
+            if nid:
+                seen.add(nid)     # the row is there; asking for a second one would duplicate it
+            continue
         if not nid:
             changes.append(Change("hub_broken_row", PROJECT_HUB, f"row '{cells[col['project']]}' does not link to a project note"))
             continue
@@ -307,10 +331,17 @@ def _reconcile_decisions(vault: Path, g: kitgraph.Graph, apply: bool) -> list[Ch
         if len(cells) < len(header):
             cells += [""] * (len(header) - len(cells))
         # Deleted, not reconciled: see the same exception in _reconcile_projects (#52).
-        if _row_confidential(vault, g, DECISION_HUB, cells[col["note"]]):
+        verdict = _row_confidentiality(vault, g, DECISION_HUB, cells[col["note"]])
+        if verdict:
             changes.append(_confidential_row(DECISION_HUB, i + 1, apply))
             continue          # not kept in `rows`, so the rewrite below leaves it out
         nid = _row_target_id(g, DECISION_HUB, cells[col["note"]])
+        if verdict is None:
+            changes.append(_unverifiable_row(DECISION_HUB, i + 1))
+            if nid:
+                seen.add(nid)
+            rows.append((cells[col["date"]] if "date" in col else "", lines[i]))   # kept: the rewrite keeps only `rows`
+            continue
         if not nid:
             changes.append(Change("hub_broken_row", DECISION_HUB, f"row '{cells[col.get('decision', 0)]}' does not link to a decision note"))
             rows.append(("", lines[i])); continue

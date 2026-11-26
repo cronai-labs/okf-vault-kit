@@ -15,6 +15,7 @@ import importlib.metadata
 import json
 import os
 import re
+import stat
 import sys
 import urllib.parse
 from collections.abc import Iterable
@@ -674,6 +675,17 @@ def unparsed_frontmatter(body: str) -> bool:
 CONFIDENTIAL = "confidential"
 
 
+def note_confidentiality(note: Note) -> bool | None:
+    """What this parsed note's frontmatter says: True (confidential), False (not), None (could not tell).
+
+    None is frontmatter we could not parse (a YAML error, a block a BOM hid). Readers treat it as
+    True; only a caller that destroys something on a True answer needs to tell the two apart.
+    """
+    if note.frontmatter is None:
+        return None if (note.fm_error or unparsed_frontmatter(note.body)) else False
+    return str(note.frontmatter.get("sensitivity", "")).strip().lower() == CONFIDENTIAL
+
+
 def note_confidential(note: Note) -> bool:
     """Is this parsed note confidential? The one predicate every reader and writer of the kit shares.
 
@@ -683,27 +695,34 @@ def note_confidential(note: Note) -> bool:
     Fails closed like the bridge: frontmatter we could not parse (a YAML error, a block a BOM
     hid) counts as confidential, because "I could not tell" is not "it is not confidential".
     """
-    if note.frontmatter is None:
-        return bool(note.fm_error) or unparsed_frontmatter(note.body)
-    return str(note.frontmatter.get("sensitivity", "")).strip().lower() == CONFIDENTIAL
+    return note_confidentiality(note) is not False
 
 
-def is_confidential(root: Path, rel: str) -> bool:
-    """`note_confidential` for a vault-relative reference (`.md` optional).
+def confidentiality(root: Path, rel: str) -> bool | None:
+    """`note_confidentiality` for a vault-relative reference (`.md` optional).
 
-    A reference to no file is not confidential (there is nothing to hide, and callers that must
-    treat an unresolvable reference as the worst case \u2014 the bridge \u2014 check that before calling).
-    A file we cannot read or decode is confidential.
+    A reference to no file is False: there is nothing to hide, and callers that must treat an
+    unresolvable reference as the worst case (the bridge) check that before calling. A file we
+    cannot read or decode is None. So is one we cannot even stat: under a chmod-000 folder,
+    `Path.is_file()` raises PermissionError up to Python 3.13 and returns False on 3.14, a
+    traceback on one and "not confidential" on the other, so the stat is made here and judged.
     """
     root = Path(root)
     path = root / (rel if rel.endswith(".md") else rel + ".md")
-    if not path.is_file():
-        return False
     try:
+        if not stat.S_ISREG(path.stat().st_mode):
+            return False
         note = parse_note(path, root)
+    except (FileNotFoundError, NotADirectoryError):
+        return False      # no such file, also when a parent of the path is a file
     except Exception:  # noqa: BLE001 \u2014 unreadable or undecodable: we cannot prove it is safe
-        return True
-    return note_confidential(note)
+        return None
+    return note_confidentiality(note)
+
+
+def is_confidential(root: Path, rel: str) -> bool:
+    """`note_confidential` for a vault-relative reference: anything but a proven "no" hides it."""
+    return confidentiality(root, rel) is not False
 
 
 def slugify(text: str, max_len: int = 60) -> str:

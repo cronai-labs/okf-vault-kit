@@ -97,6 +97,22 @@ class PolicyLayer(unittest.TestCase):
         g = guarded(self.vault)
         self.assertTrue(g._confidential(bp._UNRESOLVED))
 
+    def test_a_note_under_an_unreadable_folder_fails_closed_without_a_traceback(self):
+        """`Path.exists` raises PermissionError on Python 3.11 for a file under a chmod-000 folder;
+        the check sat outside the try, so a listing that met one became an error instead of a verdict."""
+        if sys.platform.startswith("win") or getattr(os, "geteuid", lambda: 1)() == 0:
+            self.skipTest("needs a directory mode the process actually honours")
+        sub = self.vault / "03-projects/locked"
+        sub.mkdir()
+        (sub / "inside.md").write_text("---\ntype: note\nsensitivity: internal\n---\n", encoding="utf-8", newline="\n")
+        g = guarded(self.vault)
+        os.chmod(sub, 0)
+        try:
+            self.assertTrue(g._confidential("03-projects/locked/inside.md"))
+        finally:
+            os.chmod(sub, stat.S_IRWXU)
+        self.assertFalse(g._confidential("03-projects/no-such-note"), "a reference to no file has nothing to hide")
+
     def test_read_only_and_allow_list(self):
         ro = guarded(self.vault, read_only=True)
         with self.assertRaises(bp.PolicyError):

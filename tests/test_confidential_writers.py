@@ -7,6 +7,7 @@ against the sample vault's confidential people notes, plus planted confidential 
 decisions (the sample has none), and against a note whose frontmatter does not parse.
 """
 import datetime as dt
+import os
 import re
 import shutil
 import subprocess
@@ -52,6 +53,18 @@ sensitivity: confidential
 BROKEN = "---\ntype: person\ntitle: Brokenfront Person: oops\ndescription: Brokenfront description\n---\n# x\n\n- [ ] Brokenfront task — me, due 2026-09-15\n"
 
 
+def _skip_unless_modes_bite(case: unittest.TestCase) -> None:
+    """chmod 000 keeps nothing out on Windows, nor from root: the test would pass for nothing."""
+    if sys.platform.startswith("win") or getattr(os, "geteuid", lambda: 1)() == 0:
+        case.skipTest("needs a file mode the process actually honours")
+
+
+def _lock(case: unittest.TestCase, path, restore: int) -> None:
+    """chmod 000 `path` and put it back after the test, before tearDown's rmtree needs to get in."""
+    os.chmod(path, 0)
+    case.addCleanup(os.chmod, path, restore)
+
+
 def _assert_none_of(case: unittest.TestCase, text: str, *fields_: str) -> None:
     for f in fields_:
         case.assertNotIn(f.lower(), text.lower(), f"{f!r} leaked")
@@ -60,9 +73,9 @@ def _assert_none_of(case: unittest.TestCase, text: str, *fields_: str) -> None:
 class _TempVault(unittest.TestCase):
     def setUp(self):
         self.v = temp_vault()
-
-    def tearDown(self):
-        shutil.rmtree(self.v.parent, ignore_errors=True)
+        # A cleanup, not tearDown: cleanups run last-in first-out after tearDown, so _lock's
+        # chmod back runs before this, and rmtree can get into a folder a test locked.
+        self.addCleanup(shutil.rmtree, self.v.parent, ignore_errors=True)
 
     def write(self, rel: str, text: str) -> None:
         p = self.v / rel
@@ -132,7 +145,9 @@ class Hubs(_TempVault):
 
         dry = kitrecon.reconcile(self.v)
         removals = [c for c in dry if c.code == "hub_confidential_row" and c.file == kitrecon.PROJECT_HUB]
-        self.assertEqual(len(removals), 3, [c.render() for c in dry])
+        self.assertEqual(len(removals), 2, [c.render() for c in dry])
+        unverifiable = [c for c in dry if c.code == "hub_row_unverifiable" and c.file == kitrecon.PROJECT_HUB]
+        self.assertEqual(len(unverifiable), 1, "the unparsable target is reported, not judged confidential")
         self.assertFalse(any(c.applied for c in dry), "dry run by default")
         self.assertEqual(hub.read_text(encoding="utf-8"), seeded, "a dry run changes nothing")
         self.assertFalse(any(c.code == "hub_missing_row" and "kestrel" in c.message for c in dry), "no row is asked for")
@@ -141,7 +156,9 @@ class Hubs(_TempVault):
         applied = kitrecon.reconcile(self.v, apply=True, today=dt.date(2026, 9, 14))
         self.assertTrue(all(c.applied for c in applied if c.code == "hub_confidential_row"))
         text = hub.read_text(encoding="utf-8")
-        _assert_none_of(self, text, "Kestrel", *ALEX[:3], "brokenfront")
+        _assert_none_of(self, text, "Kestrel", *ALEX[:3])
+        self.assertIn("| [Brokenfront Person](../05-people/brokenfront.md) | green | active |  | Brokenfront description |", text,
+                      "a row the kit cannot judge is the user's to decide, and kept as written")
         self.assertIn("[Search relaunch](search-relaunch.md)", text, "the ordinary row stays, free text and all")
         self.assertIn("Hybrid search for the docs portal", text)
         log = (self.v / "log.md").read_text(encoding="utf-8")
@@ -169,6 +186,78 @@ class Hubs(_TempVault):
     def test_priorities_do_not_ask_for_a_confidential_open_decision(self):
         codes = [c for c in kitrecon.reconcile(self.v) if c.code == "priorities_missing_open_decision"]
         _assert_none_of(self, "\n".join(c.render() for c in codes), "kestrel")
+
+
+class UnverifiableRows(_TempVault):
+    """--apply deletes a hub row only when its target says `sensitivity: confidential`.
+
+    A row is hand-written: its free-text cells exist nowhere else, and a regenerated row does not
+    bring them back. So "the kit could not read or parse the target" is reported and the row kept.
+    Every read path (index, digest, graph, bridge) still hides such a note: hiding is undone by
+    the next run, a deletion is not.
+    """
+    ROW = "| 2026-09-15 | Embedding model for German and English queries (example) | open | — | [ADR]({target}) |"
+    NOTE = "06-decisions/2026-09-15-embedding-model-for-de-en.md"
+
+    def _row_kept(self, target: str) -> None:
+        hub = self.v / kitrecon.DECISION_HUB
+        changes = kitrecon.reconcile(self.v, apply=True, today=dt.date(2026, 9, 14))
+        found = [c for c in changes if c.code == "hub_row_unverifiable"]
+        self.assertEqual([c.file for c in found], [kitrecon.DECISION_HUB], [c.render() for c in changes])
+        self.assertFalse(found[0].applied)
+        self.assertRegex(found[0].message, r"^line \d+ links to a note the kit cannot read or parse")
+        _assert_none_of(self, found[0].message, "embedding", "ADR")
+        self.assertFalse(any(c.code == "hub_confidential_row" for c in changes), [c.render() for c in changes])
+        self.assertIn(self.ROW.format(target=target), hub.read_text(encoding="utf-8"), "the row, free text and all, is kept")
+
+    def test_a_note_the_kit_cannot_read_keeps_its_row(self):
+        _skip_unless_modes_bite(self)
+        _lock(self, self.v / self.NOTE, 0o644)
+        self._row_kept("2026-09-15-embedding-model-for-de-en.md")
+
+    def test_a_note_whose_frontmatter_does_not_parse_keeps_its_row(self):
+        note = self.v / self.NOTE
+        note.write_text(note.read_text(encoding="utf-8").replace("type: decision", "type: decision\nbroken: a: b", 1),
+                        encoding="utf-8", newline="\n")
+        self.assertIsNotNone(kitlib.parse_note(note, self.v).fm_error, "the fixture must be a YAML error")
+        self._row_kept("2026-09-15-embedding-model-for-de-en.md")
+
+    def test_an_unreadable_folder_is_a_finding_not_a_traceback(self):
+        """`Path.is_file` raises PermissionError on Python 3.11 for a file under a chmod-000 folder."""
+        _skip_unless_modes_bite(self)
+        sub = self.v / "06-decisions/sub"
+        sub.mkdir()
+        shutil.move(str(self.v / self.NOTE), str(sub))
+        hub = self.v / kitrecon.DECISION_HUB
+        target = "sub/2026-09-15-embedding-model-for-de-en.md"
+        hub.write_text(hub.read_text(encoding="utf-8").replace("(2026-09-15-embedding-model-for-de-en.md)", f"({target})"),
+                       encoding="utf-8", newline="\n")
+        _lock(self, sub, 0o755)
+        self.assertTrue(kitlib.is_confidential(self.v, "06-decisions/" + target), "fails closed for every reader")
+        self._row_kept(target)
+
+    def test_a_confidential_target_is_still_removed(self):
+        note = self.v / self.NOTE
+        note.write_text(note.read_text(encoding="utf-8").replace("sensitivity: internal", "sensitivity: confidential"),
+                        encoding="utf-8", newline="\n")
+        changes = kitrecon.reconcile(self.v, apply=True, today=dt.date(2026, 9, 14))
+        self.assertEqual([c.code for c in changes if c.file == kitrecon.DECISION_HUB], ["hub_confidential_row"])
+        self.assertNotIn("embedding-model-for-de-en", (self.v / kitrecon.DECISION_HUB).read_text(encoding="utf-8"))
+
+
+class Predicate(_TempVault):
+    def test_a_missing_reference_is_not_confidential(self):
+        self.assertFalse(kitlib.is_confidential(self.v, "03-projects/no-such-note"))
+        self.assertFalse(kitlib.is_confidential(self.v, "03-projects/search-relaunch.md/below-a-file"), "NotADirectoryError")
+
+    def test_a_file_under_an_unreadable_folder_is_confidential(self):
+        _skip_unless_modes_bite(self)
+        sub = self.v / "03-projects/locked"
+        sub.mkdir()
+        (sub / "inside.md").write_text("---\ntype: note\nsensitivity: internal\n---\n", encoding="utf-8", newline="\n")
+        _lock(self, sub, 0o755)
+        self.assertTrue(kitlib.is_confidential(self.v, "03-projects/locked/inside.md"))
+        self.assertIsNone(kitlib.confidentiality(self.v, "03-projects/locked/inside"), "could not tell, which is not yes")
 
 
 class Digest(_TempVault):
