@@ -33,11 +33,11 @@ KIT = [sys.executable, str(ROOT / "kit.py")]
 # A confidential note whose every field is a marker no other sample note carries, so a marker in
 # the output can only have come from this note. Its `project` link gives the open project an
 # inverse `has_item` edge: the context pack of the open note would name it.
-FALCON_REL = "03-projects/nda-secret.md"
-FALCON = ("---\ntype: decision\ntitle: Codename Falcon\ndescription: SECRET-DESC merger talks\n"
+FALCON_REL = "03-projects/nda-hidden.md"
+FALCON = ("---\ntype: decision\ntitle: Codename Falcon\ndescription: HIDDEN-DESC merger talks\n"
           "sensitivity: confidential\nstate: open\ndate: 2026-09-20\n"
-          "project: \"[Search relaunch](search-relaunch.md)\"\n---\n# Codename Falcon\n\nSECRET-BODY merger terms. The merger terms are agreed; merger talks go on.\n")
-FALCON_MARKERS = ("nda-secret", "Codename Falcon", "SECRET-DESC", "SECRET-BODY")
+          "project: \"[Search relaunch](search-relaunch.md)\"\n---\n# Codename Falcon\n\nHIDDEN-BODY merger terms. The merger terms are agreed; merger talks go on.\n")
+FALCON_MARKERS = ("nda-hidden", "Codename Falcon", "HIDDEN-DESC", "HIDDEN-BODY")
 # The shipped sample's confidential notes; their description text appears in no other note's
 # graph node (the open notes name the person in their own fields, which is theirs to show).
 PEOPLE = ("05-people/alex-example.md", "05-people/sam-example.md")
@@ -310,7 +310,7 @@ REFERRING = {
     + "date: 2026-09-20\nstate: decided\narea: \"[Platform engineering](../04-areas/platform-engineering.md)\"\n"
     + "supersedes: \"[Adopt qmd](2026-09-08-adopt-qmd-for-local-search.md)\"\n---\nbody\n",
     # the "did you mean" of an unresolved_ref
-    "03-projects/zephyr-secret.md": "---\ntype: project\ntitle: Zephyr Secret\nowner: me\n" + CONF + "---\nbody\n",
+    "03-projects/zephyr-hidden.md": "---\ntype: project\ntitle: Zephyr Hidden\nowner: me\n" + CONF + "---\nbody\n",
     # one of the candidates of an ambiguous_ref (the other one is visible)
     "05-people/kim-hidden.md": "---\ntype: person\ntitle: Kim Doppel\n" + CONF + "---\nbody\n",
     "05-people/kim-visible.md": "---\ntype: person\ntitle: Kim Doppel\nsensitivity: internal\n---\nbody\n",
@@ -325,7 +325,7 @@ REFERRING = {
     "07-knowledge/visible-relies.md": "---\ntype: concept\ntitle: Relies on the withered spec\nsensitivity: internal\n---\n"
     "See [the old spec](stale-hidden.md).\n",
 }
-HIDDEN_REFERRED = ("06-decisions/zz-hidden-supersedes.md", "03-projects/zephyr-secret.md", "05-people/kim-hidden.md",
+HIDDEN_REFERRED = ("06-decisions/zz-hidden-supersedes.md", "03-projects/zephyr-hidden.md", "05-people/kim-hidden.md",
                    "06-decisions/quartz-hidden.md", "07-knowledge/stale-hidden.md")
 INTERPOLATING = ("state_conflict", "unresolved_ref", "ambiguous_ref", "range_violation", "at_risk", "project_at_risk")
 
@@ -499,7 +499,7 @@ class GraphQueryFollowsTheNotes(unittest.TestCase):
 
 
 class TodosLeaveConfidentialTasksOut(unittest.TestCase):
-    SECRET_TASK = "- [ ] SECRET-TASK sign the term sheet — me, due 2026-09-25\n"
+    HIDDEN_TASK = "- [ ] HIDDEN-TASK sign the term sheet — me, due 2026-09-25\n"
     # one commitment in two notes: done in a visible note, still open in the confidential one
     SHARED_OPEN = "- [ ] Renew the shared certificate bundle — me, due 2026-10-01\n"
     SHARED_DONE = "- [x] Renew the shared certificate bundle — me, due 2026-10-01\n"
@@ -510,7 +510,7 @@ class TodosLeaveConfidentialTasksOut(unittest.TestCase):
         self.vault = falcon_vault()
         self.addCleanup(shutil.rmtree, self.vault.parent, True)
         with (self.vault / FALCON_REL).open("a", encoding="utf-8", newline="\n") as fh:
-            fh.write("\n" + self.SECRET_TASK + self.SHARED_OPEN)
+            fh.write("\n" + self.HIDDEN_TASK + self.SHARED_OPEN)
         with (self.vault / "03-projects/search-relaunch.md").open("a", encoding="utf-8", newline="\n") as fh:
             fh.write("\n" + self.SHARED_DONE)
 
@@ -528,12 +528,12 @@ class TodosLeaveConfidentialTasksOut(unittest.TestCase):
 
     def test_the_summary_leaves_them_out_and_counts_them(self):
         r = self.todos()
-        self.assertNotIn("SECRET-TASK", r.stdout)
+        self.assertNotIn("HIDDEN-TASK", r.stdout)
         for rel in (FALCON_REL, *PEOPLE):
             self.assertNotIn(rel, r.stdout)
         self.assertEqual(int(self.LEFT_OUT.search(r.stdout).group(1)), self.confidential_tasks())
         shown = self.todos("--show-confidential")
-        self.assertIn("SECRET-TASK", shown.stdout)
+        self.assertIn("HIDDEN-TASK", shown.stdout)
         self.assertIsNone(self.LEFT_OUT.search(shown.stdout))
 
     def test_json_leaves_them_out_and_counts_them_on_stderr(self):
@@ -548,7 +548,7 @@ class TodosLeaveConfidentialTasksOut(unittest.TestCase):
     def test_sync_done_still_ticks_a_task_in_a_confidential_note(self):
         r = self.todos("--sync-done")
         self.assertIn("synced 1 task(s) to done", r.stdout)
-        self.assertNotIn("nda-secret", r.stdout)
+        self.assertNotIn("nda-hidden", r.stdout)
         self.assertIn(self.SHARED_DONE, (self.vault / FALCON_REL).read_text(encoding="utf-8"),
                       "--sync-done works on every task, whatever the listing shows")
 

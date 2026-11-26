@@ -27,7 +27,7 @@ KIT = [sys.executable, str(ROOT / "kit.py")]
 ALEX = ("Alex Example", "alex-example", "tech lead for the search relaunch", "Send Alex the go/no-go template")
 SAM = ("Sam Example", "sam-example", "owns the embedding-model evaluation", "Share the eval-set results")
 
-SECRET_PROJECT = """---
+HIDDEN_PROJECT = """---
 type: project
 title: Codename Kestrel
 description: Kestrel acquisition groundwork, board only.
@@ -38,7 +38,7 @@ sensitivity: confidential
 ---
 # Codename Kestrel
 """
-SECRET_DECISION = """---
+HIDDEN_DECISION = """---
 type: decision
 title: Kestrel go decision
 description: Whether to proceed with Kestrel.
@@ -147,8 +147,8 @@ class Index(_TempVault):
 class Hubs(_TempVault):
     def setUp(self):
         super().setUp()
-        self.write("03-projects/kestrel.md", SECRET_PROJECT)
-        self.write("06-decisions/2026-09-20-kestrel-go.md", SECRET_DECISION)
+        self.write("03-projects/kestrel.md", HIDDEN_PROJECT)
+        self.write("06-decisions/2026-09-20-kestrel-go.md", HIDDEN_DECISION)
         self.write("05-people/brokenfront.md", BROKEN)
 
     def _seed(self, hub: str, *rows: str) -> None:
@@ -404,7 +404,7 @@ class Minutes(_TempVault):
         self.assertFalse((self.v / m.path).exists())
 
     def test_raise_links_a_confidential_project_and_marks_the_note(self):
-        self.write("03-projects/kestrel.md", SECRET_PROJECT)
+        self.write("03-projects/kestrel.md", HIDDEN_PROJECT)
         m = kitrecon.file_minutes(self.v, "x", "Kestrel two", self.DAY, project="Codename Kestrel")
         self.assertEqual(m.project, "03-projects/kestrel.md")
         self.assertEqual(self.fm(m)["sensitivity"], "confidential")
@@ -474,7 +474,7 @@ class Minutes(_TempVault):
         self.assertEqual(m.unresolved, ["Sam Example", "Nobody Known"], "a confidential name reads like an unknown one")
 
     def test_plain_neither_links_nor_stores_a_confidential_project(self):
-        self.write("03-projects/kestrel.md", SECRET_PROJECT)
+        self.write("03-projects/kestrel.md", HIDDEN_PROJECT)
         m = kitrecon.file_minutes(self.v, "Codename Kestrel status.\n", "Kestrel", self.DAY, mode="plain")
         self.assertEqual((m.project, m.unresolved), (None, []))
         self.assertEqual(self.fm(m)["project"], "")
@@ -484,7 +484,7 @@ class Minutes(_TempVault):
 
     def test_plain_links_the_visible_project_beside_a_confidential_one(self):
         """Only one project mentioned is linked; a hidden one must not make the visible one ambiguous."""
-        self.write("03-projects/kestrel.md", SECRET_PROJECT)
+        self.write("03-projects/kestrel.md", HIDDEN_PROJECT)
         m = kitrecon.file_minutes(self.v, "Codename Kestrel and the Search relaunch.\n", "Both", self.DAY, mode="plain", dry_run=True)
         self.assertEqual(m.project, "03-projects/search-relaunch.md")
 
@@ -503,11 +503,11 @@ if __name__ == "__main__":
 
 class SupersededByAConfidentialNote(_TempVault):
     """`reconcile` (and `--json`, which agents read) names no confidential note in a state conflict."""
-    SECRET = "06-decisions/2026-09-15-embedding-model-for-de-en.md"
+    HIDDEN = "06-decisions/2026-09-15-embedding-model-for-de-en.md"
     ADOPT = "06-decisions/2026-09-08-adopt-qmd-for-local-search.md"
 
     def test_the_conflict_is_reported_without_the_path(self):
-        p = self.v / self.SECRET
+        p = self.v / self.HIDDEN
         text = p.read_text(encoding="utf-8")
         p.write_text(text.replace("sensitivity: internal", "sensitivity: confidential\nsupersedes: \"[Adopt qmd](2026-09-08-adopt-qmd-for-local-search.md)\"", 1),
                      encoding="utf-8", newline="\n")
