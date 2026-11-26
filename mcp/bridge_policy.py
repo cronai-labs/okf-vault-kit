@@ -6,9 +6,10 @@ the MCP tools and the backend:
   * read-only mode          write tools are not even registered
   * write allow/deny lists  vault-relative folder prefixes, checked against the path the backend resolves to
                             (case-insensitively); people notes and system folders are denied by default
-  * confidential hiding     notes with `sensitivity: confidential` are invisible to reads, searches, listings and every
-                            graph tool, and agents may not write them or set the `sensitivity` property. This holds
-                            for this bridge only: a tool that opens the vault's files itself is not stopped by it
+  * confidential hiding     notes with `sensitivity: confidential`, and every file a confidential folder or path rule in
+                            `.kit/config.yml` covers (all of them while that file is broken), are invisible to reads,
+                            searches, listings and every graph tool, and agents may not write them or set the
+                            `sensitivity` property. This holds for this bridge only: a tool that opens the vault's files itself is not stopped by it
                             (docs/security.md §5)
   * size and rate limits    per write call and per minute
   * propose mode            writes are recorded as proposals under .kit/proposals/ and applied by a human
