@@ -510,17 +510,34 @@ def cmd_mcp_config(args) -> int:
 
 # ---------------------------------------------------------------- graph
 
-def _graph(vault: Path) -> kitgraph.Graph:
-    return kitgraph.build_graph(vault)
+def _graph(vault: Path, show_confidential: bool = False, onto: kitgraph.Ontology | None = None) -> kitgraph.Graph:
+    """The graph every `graph` command and `llm ask --graph` reads: confidential notes left out.
+
+    The same redaction as the bridge's graph tools (#52). A graph command prints or writes node
+    titles, descriptions and full frontmatter, and its output is what lands in a model's prompt
+    or in a file an agent can open, so hiding stops at neither. --show-confidential opts back in.
+    """
+    g = kitgraph.build_graph(vault, onto)
+    return g if show_confidential else kitgraph.redact_vault(g, vault)
+
+
+def _hidden_line(full: int, shown: kitgraph.Graph) -> str:
+    """A count, never a name: how many notes the redaction left out, and how to include them."""
+    left_out = full - len(shown.nodes)
+    return (f"{left_out} note(s) marked sensitivity: confidential left out (--show-confidential includes them)"
+            if left_out else "")
 
 
 def cmd_graph_build(args) -> int:
     vault = _vault(args.vault)
     onto = kitgraph.load_ontology(vault)
-    g = kitgraph.build_graph(vault, onto)
+    full = kitgraph.build_graph(vault, onto)
+    g = full if args.show_confidential else kitgraph.redact_vault(full, vault)
     paths = kitgraph.write_artifacts(vault, g, onto, Path(args.out) if args.out else None)
     notes = sum(1 for n in g.nodes.values() if n.kind == "note")
     print(f"graph: {len(g.nodes)} nodes ({notes} notes), {len(g.edges)} edges, {len(g.findings)} finding(s)")
+    if hidden := _hidden_line(len(full.nodes), g):
+        print(hidden)
     for f in g.findings:
         print("  " + f.render())
     for k, p in paths.items():
@@ -531,7 +548,7 @@ def cmd_graph_build(args) -> int:
 def cmd_graph_export(args) -> int:
     vault = _vault(args.vault)
     onto = kitgraph.load_ontology(vault)
-    g = kitgraph.build_graph(vault, onto)
+    g = _graph(vault, args.show_confidential, onto)
     ctx = kitgraph.load_context(vault, onto)
     if args.format == "json":
         text = json.dumps(kitgraph.to_json(g), indent=1, ensure_ascii=False)
@@ -549,15 +566,29 @@ def cmd_graph_export(args) -> int:
 def cmd_graph_query(args) -> int:
     vault = _vault(args.vault)
     db = vault / kitgraph.KIT_DIR / "graph.sqlite"
-    if args.rebuild or not db.exists():
-        onto = kitgraph.load_ontology(vault)
-        kitgraph.write_artifacts(vault, kitgraph.build_graph(vault, onto), onto)
+    want = kitgraph.CONFIDENTIAL_SHOWN if args.show_confidential else kitgraph.CONFIDENTIAL_HIDDEN
     import sqlite3
-    con = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)  # as_uri(): drive letters and spaces are not URI-safe
+    have = kitgraph.sqlite_confidential(db) if db.exists() else None
+    # A default query must not be answered from a file built with --show-confidential, or by a kit
+    # that redacted nothing yet (no mode recorded): rewrite it redacted, which also takes the
+    # confidential nodes off the disk. --show-confidential never writes them as a side effect of a
+    # query unless --rebuild asks for it; `graph build --show-confidential` is the deliberate way.
+    if args.rebuild or (not args.show_confidential and have != want):
+        if db.exists() and have != want and not args.rebuild:
+            print(f"{db} was built with confidential notes in it; rebuilding it without them", file=sys.stderr)
+        onto = kitgraph.load_ontology(vault)
+        kitgraph.write_artifacts(vault, _graph(vault, args.show_confidential, onto), onto)
+        have = want
+    if have == want:
+        con = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)  # as_uri(): drive letters and spaces are not URI-safe
+    else:
+        con = kitgraph.to_sqlite(_graph(vault, args.show_confidential), ":memory:")
     try:
         cols, rows = kitgraph.query_sqlite(con, args.sql, args.limit)
     except (ValueError, sqlite3.Error) as exc:
         print(f"query error: {exc}"); return 1
+    finally:
+        con.close()
     if args.json:
         print(json.dumps([dict(zip(cols, r, strict=True)) for r in rows], ensure_ascii=False, indent=1))
     else:
@@ -568,7 +599,7 @@ def cmd_graph_query(args) -> int:
 
 
 def cmd_graph_neighbors(args) -> int:
-    g = _graph(_vault(args.vault))
+    g = _graph(_vault(args.vault), args.show_confidential)
     preds = [p.strip() for p in args.pred.split(",")] if args.pred else None
     rows = kitgraph.neighbors(g, args.node, args.depth, preds)
     if not rows:
@@ -579,7 +610,7 @@ def cmd_graph_neighbors(args) -> int:
 
 
 def cmd_graph_path(args) -> int:
-    g = _graph(_vault(args.vault))
+    g = _graph(_vault(args.vault), args.show_confidential)
     path = kitgraph.shortest_path(g, args.a, args.b)
     if not path:
         print("no path"); return 1
@@ -589,7 +620,7 @@ def cmd_graph_path(args) -> int:
 
 
 def cmd_graph_pack(args) -> int:
-    g = _graph(_vault(args.vault))
+    g = _graph(_vault(args.vault), args.show_confidential)
     text = kitgraph.context_pack(g, args.node, args.depth)
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8", newline="\n"); print(f"wrote {args.out}")
@@ -981,6 +1012,11 @@ def _confidential(vault: Path, rel: str) -> bool:
     return kitlib.is_confidential(vault, rel)
 
 
+def _note_id(rel: str) -> str:
+    """One spelling per note, so a note found by search and named in the question counts once."""
+    return rel if rel.endswith(".md") else rel + ".md"
+
+
 def _search_hits(vault: Path, question: str, n: int, collection: str | None,
                  provider: str | None = None) -> list[dict]:
     """Ask the configured search provider, then fall back.
@@ -1005,37 +1041,45 @@ def cmd_llm_ask(args) -> int:
     if not hits:
         print("no matching notes found")
         return 1
+    # A confidential hit is dropped whole: no path, no title, no snippet. The bridge hides titles
+    # too (its graph is redacted because nodes carry them), and `llm ask` agrees with it (#52).
+    # Only the count is shown; it is not a secret.
     withheld: set[str] = set()
-    for h in hits:                       # the bridge hides confidential notes; the prompt must too
+    visible = []
+    for h in hits:
         rel = kitproviders.hit_rel(h["file"])
         if _confidential(vault, rel):
-            h["snippet"] = "(withheld — sensitivity: confidential)"
-            withheld.add(rel)
-    context = "\n\n".join(f"[{i+1}] {h['file']} — {h['title']}\n{h['snippet']}" for i, h in enumerate(hits))
+            withheld.add(_note_id(rel))
+        else:
+            visible.append(h)
+    hits = visible
     facts = ""
     if args.graph:
-        g = kitgraph.build_graph(vault)
+        full = kitgraph.build_graph(vault)
+        g = kitgraph.redact_vault(full, vault)           # the packs name neighbours by title
         wanted: list[str] = []
-        for nid in kitgraph.mentions(g, args.question):                  # notes named in the question come first
-            if _confidential(vault, nid):
-                withheld.add(nid)
-            else:
+        for nid in kitgraph.mentions(full, args.question):                # notes named in the question come first
+            if nid in g.nodes:
                 wanted.append(nid)
+            else:
+                withheld.add(_note_id(nid))
         for h in hits[: min(3, len(hits))]:
             nid = kitgraph.resolve_id(g, kitproviders.hit_rel(h["file"]))
-            if nid and nid not in wanted and not _confidential(vault, nid):
+            if nid and nid not in wanted:
                 wanted.append(nid)
         packs = [kitgraph.context_pack(g, nid, 1) for nid in wanted[:4]]
         for nid in wanted[:2]:                                              # and their text joins the sources
             if nid in g.nodes and g.nodes[nid].kind == "note" and not any(kitproviders.hit_rel(h["file"]).endswith(nid) for h in hits):
                 n = g.nodes[nid]
                 hits.insert(0, {"file": nid, "title": n.title, "snippet": (vault / nid).read_text(encoding="utf-8")[:600], "score": None})
-        context = "\n\n".join(f"[{i+1}] {h['file']} — {h['title']}\n{h['snippet']}" for i, h in enumerate(hits))
         if packs:
             facts = "\n\nFacts from the vault graph (authoritative for relations, states, dates):\n\n" + "\n".join(packs)
     if withheld:
-        print(f"{len(withheld)} note(s) marked sensitivity: confidential — kept out of the prompt, "
-              f"cited by title only")
+        print(f"{len(withheld)} matching note(s) marked sensitivity: confidential were left out of the prompt.")
+    if not hits and not facts:
+        print("no matching notes found that may be sent to the model")
+        return 1
+    context = "\n\n".join(f"[{i+1}] {h['file']} — {h['title']}\n{h['snippet']}" for i, h in enumerate(hits))
     messages = [
         {"role": "system", "content": "You answer questions about the user's notes using ONLY the provided sources and facts. Cite sources as [n]. Prefer the graph facts for relationships, owners, states and dates. If the sources do not contain the answer, say so plainly."},
         {"role": "user", "content": f"Sources:\n\n{context}{facts}\n\nQuestion: {args.question}"},
@@ -1095,6 +1139,9 @@ def main(argv: list[str] | None = None) -> int:
     p = gsub.add_parser("neighbors", help="edges around a note"); p.add_argument("node"); p.add_argument("--vault"); p.add_argument("--depth", type=int, default=1); p.add_argument("--pred", help="comma-separated predicates"); p.set_defaults(fn=cmd_graph_neighbors)
     p = gsub.add_parser("path", help="shortest path between two notes"); p.add_argument("a"); p.add_argument("b"); p.add_argument("--vault"); p.set_defaults(fn=cmd_graph_path)
     p = gsub.add_parser("pack", help="markdown context pack for a note (for models)"); p.add_argument("node"); p.add_argument("--vault"); p.add_argument("--depth", type=int, default=1); p.add_argument("--out"); p.set_defaults(fn=cmd_graph_pack)
+    for _p in gsub.choices.values():   # one flag, one meaning, as on the bridge: hidden unless asked for
+        _p.add_argument("--show-confidential", action="store_true",
+                        help="include notes with sensitivity: confidential (left out by default, as on the bridge)")
     p = sub.add_parser("reconcile", help="hub tables vs notes; derived-state conflicts"); p.add_argument("--vault"); p.add_argument("--apply", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_reconcile)
     p = sub.add_parser("todos", help="surface and reconcile tasks"); p.add_argument("--vault"); p.add_argument("--json", action="store_true"); p.add_argument("--all", action="store_true", help="include done tasks in --json")
     p.add_argument("--owner", help="only tasks with this owner — filters the summary and --json alike"); p.add_argument("--digest", nargs="?", const="", help="write the digest page (default 00-home/todo-digest.md)"); p.add_argument("--sync-done", action="store_true", help="tick open copies of tasks already ticked in another note"); p.set_defaults(fn=cmd_todos)
