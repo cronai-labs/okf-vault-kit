@@ -147,7 +147,9 @@ class Minutes(unittest.TestCase):
     def test_file_minutes_end_to_end(self):
         v = temp_vault()
         try:
-            m = kitrecon.file_minutes(v, RECAP, "Latency check-in", dt.date(2026, 9, 15), daily=True)
+            # The sample people are confidential; this test is about resolving them, so it opts in as
+            # `kit.py minutes --show-confidential` does (the default is covered in test_confidential_writers).
+            m = kitrecon.file_minutes(v, RECAP, "Latency check-in", dt.date(2026, 9, 15), daily=True, hide_confidential=False)
             self.assertEqual(m.path, "02-meetings/2026-09-15-latency-check-in.md")
             self.assertEqual(set(m.people), {"05-people/alex-example.md", "05-people/sam-example.md"})
             self.assertEqual(m.project, "03-projects/search-relaunch.md")
@@ -173,7 +175,7 @@ class Minutes(unittest.TestCase):
     def test_dry_run_and_explicit_people(self):
         v = temp_vault()
         try:
-            m = kitrecon.file_minutes(v, "nothing structured here", "Quick chat", dt.date(2026, 9, 16), people=["Sam", "Unknown Person"], dry_run=True)
+            m = kitrecon.file_minutes(v, "nothing structured here", "Quick chat", dt.date(2026, 9, 16), people=["Sam", "Unknown Person"], dry_run=True, hide_confidential=False)
             self.assertEqual(m.people, ["05-people/sam-example.md"]); self.assertEqual(m.unresolved, ["Unknown Person"])
             self.assertFalse((v / m.path).exists())
         finally:
