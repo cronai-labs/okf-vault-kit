@@ -99,8 +99,8 @@ def policy_export(root: Path) -> dict[str, Any]:
     cannot list is listed with a trailing `/`, in both lists: what is in it cannot be told.
 
     Symlinked folders are followed, since an agent reads through them; one that points into a declared
-    folder is listed whole with a trailing `/`, and one that points back up its own path (a cycle) is
-    not followed again, its target being walked already.
+    folder is listed whole with a trailing `/`, and so is one that points back up its own path (a
+    cycle), which is not followed again.
     """
     root = Path(root).resolve()
     policy = kitlib.confidentiality_policy(root)
@@ -133,7 +133,10 @@ def policy_export(root: Path) -> dict[str, Any]:
             full = os.path.join(dirpath, d)
             real = os.path.realpath(full)
             if real in chain:
-                continue           # a link back up its own path
+                # A link back up its own path: not walked again, but an alias for everything above
+                # it, and whether an agent resolves it before matching a deny rule was not tested.
+                files.append(rel + "/")
+                continue
             if os.path.islink(full):
                 try:
                     inner = os.path.relpath(real, real_root).replace(os.sep, "/")

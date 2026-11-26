@@ -146,7 +146,9 @@ class PolicyExport(_Vault):
         self.assertIn("03-projects/shared/x.md", e["confidential_files"])
         self.assertIn("03-projects/board/", e["confidential_files"], "a link into a floor is denied whole")
         self.assertIn("03-projects/kestrel.md", e["confidential_files"])
-        self.assertFalse([f for f in e["confidential_files"] if f.startswith("03-projects/loop/")])
+        # A link back up its own path is not walked again, but it is an alias for everything above
+        # it: whether Claude Code resolves it before matching a deny rule was not tested, so it goes whole.
+        self.assertEqual([f for f in e["confidential_files"] if f.startswith("03-projects/loop/")], ["03-projects/loop/"])
         plan = kitagent.claude_code_plan(self.v, e)
         self.assertIn("Read(./03-projects/board/**)", plan.deny)
         self.assertIn("Read(./03-projects/shared/x.md)", plan.deny)
@@ -480,6 +482,11 @@ class Reverse(_Vault):
         self.assertEqual(real.read_text(encoding="utf-8"), '{"model": "x"}\n')
         self.assertFalse((self.v / MANIFEST).exists())
         self.assertEqual(agent(self.v).returncode, 0, "the dry run still previews")
+        write(self.v, MANIFEST, json.dumps({"permissions.deny": [], "sandbox.filesystem.denyRead": []}))
+        r = agent(self.v, "--remove", "--apply")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertIn("symlink", r.stderr)
+        self.assertTrue((self.v / SETTINGS).is_symlink())
 
     def test_the_manifest_records_what_apply_replaced_and_keeps_it(self):
         self.put(self.FOREIGN)
