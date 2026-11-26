@@ -67,5 +67,6 @@ Daily (5 min) · after key meetings (5 min) · Friday weekly review (25 min, the
 
 - One machine at a time on synced folders (OneDrive, iCloud, Nextcloud); conflict copies appear as `… (conflicted copy).md`.
 - Git works well for engineers (`.obsidian/workspace.json` in `.gitignore`); OKF explicitly recommends git as the bundle distribution form.
-- `sensitivity: confidential` notes (people) should never be attached to a cloud model; the local model only sees what you let its tools read.
+- `sensitivity: confidential` notes (people) should never be attached to a cloud model. With its default policy the bridge hides them from the model, and the kit leaves their titles, descriptions, paths and tasks out of the files it generates. A coding agent's own file and shell tools are not the bridge: started in the vault or above it, the agent reads every note unless its settings deny the folder — [security.md §5](security.md#5-coding-agents-and-other-direct-readers).
+- No credentials in any note, at any sensitivity: passwords, API keys, tokens, recovery codes, and links that grant access to whoever holds them. Write where the secret is kept, never the secret — the model reads every note that is not confidential through the bridge, a coding agent's own tools can read every note, and git keeps whatever was committed.
 - Obsidian's *File recovery* core plugin keeps snapshots; `09-archive` is excluded from views, and the qmd example config ignores it.

@@ -25,18 +25,28 @@ something the policy says it will not:
 - make a write land with no audit line
 
 Also in scope: anything that makes `kit.py doctor --report` disclose what it promises not to
-(note content, paths from inside a vault, a username, endpoint credentials), and anything that
-causes the kit to make a network connection other than to the endpoint you configured.
+(note content, paths from inside a vault, a username, endpoint credentials); a confidential
+note's title, description, path or tasks in a file the kit generates (`index.md`, the project and
+decision hubs, the todo digest, the graph) after that file was regenerated, or in a
+`kit.py llm ask` prompt; and anything that causes the kit to make a network connection other than
+to the endpoint you configured.
 
 ## What is deliberately not a vulnerability
 
-- **The kit ships no sandbox.** A container answers "what can this code do to my machine", never
-  "what may this model do to my notes". [`docs/security.md`](docs/security.md) explains what your
-  OS already provides if you want process isolation too.
+- **The kit ships no sandbox**, and configures none in your coding agent. A container answers
+  "what can this code do to my machine", never "what may this model do to my notes" — for what
+  reaches the vault through the bridge, the policy layer answers that.
+  [`docs/security.md`](docs/security.md) explains what your OS already provides if you want
+  process isolation too.
 - **The model can write to your vault by design**, within the policy. That is the product. Reports
   that a model wrote a note it was asked to write are not findings.
 - **Local trust.** Anyone who can run commands as you can read your vault directly. The threat
-  model starts at the model, not at your own shell.
+  model starts at the model, not at your own shell. That includes a coding agent's own file and
+  shell tools: an agent started in or above the vault reads it as you would, without the bridge,
+  so a report that one of them read a confidential note directly is not a policy-layer bypass.
+  The bridge channels listed above stay in scope.
+  [`docs/security.md` §5](docs/security.md#5-coding-agents-and-other-direct-readers) says what
+  keeps an agent out, what was tested, and with which version.
 - A finding that needs an already-compromised machine, or a scanner result with no demonstrated
   impact.
 
