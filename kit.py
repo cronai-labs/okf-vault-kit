@@ -652,15 +652,24 @@ def cmd_reconcile(args) -> int:
 
 def cmd_todos(args) -> int:
     vault = _vault(args.vault)
-    rep = kitrecon.todo_report(vault, sync_done=args.sync_done)
+    full = kitrecon.todo_report(vault, sync_done=args.sync_done)
+    # What is listed leaves out tasks in confidential notes, as the bridge's vault_todos does: the
+    # listing is what gets pasted into a model or a ticket (#52). What acts works on every task:
+    # --sync-done ticked its copies inside todo_report, and the digest filters itself.
+    rep = full if args.show_confidential else full.without_confidential()
     owner = args.owner.lower() if args.owner else ""
 
     def mine(t) -> bool:
         return not owner or (t.owner or "").lower() == owner
 
+    hidden = sum(1 for t in full.tasks if t.file in full.confidential and mine(t)) if rep is not full else 0
+    left_out = (f"{hidden} task(s) in notes marked sensitivity: confidential left out (--show-confidential includes them)"
+                if hidden else "")
     tasks = [t for t in (rep.tasks if args.all else rep.open) if mine(t)]
     if args.json:
         print(json.dumps([t.__dict__ for t in tasks], indent=1, ensure_ascii=False))
+        if left_out:
+            print(left_out, file=sys.stderr)       # stdout stays one JSON document
     else:
         # the filter applies here too: a summary that ignores --owner reads as "nothing is assigned to you"
         overdue = [t for t in rep.overdue if mine(t)]
@@ -672,17 +681,20 @@ def cmd_todos(args) -> int:
         scope = f" for owner {args.owner}" if owner else ""
         print(f"{len(open_tasks)} open / {len(all_tasks)} tasks{scope} — {len(overdue)} overdue, {len(due_soon)} due within 7 days, "
               f"{len(duplicates)} duplicated, {len(conflicts)} done/open conflict(s)")
+        if left_out:
+            print(left_out)
         for label, items in (("OVERDUE", overdue), ("DUE SOON", due_soon)):
             for t in items:
                 print(f"  {label:9} {t.due}  {t.text}  ({t.owner or '-'})  {t.file}:{t.line}")
         for grp in conflicts:
             print(f"  CONFLICT  {grp[0].text}  in " + ", ".join(f"{t.file}:{t.line}{'(done)' if t.done else ''}" for t in grp))
-        if rep.synced:
-            print(f"  synced {len(rep.synced)} task(s) to done")
-        for skip in rep.skipped:
+        if full.synced:
+            # every task ticked, counted, not named: the view would undercount what changed on disk
+            print(f"  synced {len(full.synced)} task(s) to done")
+        for skip in full.skipped:
             print(f"  skipped: {skip}")
     if args.digest is not None:
-        out = kitrecon.write_digest(vault, rep, args.digest or kitrecon.DIGEST)
+        out = kitrecon.write_digest(vault, full, args.digest or kitrecon.DIGEST)
         print(f"digest written: {out}")
     return 0
 
@@ -1148,7 +1160,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="include notes with sensitivity: confidential (left out by default, as on the bridge)")
     p = sub.add_parser("reconcile", help="hub tables vs notes; derived-state conflicts"); p.add_argument("--vault"); p.add_argument("--apply", action="store_true"); p.add_argument("--json", action="store_true"); p.set_defaults(fn=cmd_reconcile)
     p = sub.add_parser("todos", help="surface and reconcile tasks"); p.add_argument("--vault"); p.add_argument("--json", action="store_true"); p.add_argument("--all", action="store_true", help="include done tasks in --json")
-    p.add_argument("--owner", help="only tasks with this owner — filters the summary and --json alike"); p.add_argument("--digest", nargs="?", const="", help="write the digest page (default 00-home/todo-digest.md)"); p.add_argument("--sync-done", action="store_true", help="tick open copies of tasks already ticked in another note"); p.set_defaults(fn=cmd_todos)
+    p.add_argument("--owner", help="only tasks with this owner — filters the summary and --json alike"); p.add_argument("--digest", nargs="?", const="", help="write the digest page (default 00-home/todo-digest.md)"); p.add_argument("--sync-done", action="store_true", help="tick open copies of tasks already ticked in another note")
+    p.add_argument("--show-confidential", action="store_true",
+                   help="list tasks in notes with sensitivity: confidential (left out by default, as on the bridge)"); p.set_defaults(fn=cmd_todos)
     p = sub.add_parser("minutes", help="file a recap as a meeting note"); p.add_argument("file", help="text file or - for stdin"); p.add_argument("--title", required=True); p.add_argument("--vault"); p.add_argument("--date"); p.add_argument("--project"); p.add_argument("--people", help="comma-separated names")
     p.add_argument("--kind", default="project"); p.add_argument("--llm", action="store_true", help="also ask the local model to structure the recap"); p.add_argument("--base-url"); p.add_argument("--model"); p.add_argument("--daily", action="store_true", help="link the note from today's daily note")
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--force", action="store_true"); p.set_defaults(fn=cmd_minutes)
