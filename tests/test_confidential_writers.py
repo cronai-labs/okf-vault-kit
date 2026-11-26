@@ -333,51 +333,148 @@ class Digest(_TempVault):
         self.assertEqual(len(shown["conflicts"]), 1)
 
 
-class Minutes(_TempVault):
-    RECAP = "We met to go through the Bluebird numbers in detail.\nAction: draft the Bluebird summary — me, due 2026-09-18\n"
+VISIBLE_PERSON = """---
+type: person
+title: Robin Visible
+description: Runs the docs portal.
+aliases: [Robin]
+sensitivity: internal
+---
+# Robin Visible
+"""
 
-    def test_a_confidential_minutes_note_is_logged_without_title_or_path(self):
+
+class Minutes(_TempVault):
+    """A filed meeting may raise its confidentiality, never lower it (#52).
+
+    "raise", the default, links people and projects as the whole vault knows them and marks the
+    meeting confidential when it links a confidential note. "plain" (`--keep-open`, the bridge's
+    default) links only notes that are not confidential, keeps every other name as written, and
+    leaves the template's sensitivity alone.
+    """
+    RECAP = "We met to go through the Bluebird numbers in detail.\nAction: draft the Bluebird summary — me, due 2026-09-18\n"
+    DAY = dt.date(2026, 9, 14)
+
+    def fm(self, m) -> dict:
+        return kitlib.parse_note(self.v / m.path, self.v).frontmatter
+
+    def confidential_template(self) -> None:
         tpl = self.v / "90-templates/meeting.md"
         tpl.write_text(tpl.read_text(encoding="utf-8").replace("sensitivity: internal", "sensitivity: confidential"),
                        encoding="utf-8", newline="\n")
-        day = dt.date(2026, 9, 14)
-        m = kitrecon.file_minutes(self.v, self.RECAP, "Bluebird review", day, daily=True)
+
+    def test_a_confidential_minutes_note_is_logged_without_title_or_path(self):
+        self.confidential_template()
+        m = kitrecon.file_minutes(self.v, self.RECAP, "Bluebird review", self.DAY, daily=True)
         self.assertTrue(kitlib.is_confidential(self.v, m.path), "the template made the note confidential")
         log = (self.v / "log.md").read_text(encoding="utf-8")
         self.assertIn("a meeting note marked confidential", log)
         _assert_none_of(self, log, "Bluebird")
-        daily = kitlib.daily_note_path(self.v, day).read_text(encoding="utf-8")
+        daily = kitlib.daily_note_path(self.v, self.DAY).read_text(encoding="utf-8")
         self.assertIn("Meeting filed: a note marked confidential", daily)
         _assert_none_of(self, daily, "Bluebird")
 
-    def test_confidential_people_are_neither_detected_nor_resolved(self):
-        """The note's `people:` and the result would otherwise name exactly the confidential notes a
-        recap mentions: an oracle for which names are confidential (#52)."""
-        day = dt.date(2026, 9, 14)
-        m = kitrecon.file_minutes(self.v, "Alex Example and Sam Example walked through the numbers.\nDecision: ship it\n",
-                                  "Numbers sync", day)
-        self.assertEqual(m.people, [])
-        self.assertEqual(kitlib.parse_note(self.v / m.path, self.v).frontmatter["people"], [])
+    def test_raise_links_the_people_and_marks_the_note_confidential(self):
+        recap = "Alex and Sam walked through the Bluebird numbers.\nAction: draft the Bluebird summary — me, due 2026-09-18\n"
+        m = kitrecon.file_minutes(self.v, recap, "Bluebird review", self.DAY, daily=True)
+        self.assertEqual(set(m.people), {"05-people/alex-example.md", "05-people/sam-example.md"})
+        self.assertEqual(sorted(m.confidential_links), ["05-people/alex-example.md", "05-people/sam-example.md"])
+        fm = self.fm(m)
+        self.assertEqual(sorted(fm["people"]), ["Alex Example", "Sam Example"])
+        self.assertEqual(fm["sensitivity"], "confidential")
+        self.assertTrue(kitlib.is_confidential(self.v, m.path))
+        # Every file the bridge serves whole: nothing of the confidential meeting in any of them.
+        kitlib.write_index(self.v)
+        kitrecon.write_digest(self.v, kitrecon.todo_report(self.v, today=self.DAY))
+        served = {
+            "log.md": (self.v / "log.md").read_text(encoding="utf-8"),
+            "daily": kitlib.daily_note_path(self.v, self.DAY).read_text(encoding="utf-8"),
+            "index.md": (self.v / "index.md").read_text(encoding="utf-8"),
+            "digest": (self.v / kitrecon.DIGEST).read_text(encoding="utf-8"),
+        }
+        for name, text in served.items():
+            with self.subTest(file=name):
+                _assert_none_of(self, text, "Bluebird", m.path, "bluebird-review")
+        self.assertIn("a meeting note marked confidential", served["log.md"])
+        self.assertIn("Meeting filed: a note marked confidential", served["daily"])
 
-        explicit = kitrecon.file_minutes(self.v, "x", "Explicit", day, people=["Sam Example", "Nobody Known"], dry_run=True)
-        self.assertEqual(explicit.people, [])
-        self.assertEqual(explicit.unresolved, ["Sam Example", "Nobody Known"], "a confidential name reads like an unknown one")
+    def test_raise_counts_the_links_on_a_dry_run_too(self):
+        m = kitrecon.file_minutes(self.v, "Alex joined.\n", "Dry", self.DAY, dry_run=True)
+        self.assertEqual(m.confidential_links, ["05-people/alex-example.md"])
+        self.assertFalse((self.v / m.path).exists())
 
-    def test_a_confidential_project_is_not_resolved(self):
+    def test_raise_links_a_confidential_project_and_marks_the_note(self):
         self.write("03-projects/kestrel.md", SECRET_PROJECT)
-        day = dt.date(2026, 9, 14)
-        self.assertIsNone(kitrecon.file_minutes(self.v, "Codename Kestrel status.\n", "Kestrel", day, dry_run=True).project)
-        m = kitrecon.file_minutes(self.v, "x", "Kestrel two", day, project="Codename Kestrel", dry_run=True)
+        m = kitrecon.file_minutes(self.v, "x", "Kestrel two", self.DAY, project="Codename Kestrel")
+        self.assertEqual(m.project, "03-projects/kestrel.md")
+        self.assertEqual(self.fm(m)["sensitivity"], "confidential")
+
+    def test_raise_keeps_the_template_level_when_nothing_linked_is_confidential(self):
+        m = kitrecon.file_minutes(self.v, "The Search relaunch is on track.\n", "Track", self.DAY)
+        self.assertEqual((m.project, m.confidential_links), ("03-projects/search-relaunch.md", []))
+        self.assertEqual(self.fm(m)["sensitivity"], "internal")
+
+    def test_a_template_already_confidential_stays_confidential(self):
+        self.confidential_template()
+        for mode, title in (("raise", "Kept one"), ("plain", "Kept two")):
+            with self.subTest(mode=mode):
+                m = kitrecon.file_minutes(self.v, "Nothing linked here.\n", title, self.DAY, mode=mode)
+                self.assertEqual(m.confidential_links, [])
+                self.assertEqual(self.fm(m)["sensitivity"], "confidential", "a template's level is never lowered")
+
+    def test_raise_keeps_an_unknown_name_as_written(self):
+        m = kitrecon.file_minutes(self.v, "x", "Explicit", self.DAY, people=["Sam", "Unknown Person"], dry_run=True)
+        self.assertEqual(m.people, ["05-people/sam-example.md"])
+        self.assertEqual(m.names, ["Sam Example", "Unknown Person"])
+        self.assertEqual(m.unresolved, ["Unknown Person"])
+
+    def test_plain_keeps_a_confidential_name_as_the_recap_wrote_it(self):
+        """The note's `people:` echoes the recap ("alex example", "Sam"); the confidential note's title,
+        description and path never reach it. A person who is not confidential is still linked."""
+        self.write("05-people/robin-visible.md", VISIBLE_PERSON)
+        recap = "Today alex example, Sam and Robin Visible walked through the numbers.\nDecision: ship it\n"
+        m = kitrecon.file_minutes(self.v, recap, "Numbers sync", self.DAY, mode="plain")
+        self.assertEqual(m.people, ["05-people/robin-visible.md"])
+        self.assertEqual(sorted(m.names), ["Robin Visible", "Sam", "alex example"])
+        self.assertEqual(sorted(m.unresolved), ["Sam", "alex example"])
+        self.assertEqual(m.confidential_links, [])
+        fm = self.fm(m)
+        self.assertEqual(sorted(fm["people"]), ["Robin Visible", "Sam", "alex example"])
+        self.assertEqual(fm["sensitivity"], "internal", "plain mode keeps the template's level")
+        raw = (self.v / m.path).read_text(encoding="utf-8").split("\n---\n", 1)[0]
+        for leak in ("Alex Example", "Sam Example", "05-people/alex", "05-people/sam", ALEX[2], SAM[2]):
+            self.assertNotIn(leak, raw)
+        self.assertIn("[Numbers sync]", (self.v / "log.md").read_text(encoding="utf-8"), "an open note is logged by title")
+
+    def test_plain_treats_a_passed_confidential_name_like_an_unknown_one(self):
+        self.write("05-people/robin-visible.md", VISIBLE_PERSON)
+        m = kitrecon.file_minutes(self.v, "x", "Explicit", self.DAY, people=["Sam Example", "Nobody Known", "Robin"],
+                                  mode="plain", dry_run=True)
+        self.assertEqual(m.people, ["05-people/robin-visible.md"])
+        self.assertEqual(m.names, ["Sam Example", "Nobody Known", "Robin Visible"])
+        self.assertEqual(m.unresolved, ["Sam Example", "Nobody Known"], "a confidential name reads like an unknown one")
+
+    def test_plain_neither_links_nor_stores_a_confidential_project(self):
+        self.write("03-projects/kestrel.md", SECRET_PROJECT)
+        m = kitrecon.file_minutes(self.v, "Codename Kestrel status.\n", "Kestrel", self.DAY, mode="plain")
+        self.assertEqual((m.project, m.unresolved), (None, []))
+        self.assertEqual(self.fm(m)["project"], "")
+        m = kitrecon.file_minutes(self.v, "x", "Kestrel two", self.DAY, project="Codename Kestrel", mode="plain", dry_run=True)
         self.assertIsNone(m.project)
         self.assertEqual(m.unresolved, ["Codename Kestrel"])
 
-    def test_show_confidential_resolves_them(self):
-        m = kitrecon.file_minutes(self.v, "Alex Example and Sam Example met.\n", "Shown", dt.date(2026, 9, 14),
-                                  dry_run=True, hide_confidential=False)
-        self.assertEqual(set(m.people), {"05-people/alex-example.md", "05-people/sam-example.md"})
+    def test_plain_links_the_visible_project_beside_a_confidential_one(self):
+        """Only one project mentioned is linked; a hidden one must not make the visible one ambiguous."""
+        self.write("03-projects/kestrel.md", SECRET_PROJECT)
+        m = kitrecon.file_minutes(self.v, "Codename Kestrel and the Search relaunch.\n", "Both", self.DAY, mode="plain", dry_run=True)
+        self.assertEqual(m.project, "03-projects/search-relaunch.md")
+
+    def test_an_unknown_mode_is_refused(self):
+        with self.assertRaises(ValueError):
+            kitrecon.file_minutes(self.v, "x", "Bad", self.DAY, mode="hide", dry_run=True)
 
     def test_an_ordinary_minutes_note_is_still_logged_by_title(self):
-        m = kitrecon.file_minutes(self.v, self.RECAP, "Bluebird review", dt.date(2026, 9, 14), daily=True)
+        m = kitrecon.file_minutes(self.v, self.RECAP, "Bluebird review", self.DAY, daily=True)
         self.assertIn(f"[Bluebird review]({m.path})", (self.v / "log.md").read_text(encoding="utf-8"))
 
 

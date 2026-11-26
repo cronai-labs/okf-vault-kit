@@ -587,13 +587,13 @@ class LlmAskKeepsNSources(unittest.TestCase):
 
 
 class MinutesPassesTheConfidentialChoice(unittest.TestCase):
-    def test_hidden_by_default_and_shown_on_request(self):
+    def test_raise_by_default_and_plain_with_keep_open(self):
         seen = []
 
         def record(*args, **kw):
             seen.append(kw)
-            return types.SimpleNamespace(path="02-meetings/x.md", people=[], project=None, unresolved=[],
-                                         outcomes=[], decisions=[], actions=[], skipped=[])
+            return types.SimpleNamespace(path="02-meetings/x.md", people=[], names=[], project=None, unresolved=[],
+                                         confidential_links=[], outcomes=[], decisions=[], actions=[], skipped=[])
 
         tmp = Path(tempfile.mkdtemp(prefix="okf-minutes-"))
         self.addCleanup(shutil.rmtree, tmp, True)
@@ -604,12 +604,33 @@ class MinutesPassesTheConfidentialChoice(unittest.TestCase):
         kit.kitrecon.file_minutes = record
         try:
             with contextlib.redirect_stdout(io.StringIO()):
-                for extra in ((), ("--show-confidential",)):
+                for extra in ((), ("--keep-open",)):
                     self.assertEqual(kit.main(["minutes", str(recap), "--title", "Sync", "--vault", str(tmp / "vault"),
                                                "--dry-run", *extra]), 0)
         finally:
             kit.kitrecon.file_minutes = real
-        self.assertEqual([kw.get("hide_confidential") for kw in seen], [True, False])
+        self.assertEqual([kw.get("mode") for kw in seen], ["raise", "plain"])
+
+    def test_the_raise_is_announced_and_keep_open_files_it_open(self):
+        v = temp_vault()
+        self.addCleanup(shutil.rmtree, v.parent, True)
+        recap = v.parent / "recap.txt"
+        recap.write_text("Alex and Sam met.\nDecision: ship it\n", encoding="utf-8")
+
+        def run(*extra: str) -> str:
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(kit.main(["minutes", str(recap), "--vault", str(v), "--date", "2026-09-14", *extra]), 0)
+            return out.getvalue()
+
+        raised = run("--title", "Raised")
+        self.assertIn("marked confidential because it links 2 note(s) marked confidential", raised)
+        self.assertIn("--keep-open", raised)
+        self.assertIn("would be marked confidential", run("--title", "Dry", "--dry-run"))
+        kept = run("--title", "Kept", "--keep-open")
+        self.assertNotIn("marked confidential", kept)
+        fm = kit.kitlib.parse_note(v / "02-meetings/2026-09-14-kept.md", v).frontmatter
+        self.assertEqual((fm["people"], fm["sensitivity"]), (["Alex", "Sam"], "internal"))
 
 
 if __name__ == "__main__":

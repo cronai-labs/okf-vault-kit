@@ -115,26 +115,55 @@ class PolicyLayer(unittest.TestCase):
 
     def test_minutes_result_names_no_confidential_person_or_project(self):
         """The tool's result, and the note it writes, used to name exactly the confidential notes the
-        recap mentioned: one call told the model which names are confidential (#52)."""
+        recap mentioned: one call told the model which names are confidential (#52). Under the default
+        policy a name is returned as the note's `people:` holds it, as written, never as a path."""
+        (self.vault / "03-projects/kestrel.md").write_text(
+            "---\ntype: project\ntitle: Codename Kestrel\ndescription: d\nstate: active\nsensitivity: confidential\n---\n# K\n",
+            encoding="utf-8", newline="\n")
+        recap = "alex example, Sam and the Codename Kestrel team met.\nDecision: ship it\n"
+        res = guarded(self.vault).file_minutes(recap, "Hidden sync", "2026-09-22")
+        self.assertEqual(sorted(res["people"]), ["Sam", "alex example"], res)
+        self.assertIsNone(res["project"])
+        self.assertFalse(res["marked_confidential"])
+        dumped = json.dumps(res)
+        for leak in ("alex-example", "sam-example", "Alex Example", "Sam Example", "05-people", "kestrel.md", "Kestrel"):
+            self.assertNotIn(leak, dumped)
+        written = kitlib.parse_note(self.vault / res["path"], self.vault).frontmatter
+        self.assertEqual((sorted(written["people"]), written["project"], written["sensitivity"]),
+                         (["Sam", "alex example"], "", "internal"))
+
+    def test_minutes_result_is_the_same_for_a_confidential_and_an_unknown_name(self):
+        """Passed in `people`, a confidential name and a name the vault does not know come back alike."""
+        def shape(res: dict, name: str) -> dict:
+            return json.loads(json.dumps({k: v for k, v in res.items() if k != "path"}).replace(name, "NAME"))
+
+        hidden = guarded(self.vault).file_minutes("Decision: ship it", "Explicit sync", "2026-09-23", people="Sam Example")
+        unknown = guarded(self.vault).file_minutes("Decision: ship it", "Explicit sync", "2026-09-24", people="Nobody Known")
+        self.assertEqual((hidden["people"], hidden["unresolved"]), (["Sam Example"], ["Sam Example"]))
+        self.assertEqual(shape(hidden, "Sam Example"), shape(unknown, "Nobody Known"))
+        fm = [kitlib.parse_note(self.vault / r["path"], self.vault).frontmatter for r in (hidden, unknown)]
+        self.assertEqual([(f["people"], f["sensitivity"]) for f in fm],
+                         [(["Sam Example"], "internal"), (["Nobody Known"], "internal")])
+
+    def test_minutes_keeps_a_confidential_name_detected_in_the_recap(self):
+        """Pinned, not endorsed: only names of notes are detected in a recap, so a confidential person
+        the recap mentions is kept as written while an unknown name in the text is not listed at all.
+        A model that files a recap can tell the two apart; the docs say so (security.md)."""
+        res = guarded(self.vault).file_minutes("Sam and Zed Unknown met.\n", "Detected sync", "2026-09-25")
+        self.assertEqual((res["people"], res["unresolved"]), (["Sam"], ["Sam"]))
+
+    def test_minutes_with_show_confidential_raises_the_note(self):
         (self.vault / "03-projects/kestrel.md").write_text(
             "---\ntype: project\ntitle: Codename Kestrel\ndescription: d\nstate: active\nsensitivity: confidential\n---\n# K\n",
             encoding="utf-8", newline="\n")
         recap = "Alex Example, Sam Example and the Codename Kestrel team met.\nDecision: ship it\n"
-        res = guarded(self.vault).file_minutes(recap, "Hidden sync", "2026-09-22")
-        self.assertEqual((res["people"], res["project"]), ([], None), res)
-        dumped = json.dumps(res)
-        for leak in ("alex-example", "sam-example", "kestrel.md"):
-            self.assertNotIn(leak, dumped)
-        written = kitlib.parse_note(self.vault / res["path"], self.vault).frontmatter
-        self.assertEqual((written["people"], written["project"]), ([], ""))
-
-        explicit = guarded(self.vault).file_minutes("x", "Explicit sync", "2026-09-23", people="Sam Example, Nobody Known")
-        self.assertEqual(explicit["people"], [])
-        self.assertEqual(explicit["unresolved"], ["Sam Example", "Nobody Known"], "a confidential name reads like an unknown one")
-
         shown = guarded(self.vault, hide_confidential=False).file_minutes(recap, "Shown sync", "2026-09-24")
         self.assertEqual(set(shown["people"]), {"05-people/alex-example.md", "05-people/sam-example.md"})
         self.assertEqual(shown["project"], "03-projects/kestrel.md")
+        self.assertTrue(shown["marked_confidential"])
+        written = kitlib.parse_note(self.vault / shown["path"], self.vault).frontmatter
+        self.assertEqual(written["sensitivity"], "confidential")
+        self.assertNotIn("Shown sync", (self.vault / "log.md").read_text(encoding="utf-8"))
 
     def test_read_only_and_allow_list(self):
         ro = guarded(self.vault, read_only=True)

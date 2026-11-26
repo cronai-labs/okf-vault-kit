@@ -554,14 +554,15 @@ class GraphTools(unittest.TestCase):
         with self.assertRaises(ob.BridgeError):
             self.b.file_minutes("x", "Release sync", "2026-09-20")
 
-    def test_minutes_hide_confidential_reaches_the_entity_match(self):
-        """The backend has no policy; Guarded passes it hide_confidential, and it must arrive."""
-        res = self.b.file_minutes("Alex Example joined.\nDecision: ship it", "Hidden sync", "2026-09-21", people="Sam Example",
-                                  hide_confidential=True)
-        self.assertEqual((res["people"], res["unresolved"]), ([], ["Sam Example"]))
+    def test_minutes_mode_reaches_the_entity_match(self):
+        """The backend has no policy; Guarded passes it the mode, and it must arrive."""
+        res = self.b.file_minutes("Alex Example joined.\nDecision: ship it", "Plain sync", "2026-09-21", people="Sam Example",
+                                  mode="plain")
+        self.assertEqual((res["people"], res["unresolved"]), (["Sam Example"], ["Sam Example"]))
         cli = ob.CliBackend(vault_name="v", binary="obsidian-not-there", vault_path=str(self.vault))
-        res = cli.file_minutes("Alex Example joined.", "Hidden sync two", "2026-09-22", hide_confidential=True)
-        self.assertEqual(res["people"], [])
+        res = cli.file_minutes("Alex Example joined.", "Plain sync two", "2026-09-22", mode="plain")
+        self.assertEqual(res["people"], ["Alex Example"])
+        self.assertNotIn("05-people", json.dumps(res))
 
 
 class CliBackendGraph(unittest.TestCase):
