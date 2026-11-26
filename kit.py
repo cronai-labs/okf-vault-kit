@@ -529,7 +529,7 @@ def _graph(vault: Path, show_confidential: bool = False, onto: kitgraph.Ontology
 def _hidden_line(full: int, shown: kitgraph.Graph) -> str:
     """A count, never a name: how many notes the redaction left out, and how to include them."""
     left_out = full - len(shown.nodes)
-    return (f"{left_out} note(s) marked sensitivity: confidential left out (--show-confidential includes them)"
+    return (f"{left_out} confidential note(s) left out (--show-confidential includes them)"
             if left_out else "")
 
 
@@ -668,7 +668,7 @@ def cmd_todos(args) -> int:
         return not owner or (t.owner or "").lower() == owner
 
     hidden = sum(1 for t in full.tasks if t.file in full.confidential and mine(t)) if rep is not full else 0
-    left_out = (f"{hidden} task(s) in notes marked sensitivity: confidential left out (--show-confidential includes them)"
+    left_out = (f"{hidden} task(s) in confidential notes left out (--show-confidential includes them)"
                 if hidden else "")
     tasks = [t for t in (rep.tasks if args.all else rep.open) if mine(t)]
     if args.json:
@@ -1115,7 +1115,7 @@ def cmd_llm_ask(args) -> int:
         if packs:
             facts = "\n\nFacts from the vault graph (authoritative for relations, states, dates):\n\n" + "\n".join(packs)
     if withheld:
-        print(f"{len(withheld)} matching note(s) marked sensitivity: confidential were left out of the prompt.")
+        print(f"{len(withheld)} matching confidential note(s) were left out of the prompt.")
     if not hits and not facts:
         print("no matching notes found that may be sent to the model")
         return 1

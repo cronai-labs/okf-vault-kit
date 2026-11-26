@@ -45,7 +45,7 @@ PEOPLE_DESC = ("prefers written context before meetings", "owns the embedding-mo
 QUESTION = "what are the merger terms"
 # names the open project too, so its context pack is in the prompt: the pack that used to label the confidential note
 GRAPH_QUESTION = "what are the merger terms for the search relaunch"
-LEFT_OUT = re.compile(r"^(\d+) matching note\(s\) marked sensitivity: confidential were left out of the prompt\.$", re.M)
+LEFT_OUT = re.compile(r"^(\d+) matching confidential note\(s\) were left out of the prompt\.$", re.M)
 
 
 def run(*args, **kw):
@@ -177,7 +177,7 @@ class GraphCommandsRedactByDefault(unittest.TestCase):
     def test_build_writes_no_confidential_node_into_any_file(self):
         r = self.graph("build")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertIn("3 note(s) marked sensitivity: confidential left out", r.stdout)
+        self.assertIn("3 confidential note(s) left out", r.stdout)
         kit_dir = self.vault / ".kit"
         for name in ("graph.json", "graph.jsonld", "graph.nt"):
             self.assert_redacted((kit_dir / name).read_text(encoding="utf-8"), name)
@@ -503,7 +503,7 @@ class TodosLeaveConfidentialTasksOut(unittest.TestCase):
     # one commitment in two notes: done in a visible note, still open in the confidential one
     SHARED_OPEN = "- [ ] Renew the shared certificate bundle — me, due 2026-10-01\n"
     SHARED_DONE = "- [x] Renew the shared certificate bundle — me, due 2026-10-01\n"
-    LEFT_OUT = re.compile(r"^(\d+) task\(s\) in notes marked sensitivity: confidential left out "
+    LEFT_OUT = re.compile(r"^(\d+) task\(s\) in confidential notes left out "
                           r"\(--show-confidential includes them\)$", re.M)
 
     def setUp(self):

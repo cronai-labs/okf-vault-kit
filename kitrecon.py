@@ -408,7 +408,7 @@ def _reconcile_superseded(vault: Path, g: kitgraph.Graph, apply: bool) -> list[C
             # reconcile output (and `--json`, which agents read) says so instead of naming it (#52).
             msg = f.message
             if any(_node_confidential(vault, g, r) for r in f.refs):
-                msg = f"is superseded by a note marked `sensitivity: confidential` but has state `{g.nodes[f.node].props.get('state')}`" if f.node in g.nodes else "is superseded by a note marked `sensitivity: confidential`"
+                msg = f"is superseded by a confidential note but has state `{g.nodes[f.node].props.get('state')}`" if f.node in g.nodes else "is superseded by a confidential note"
             ch = Change("state_conflict", f.node, msg)
             if apply:
                 kitlib.set_frontmatter(vault / f.node, {"state": "superseded"})
@@ -616,7 +616,7 @@ def render_digest(rep: TodoReport, from_file: str = DIGEST, actor: str = "proces
              "tags: [system, generated]", "sensitivity: internal", f"generated: {{ by: {actor}, at: \"{now}\" }}", "---", "",
              "# Todo Digest", "", f"{len(rep.open)} open tasks across {len({t.file for t in rep.tasks})} notes. Ticking a task here does nothing — tick it where it lives (links on every line).", ""]
     if rep.hidden:
-        lines += [f"{rep.hidden} task(s) in notes marked `sensitivity: confidential` are not listed, nor any duplicate that involves one.", ""]
+        lines += [f"{rep.hidden} task(s) in confidential notes are not listed, nor any duplicate that involves one.", ""]
     def section(title: str, items: list[Task], empty: str):
         lines.append(f"## {title}"); lines.append("")
         if not items:

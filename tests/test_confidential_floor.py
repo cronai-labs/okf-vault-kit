@@ -385,7 +385,7 @@ class Parity(_FloorVault):
         self.assert_clean(prompt, "the llm ask prompt")
         self.assertIn("PLOVER-BODY", prompt)
         self.assert_clean(r.stdout, "the llm ask console")
-        left_out = re.search(r"^(\d+) matching note\(s\)", r.stdout, re.M)
+        left_out = re.search(r"^(\d+) matching confidential note\(s\)", r.stdout, re.M)
         self.assertIsNotNone(left_out, r.stdout)
         self.assertGreaterEqual(int(left_out.group(1)), 4)
 
