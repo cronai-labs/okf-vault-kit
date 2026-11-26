@@ -196,6 +196,18 @@ class TheFloorDecides(_FloorVault):
             with self.assertRaises(bp.PolicyError, msg=ref):
                 g.read_note(ref)
 
+    def test_the_bridge_refuses_a_template_under_a_floor(self):
+        # A labelled template carried its `sensitivity` line into the copy; a floor does not, so
+        # create_note would copy the template's text into a note nothing hides.
+        set_config(self.vault, 'confidentiality:\n  confidential_folders: ["90-templates/hr"]\n')
+        write(self.vault, "90-templates/hr/letter.md", "# Letter\n\nLETTER-BODY salary bands\n")
+        g = guarded(self.vault)
+        for spelling in ("hr/letter", "hr/letter.md", "HR/Letter"):
+            with self.assertRaisesRegex(bp.PolicyError, "template", msg=spelling):
+                g.create_note("00-inbox/x", template=spelling)
+        self.assertFalse((self.vault / "00-inbox/x.md").exists())
+        g.create_note("00-inbox/y", template="meeting")          # an open template still works
+
     def test_a_forced_minutes_overwrite_writes_no_label_for_a_floor(self):
         set_config(self.vault, 'confidentiality:\n  confidential_folders: ["02-meetings"]\n')
         day = dt.date(2026, 9, 21)

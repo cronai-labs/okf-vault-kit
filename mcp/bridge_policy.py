@@ -224,6 +224,11 @@ class Guarded:
             tpl = str(template).strip().replace("\\", "/")
             if posixpath.isabs(tpl) or re.match(r"^[A-Za-z]:", tpl) or ".." in tpl.split("/"):
                 raise PolicyError(f"{tool}: template `{template}` must be a name under 90-templates")
+            # The copy carries the template's text but not a floor over it, only a `sensitivity`
+            # line: a confidential template would come out as an ordinary note (#120).
+            tpl_rel = "90-templates/" + tpl.strip("/") + ("" if tpl.lower().endswith(".md") else ".md")
+            if self._confidential(tpl_rel):
+                raise PolicyError(f"{tool}: template `{template}` is confidential; agents do not copy it (policy)")
         if len(payload.encode("utf-8")) > self.policy.max_write_bytes:
             raise PolicyError(f"{tool}: payload of {len(payload.encode('utf-8'))} bytes exceeds the {self.policy.max_write_bytes}-byte limit; split it")
         now = time.monotonic()
