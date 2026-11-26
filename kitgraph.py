@@ -11,6 +11,7 @@ Standard library + PyYAML only.
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import datetime as dt
 import difflib
 import json
@@ -193,6 +194,9 @@ class Finding:
     node: str
     message: str
     suggestion: str = ""
+    # Every other node id the message or suggestion names. `redact` drops a finding that names a
+    # hidden note: its own `node` is not the only id a finding can carry (#52). Not exported.
+    refs: tuple[str, ...] = ()
 
     def render(self) -> str:
         s = f"{self.level:7} {self.code:26} {self.node}: {self.message}"
@@ -503,17 +507,19 @@ def _check_props(g: Graph, node: Node, specs: dict[str, PropSpec], onto: Ontolog
                     tnode = g.nodes[tid]
                     if spec.range and tid != SELF_ID and not any(onto.is_a(tnode.type, r) for r in spec.range):
                         g.findings.append(Finding("error", "range_violation", nid,
-                                                  f"`{name}` points at {tid} of type `{tnode.type}`; expected {spec.range}"))
+                                                  f"`{name}` points at {tid} of type `{tnode.type}`; expected {spec.range}",
+                                                  refs=(tid,)))
                     g.add_edge(nid, name, tid, "frontmatter")
                 elif method == "ambiguous":
                     g.findings.append(Finding("warning", "ambiguous_ref", nid, f"`{name}: {v}` matches several notes: {cands}",
-                                              "use a markdown link to the intended note"))
+                                              "use a markdown link to the intended note", refs=tuple(cands)))
                 elif method == "external":
                     continue
                 else:
                     level = "info" if spec.soft else "warning"
                     sugg = f"did you mean {', '.join(cands)}?" if cands else (f"create a `{spec.range[0]}` note for it" if spec.range else "")
-                    g.findings.append(Finding(level, "unresolved_ref", nid, f"`{name}: {v}` does not resolve to a note", sugg))
+                    g.findings.append(Finding(level, "unresolved_ref", nid, f"`{name}: {v}` does not resolve to a note", sugg,
+                                              refs=tuple(cands)))
     # unknown props are tolerated (OKF); nothing to report
 
 
@@ -575,13 +581,15 @@ def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
                 bad = [dst for src, p, dst, _ in g.out_edges(nid) if p in ("links_to", "cites") and dst in knowledge_bad]
                 node.derived["at_risk"] = bool(bad)
                 if bad:
-                    g.findings.append(Finding("warning", "at_risk", nid, f"relies on stale/deprecated knowledge: {bad}", "re-verify the cited notes or update this one"))
+                    g.findings.append(Finding("warning", "at_risk", nid, f"relies on stale/deprecated knowledge: {bad}",
+                                              "re-verify the cited notes or update this one", refs=tuple(bad)))
         for nid, node in g.nodes.items():
             if node.kind == "note" and node.type == "project":
                 dep = [src for src, p, dst, _ in g.in_edges(nid) if p == "project" and (g.nodes[src].derived.get("at_risk") or src in knowledge_bad)]
                 node.derived["at_risk"] = bool(dep)
                 if dep:
-                    g.findings.append(Finding("warning", "project_at_risk", nid, f"depends on at-risk or stale notes: {dep}"))
+                    g.findings.append(Finding("warning", "project_at_risk", nid, f"depends on at-risk or stale notes: {dep}",
+                                              refs=tuple(dep)))
     if onto.rule("superseded"):
         # direct edges only: the transitive closure above would otherwise point every node in a chain at the newest decision
         for src, pred, dst, origin in g.edges:
@@ -590,7 +598,7 @@ def derive(g: Graph, onto: Ontology, now: dt.datetime) -> None:
                 old.derived["superseded_by"] = src
                 if old.props.get("state") != "superseded":
                     g.findings.append(Finding("warning", "state_conflict", dst, f"is superseded by {src} but has state `{old.props.get('state')}`",
-                                              "set state: superseded (kit.py reconcile --apply does this)"))
+                                              "set state: superseded (kit.py reconcile --apply does this)", refs=(src,)))
     if onto.rule("decision_needs_context"):
         for nid, node in g.nodes.items():
             if node.kind == "note" and node.type == "decision" and not any(p in ("project", "area") for _, p, _, _ in g.out_edges(nid)):
@@ -712,15 +720,30 @@ def redact(g: Graph, file_confidential: Callable[[str], bool]) -> Graph:
     `kit.py graph` and `llm ask --graph` print or write cannot drift apart (#52). Filtering each
     tool's output is not enough: the nodes table and the exports carry every note's title,
     description and full frontmatter, and a context pack labels each neighbour by its title.
+
+    Dropping the hidden nodes is not enough either: a visible node's derived values and findings
+    name other nodes (`superseded_by`, a state conflict, a "did you mean" suggestion), so a value
+    or finding that names a hidden id goes as well. The kept nodes are copies: `g` is shared (the
+    bridge caches it, `llm ask` reads mentions from it) and must stay whole.
     """
     hidden = {nid for nid, n in g.nodes.items() if node_confidential(n, file_confidential)}
     red = Graph(built_at=g.built_at, redacted=True)
-    red.nodes = {nid: n for nid, n in g.nodes.items() if nid not in hidden}
+    red.nodes = {nid: dataclasses.replace(n, derived={k: v for k, v in n.derived.items() if not _names(v, hidden)})
+                 for nid, n in g.nodes.items() if nid not in hidden}
     for src, pred, dst, origin in g.edges:
         if src not in hidden and dst not in hidden:
             red.add_edge(src, pred, dst, origin)
-    red.findings = [f for f in g.findings if f.node not in hidden]
+    red.findings = [f for f in g.findings if f.node not in hidden and not hidden.intersection(f.refs)]
     return red
+
+
+def _names(value: Any, ids: set[str]) -> bool:
+    """Does a derived value name one of `ids`? Exact ids only: a derived value is an id, a flag or a label."""
+    if isinstance(value, str):
+        return value in ids
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return any(isinstance(x, str) and x in ids for x in value)
+    return False
 
 
 def redact_vault(g: Graph, vault: Path) -> Graph:
