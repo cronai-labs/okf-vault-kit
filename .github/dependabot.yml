@@ -5,11 +5,18 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
-    commit-message: { prefix: "ci" }     # ci: never triggers a release
+    # Titles read `ci(deps): …`; a `ci` commit never triggers a release.
+    commit-message: { prefix: "ci", include: "scope" }
+    groups:
+      # Every action: minor and patch updates in one weekly PR. A major gets a PR of its own,
+      # so a breaking change is reviewed on its own rather than inside a batch.
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: pip
     directory: /
     schedule: { interval: weekly }
-    commit-message: { prefix: "build" }
+    commit-message: { prefix: "build", include: "scope" }   # titles read `build(deps): …`
     # The bridge targets the 2.x server API and a new major renames it, so the pin stops at
     # <3 on purpose; a bot must not walk it forward. The same reasoning held for the old v1 pin
     # (docs/decisions/mcp-sdk-pinned-to-v1.md, superseded when the bridge moved to 2.x).
