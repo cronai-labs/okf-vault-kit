@@ -247,11 +247,14 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
                               f"{kitlib.CONFIG_REL}; the files it matches now are denied one by one, a file it "
                               "matches later only after the next run")
         elif literal_safe(pat, PATTERN_UNSAFE):
-            patterns.append(pat)
+            # The spellings the kit matches: a rule without an extension covers the `.md` note too.
+            patterns += kitlib.path_rule_spellings(pat)
         else:
-            plan.notes.append(f"path rule {pat!r} is not carried over (it holds [ ] \\ ! # or edge spaces, which mean "
-                              "something else in a permission rule); the files it matches now are denied one by one, "
-                              "a file it matches later only after the next run")
+            # The config refuses [ ] \\ ! # in a path rule; what is left is a name with edge spaces
+            # or a line break inside the pattern.
+            plan.notes.append(f"path rule {pat!r} is not carried over (a name in it has edge spaces or a line break, "
+                              "which a permission rule may not match literally); the files it matches now are denied "
+                              "one by one, a file it matches later only after the next run")
     chosen = sorted(set(folders))
     # A folder inside another chosen folder, and a file inside any, adds nothing.
     chosen = [f for f in chosen if not any(_under(f, g) for g in chosen)]

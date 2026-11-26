@@ -746,6 +746,20 @@ def _glob_regex(pattern: str) -> re.Pattern[str]:
     return re.compile("".join(out), re.DOTALL)
 
 
+def path_rule_spellings(pattern: str) -> tuple[str, ...]:
+    """The spellings a path rule matches: itself, and with `.md` added when its last name has no
+    extension and does not end in `*` (which matches the `.md` already).
+
+    A reference is looked up with and without `.md`, so a rule without one covers the note too:
+    `07-knowledge/salary-review` hides `07-knowledge/salary-review.md` however it is referenced.
+    The generator writes the same spellings, so the kit and an agent's deny list agree.
+    """
+    last = pattern.rsplit("/", 1)[-1]
+    if last.endswith("*") or posixpath.splitext(last)[1]:
+        return (pattern,)
+    return (pattern, pattern + ".md")
+
+
 @dataclass(frozen=True)
 class ConfidentialityPolicy:
     """What `.kit/config.yml` declares confidential regardless of any note's own frontmatter.
@@ -766,7 +780,7 @@ class ConfidentialityPolicy:
         folders, paths = tuple(folders), tuple(paths)
         f = tuple(_match_form(x) for x in folders)
         p = tuple(_match_form(x) for x in paths)
-        return cls(f, p, tuple(_glob_regex(x) for x in p), folders, paths)
+        return cls(f, p, tuple(_glob_regex(s) for x in p for s in path_rule_spellings(x)), folders, paths)
 
     def in_folder(self, rel: str) -> bool:
         """Is this vault-relative path a declared folder or below one? (Path rules aside.)"""
@@ -790,6 +804,10 @@ class ConfidentialityPolicy:
 
 
 _GLOB_CHARS = set("*?[]")
+# Path rules support `*`, `?` and `**` only. A character class is gitignore syntax the kit's own
+# matching never had (it took `[` literally, so the rule matched nothing), and `\`, `!` and `#`
+# mean something else in an agent's deny rule than in the kit: refused rather than half-honoured.
+_PATH_RULE_REFUSED = set("[]\\!#")
 
 
 def _policy_entries(block: dict, key: str) -> list[str]:
@@ -800,6 +818,15 @@ def _policy_entries(block: dict, key: str) -> list[str]:
         raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} must be a list of strings (quote each entry)")
     out = []
     for raw in value:
+        if key == "confidential_paths":
+            bad = sorted(_PATH_RULE_REFUSED.intersection(raw))
+            if bad:
+                raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.confidential_paths entry {raw!r} holds "
+                                        f"{' '.join(bad)}; path rules support only * ? and ** (a folder goes under "
+                                        "confidential_folders)")
+            if raw.strip().endswith("/"):
+                raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.confidential_paths entry {raw!r} ends in `/`; "
+                                        "a path rule names files — put a folder under confidential_folders")
         entry = raw.strip().replace("\\", "/")
         parts = [x for x in entry.split("/") if x not in ("", ".")]
         if not parts:
@@ -825,6 +852,13 @@ def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
         return ConfidentialityPolicy()
     if not isinstance(data, dict):
         raise PolicyConfigError(f"{CONFIG_REL}: the file must be a mapping of keys")
+    # `Confidentiality:`, `confidentialty:` or a bare `confidential_folders:` at the top level would
+    # otherwise read as "no block", which is "nothing is confidential".
+    near = sorted(str(k) for k in data if k != "confidentiality" and str(k).casefold().startswith("confidential"))
+    if near:
+        raise PolicyConfigError(f"{CONFIG_REL}: top-level key(s) {', '.join(near)} look like the confidentiality "
+                                "block but are not `confidentiality:` (lower case, with "
+                                f"{' and/or '.join(CONFIDENTIALITY_KEYS)} under it)")
     if "confidentiality" not in data:
         return ConfidentialityPolicy()
     block = data["confidentiality"]
@@ -837,6 +871,30 @@ def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
                                 f"(known: {', '.join(CONFIDENTIALITY_KEYS)})")
     return ConfidentialityPolicy.build(_policy_entries(block, "confidential_folders"),
                                        _policy_entries(block, "confidential_paths"))
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    """SafeLoader that refuses a mapping key spelt twice; used for the confidentiality block only.
+
+    `yaml.safe_load` keeps the last of two equal keys and says nothing, so a second, emptier
+    `confidential_folders:` (or a second `confidentiality:` block) erased the first one's floors.
+    """
+
+    def construct_mapping(self, node, deep=False):
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, _value in node.value:
+                if key_node.tag == "tag:yaml.org,2002:merge":
+                    continue
+                key = self.construct_object(key_node, deep=True)
+                try:
+                    if key in seen:
+                        raise yaml.constructor.ConstructorError(None, None, f"found duplicate key {key!r}",
+                                                                key_node.start_mark)
+                    seen.add(key)
+                except TypeError:
+                    pass               # unhashable: the base constructor reports it
+        return super().construct_mapping(node, deep)
 
 
 _POLICY_CACHE: dict[str, tuple[Any, ConfidentialityPolicy | PolicyConfigError]] = {}
@@ -880,7 +938,11 @@ def _load_policy(path: Path, stamp: Any) -> ConfidentialityPolicy | PolicyConfig
     except (OSError, UnicodeDecodeError) as exc:
         return PolicyConfigError(f"{CONFIG_REL}: cannot be read as UTF-8 ({exc.__class__.__name__})")
     try:
-        data = yaml.safe_load(text)
+        loader = _UniqueKeyLoader(text)      # what yaml.safe_load does, with the duplicate check
+        try:
+            data = loader.get_single_data()
+        finally:
+            loader.dispose()
     except yaml.YAMLError as exc:
         return PolicyConfigError(f"{CONFIG_REL}: not valid YAML ({str(exc).splitlines()[0]})")
     try:
@@ -995,6 +1057,23 @@ def check_confidentiality(root: Path) -> Report:
         return rep
     if not (policy.folders or policy.paths):
         return rep
+    if policy.declared_paths:
+        # A rule that matches nothing is most often a misspelling, and it hides nothing. Every
+        # file, not only notes: path rules exist for CSVs and attachments.
+        unmatched = {p: ConfidentialityPolicy.build(paths=[p]) for p in policy.declared_paths}
+        for dirpath, dirnames, filenames in os.walk(root):
+            if Path(dirpath) == root:
+                dirnames[:] = [d for d in dirnames if d != ".git"]
+            rel_dir = Path(dirpath).relative_to(root).as_posix()
+            for name in filenames:
+                rel = name if rel_dir == "." else f"{rel_dir}/{name}"
+                for p in [p for p, one in unmatched.items() if one.covers(rel)]:
+                    del unmatched[p]
+            if not unmatched:
+                break
+        for p in unmatched:
+            rep.warnings.append(f"{CONFIG_REL}: path rule {p!r} matches no file in the vault — check its spelling "
+                                "(it hides nothing until a file matches)")
     for note in load_vault(root):
         rep.checked += 1
         if not policy.covers(note.rel) or not note.frontmatter:

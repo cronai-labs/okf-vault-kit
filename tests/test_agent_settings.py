@@ -171,6 +171,15 @@ class Plan(_Vault):
         self.assertIn("Read(./99-system/extra.yml)", plan.deny)       # what it matches now, one by one
         self.assertTrue(any(".kit/config.yml" in n and "not carried over" in n for n in plan.notes))
 
+    def test_a_path_rule_without_an_extension_goes_out_in_both_spellings(self):
+        # The kit hides `notes/plan.md` for the rule `notes/plan`; a deny rule `Read(./notes/plan)`
+        # does not name that file, so a plan.md made after the run would stay readable to the agent.
+        set_config(self.v, 'confidentiality:\n  confidential_paths: ["notes/plan"]\n')
+        plan = kitagent.claude_code_plan(self.v, self.export())
+        for spelling in ("notes/plan", "notes/plan.md"):
+            self.assertIn(f"Read(./{spelling})", plan.deny)
+            self.assertIn(f"./{spelling}", plan.deny_read)
+
     def test_a_name_a_rule_cannot_match_literally_denies_its_parent_folder(self):
         for name in ("odd [x]/n[1].md", "spaced/ lead.md", "bang/!x.md", "hash/#x.md"):
             write(self.v, f"07-knowledge/{name}", MARKED)

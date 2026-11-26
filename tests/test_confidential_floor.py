@@ -143,6 +143,30 @@ class TheFloorDecides(_FloorVault):
         self.assertTrue(pol.covers("d/any/depth.md"))
         self.assertFalse(pol.covers("e/x.csv"))
 
+    def test_a_rule_without_an_extension_covers_the_note_both_ways(self):
+        # The note gets one verdict however it is referenced: the rule was only ever compared with
+        # the reference plus `.md`, never with itself plus `.md`.
+        pol = kitlib.ConfidentialityPolicy.build(paths=["07-knowledge/salary-review", "a/plan?"])
+        for ref in ("07-knowledge/salary-review", "07-knowledge/salary-review.md", "a/plan1.md", "a/plan1"):
+            self.assertTrue(pol.covers(ref), ref)
+        self.assertFalse(pol.covers("07-knowledge/salary-review-2.md"))
+        self.assertEqual(kitlib.path_rule_spellings("07-knowledge/salary-review"),
+                         ("07-knowledge/salary-review", "07-knowledge/salary-review.md"))
+        for rule in ("x/*.csv", "x/plan.md", "x/plan-*", "x/**"):
+            self.assertEqual(kitlib.path_rule_spellings(rule), (rule,), "an extension, or a `*` that matches it already")
+
+    def test_a_path_rule_ending_in_a_slash_points_to_the_folders_key(self):
+        with self.assertRaisesRegex(kitlib.PolicyConfigError, "confidential_folders"):
+            kitlib.parse_confidentiality({"confidentiality": {"confidential_paths": ["05-people/"]}})
+        with self.assertRaisesRegex(kitlib.PolicyConfigError, r"only \* \? and \*\*"):
+            kitlib.parse_confidentiality({"confidentiality": {"confidential_paths": ["exports/[0-9]*.csv"]}})
+
+    def test_validate_warns_about_a_path_rule_that_matches_no_file(self):
+        set_config(self.vault, CONFIG.replace('"07-knowledge/**/harrier-*.md"', '"07-knowledge/**/harrier-*.md", "nowhere/*.pdf"'))
+        r = run("validate", "--vault", str(self.vault))
+        self.assertIn("warn   .kit/config.yml: path rule 'nowhere/*.pdf' matches no file in the vault", r.stdout)
+        self.assertNotIn("path rule '08-resources/exports/*.csv' matches no file", r.stdout, "it matches payroll.csv")
+
     def test_a_path_rule_hides_a_csv_and_only_the_floor_judges_it(self):
         self.assertIs(kitlib.confidentiality(self.vault, CSV_REL), True)
         self.assertIs(kitlib.confidentiality(self.vault, CSV_OPEN_REL), False,
@@ -197,6 +221,20 @@ BROKEN = {
     "escapes": 'confidentiality:\n  confidential_folders: ["../elsewhere"]\n',
     "empty entry": 'confidentiality:\n  confidential_paths: ["  "]\n',
     "folder glob": 'confidentiality:\n  confidential_folders: ["05-people/*"]\n',
+    # A path rule that would silently match nothing, or something else than it says (#120 review).
+    "path rule ends in a slash": 'confidentiality:\n  confidential_paths: ["05-people/"]\n',
+    "character class": 'confidentiality:\n  confidential_paths: ["exports/[0-9]*.csv"]\n',
+    "backslash": 'confidentiality:\n  confidential_paths: ["exports\\\\x.csv"]\n',
+    "bang": 'confidentiality:\n  confidential_paths: ["exports/!x.csv"]\n',
+    "hash": 'confidentiality:\n  confidential_paths: ["exports/#x.csv"]\n',
+    # A key spelt twice: yaml.safe_load keeps the last one, which erased the first.
+    "duplicate key in the block": 'confidentiality:\n  confidential_folders: ["05-people"]\n  confidential_folders: []\n',
+    "duplicate block": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
+                        'confidentiality:\n  confidential_paths: ["x.csv"]\n'),
+    # Near misses of the block's name at the top level protect nothing unless they are refused.
+    "capitalised block": 'Confidentiality:\n  confidential_folders: ["05-people"]\n',
+    "misspelt block": 'confidentialty:\n  confidential_folders: ["05-people"]\n',
+    "key at the top level": 'confidential_folders: ["05-people"]\n',
 }
 
 
