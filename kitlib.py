@@ -797,18 +797,24 @@ class ConfidentialityPolicy:
     def outside_open(self, rel: str) -> bool:
         """With `open_folders` declared: does this reference lie outside every open folder? (#126)
 
-        False when none are declared. Judged on the path as written, with `.trash/` removed (a
-        deleted note keeps the verdict of the place it came from), and with `.md` added: the
-        reference `open` may be the root note `open.md`. A path that leaves the vault is outside.
+        False when none are declared. Every form must be inside an open folder: the path as
+        written, the same with `.trash/` removed (as floors judge it), and each with `.md` added,
+        since the reference `open` may be the root note `open.md`. So `.trash/` stays outside
+        unless it is open itself and the origin is too: the trash does not record where a file
+        came from, and an agent's sandbox refuses it. A path that leaves the vault is outside.
         Symlinks are `confidential_floor`'s business.
         """
         if not self.open_folders:
             return False
-        form = _match_form(rel).removeprefix(TRASH_PREFIX)
-        if form in ("", "..") or form.startswith("../"):
-            return True
-        forms = {form} if form.endswith(".md") else {form, form + ".md"}
-        return not all(any(f == o or f.startswith(o + "/") for o in self.open_folders) for f in forms)
+        forms = {_match_form(rel)}
+        forms |= {f[len(TRASH_PREFIX):] for f in forms if f.startswith(TRASH_PREFIX)}
+        forms |= {f + ".md" for f in forms if not f.endswith(".md")}
+        for form in forms:
+            if form in ("", "..", ".md") or form.startswith("../"):
+                return True
+            if not any(form == o or form.startswith(o + "/") for o in self.open_folders):
+                return True
+        return False
 
     def in_folder(self, rel: str) -> bool:
         """Is this vault-relative path a declared folder or below one? (Path rules aside.)"""

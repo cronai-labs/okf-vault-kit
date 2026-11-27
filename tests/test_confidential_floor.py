@@ -650,15 +650,20 @@ class OpenFoldersDecide(_OpenVault):
         for rel in (NO_FM_REL, LABELLED_REL, HARRIER_REL, CSV_REL):
             self.assertIs(kitlib.confidentiality(self.vault, rel), True, rel)
 
-    def test_the_trash_keeps_the_verdict_of_where_a_note_came_from(self):
-        write(self.vault, ".trash/04-areas/old.md", "# Old\n")
-        write(self.vault, ".trash/03-projects/old.md", "# Old\n")
-        write(self.vault, ".trash/04-areas/board/old.md", "# Old\n")
-        self.assertIs(kitlib.confidentiality(self.vault, ".trash/04-areas/old.md"), False)
-        self.assertIs(kitlib.confidentiality(self.vault, ".trash/03-projects/old.md"), True)
-        self.assertIs(kitlib.confidentiality(self.vault, ".trash/04-areas/board/old.md"), True)
+    def test_the_trash_is_outside_every_open_folder(self):
+        # The trash does not record where a file came from: `.trash/04-areas/` may as well be a
+        # deleted `clients/x/04-areas/`. Judged over both forms, as floors are, it stays hidden,
+        # and an agent's sandbox and hook refuse `.trash/` too.
+        for rel in (".trash/04-areas/old.md", ".trash/03-projects/old.md", ".trash/04-areas/board/old.md"):
+            write(self.vault, rel, "# Old\n")
+            self.assertIs(kitlib.confidentiality(self.vault, rel), True, rel)
+        pol = kitlib.confidentiality_policy(self.vault)
+        self.assertTrue(pol.outside_open(".trash/04-areas/plover.md"))
+        self.assertTrue(pol.outside_open(".Trash/07-knowledge/x"))
+        trash_open = kitlib.ConfidentialityPolicy.build(open_folders=[".trash"])
+        self.assertTrue(trash_open.outside_open(".trash/03-projects/x.md"), "the origin is judged too")
 
-    def test_the_cli_shows_everything_with_show_confidential(self):
+    def test_the_bridge_shows_everything_with_show_confidential(self):
         g = bp.Guarded(ob.FsBackend(self.vault), bp.Policy(audit_path=None, hide_confidential=False), self.vault)
         self.assertIn("CONDOR-BODY", g.read_note(CONDOR_REL))
         with self.assertRaises(bp.PolicyError):
