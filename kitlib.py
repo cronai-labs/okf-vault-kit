@@ -144,6 +144,13 @@ def parse_note(path: Path, root: Path) -> Note:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:  # pragma: no cover - exercised via tests with bad yaml
         return Note(path, rel, None, body, fm_error=f"YAML error: {exc}")
+    except ValueError as exc:
+        # Valid syntax, impossible value: PyYAML reads an unquoted `2026-02-30` as a date and its
+        # constructor raises a bare ValueError, which took every command over the vault down (#114).
+        # The note is kept with no frontmatter, as for a YAML error: `validate` names it, and every
+        # reader treats it as confidential, because we cannot tell that it is not.
+        return Note(path, rel, None, body, fm_error=(f"frontmatter cannot be read: {exc} — a date or time that does not "
+                                                     "exist? YAML reads an unquoted YYYY-MM-DD as a date; fix it, or quote it"))
     if data is None:
         data = {}
     if not isinstance(data, dict):

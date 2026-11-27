@@ -171,6 +171,19 @@ class FsBackend(unittest.TestCase):
                          [(f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
                            "search, the graph and todos; re-save it as UTF-8")])
 
+    def test_an_impossible_date_does_not_break_the_read_tools(self):
+        """`created: 2026-02-30` is valid YAML syntax, and PyYAML's date constructor raised a bare
+        ValueError for it, which took down search, todos and every graph tool for the vault (#114)."""
+        rel = "07-knowledge/bad-date.md"
+        (self.vault / rel).write_text("---\ntype: concept\ntitle: Bad date\ndescription: x\ncreated: 2026-02-30\n---\nhybrid search\n",
+                                      encoding="utf-8")
+        self.assertTrue(self.b.search("hybrid search", 5))
+        self.assertIn(rel, self.b.list_files("07-knowledge"))
+        self.assertIsInstance(self.b.todos()["open"], int)
+        self.assertTrue(self.b.graph_query("SELECT id FROM nodes")["rows"])
+        self.assertTrue(self.b.graph_neighbors("03-projects/search-relaunch.md", 1))
+        self.assertIn("search-relaunch", self.b.graph_context("03-projects/search-relaunch.md"))
+
     def test_a_note_we_cannot_decode_is_a_bridge_error_on_every_tool_that_touches_it(self):
         """The tools that name one file, rather than scanning: with --show-confidential nothing
         stops them earlier, and a UnicodeDecodeError traceback is not an answer a model can act on."""

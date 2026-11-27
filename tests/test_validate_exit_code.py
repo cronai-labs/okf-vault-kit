@@ -99,3 +99,42 @@ class AMisplacedDayNoteIsAHygieneFinding(unittest.TestCase):
 
     def test_strict_fails_on_it(self):
         self.assertEqual(validate(self.vault, "--strict").returncode, 1)
+
+
+class AnImpossibleDateIsAFindingNotATraceback(unittest.TestCase):
+    """`created: 2026-02-30` parses as YAML syntax, then PyYAML's date constructor raised a bare
+    ValueError, which stopped `validate`, `index` and `graph build` with a traceback (#114, #108)."""
+
+    REL = "07-knowledge/bad-date.md"
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, ignore_errors=True)
+        (self.vault / self.REL).write_text(
+            "---\ntype: concept\ntitle: Bad date\ndescription: probe\ncreated: 2026-02-30\n---\n\nbody\n",
+            encoding="utf-8", newline="\n")
+
+    def kit(self, *args):
+        return subprocess.run(KIT + [*args, "--vault", str(self.vault)], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", check=False)
+
+    def test_validate_names_the_file_and_fails_conformance(self):
+        """Its frontmatter cannot be read at all, so `type` cannot be checked: an OKF error, exit 1."""
+        r = validate(self.vault)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertIn(f"{self.REL}: frontmatter cannot be read", r.stdout)
+        self.assertIn("day is out of range for month", r.stdout)
+        self.assertEqual(r.returncode, 1, r.stdout)
+
+    def test_index_names_the_file_and_leaves_it_out(self):
+        r = self.kit("index")
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn(self.REL, r.stderr)
+        self.assertNotIn("bad-date", (self.vault / "index.md").read_text(encoding="utf-8"),
+                         "frontmatter we cannot read counts as confidential")
+
+    def test_graph_build_still_builds(self):
+        r = self.kit("graph", "build")
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(r.returncode, 0, r.stderr)

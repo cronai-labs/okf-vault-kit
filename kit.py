@@ -320,8 +320,14 @@ def _write_kit_config(vault: Path, collection: str) -> None:
 # ---------------------------------------------------------------- index / validate / log
 
 def cmd_index(args) -> int:
-    out = kitlib.write_index(_vault(args.vault, write=True))
+    vault = _vault(args.vault, write=True)
+    out = kitlib.write_index(vault)
     print(f"wrote {out}")
+    # The index counts such a note as "not listed" and names nothing, since it is a file others
+    # read. This terminal is the user's own, so say which notes those are and why (#114).
+    for note in kitlib.load_vault(vault):
+        if note.fm_error:
+            print(f"warning: {note.rel} is not listed: {note.fm_error} (`kit.py validate` reports it)", file=sys.stderr)
     return 0
 
 
