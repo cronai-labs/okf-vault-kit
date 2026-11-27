@@ -126,19 +126,22 @@ class Ontology:
             return table[value]
         return value
 
-    def normalise(self, fm: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-        """Apply property/value aliases. Returns (canonical frontmatter, notes about what was mapped)."""
+    def normalise(self, fm: dict[str, Any]) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        """Apply property/value aliases. Returns (canonical frontmatter, (message, suggestion) per mapping)."""
         out: dict[str, Any] = {}
-        notes: list[str] = []
+        notes: list[tuple[str, str]] = []
         for k, v in fm.items():
             ck = self.canonical_key(k)
             if ck != k:
-                notes.append(f"`{k}` mapped to canonical `{ck}`")
                 if ck in fm:  # canonical present too — canonical wins
+                    notes.append((f"`{k}` mapped to canonical `{ck}`, which the note also sets; `{ck}` wins",
+                                  f"merge `{k}` into `{ck}` by hand and remove `{k}`"))
                     continue
+                notes.append((f"`{k}` mapped to canonical `{ck}`: rename `{k}` to `{ck}`",
+                              "`kit.py validate --fix-aliases` lists the renames, `--apply` makes them"))
             cv = self.canonical_value(ck, v)
             if cv != v:
-                notes.append(f"`{ck}: {v}` mapped to `{cv}`")
+                notes.append((f"`{ck}: {v}` mapped to `{cv}`", f"change the value to `{cv}` so every tool sees the canonical one"))
             out[ck] = cv
         return out, notes
 
@@ -526,6 +529,92 @@ def _iso(value: Any) -> str:
     return str(value)
 
 
+def graph_notes(vault: Path) -> list[kitlib.Note]:
+    """The notes the graph is built from: every note but the reserved files and the template folder.
+
+    `fix_property_aliases` walks the same list, so it renames exactly what `property_alias` names.
+    """
+    tdir = kitlib.template_folder(vault)[0]
+    return [n for n in kitlib.load_vault(vault)
+            if n.path.name not in kitlib.RESERVED_FILENAMES and not kitlib.in_template_dir(n.rel, tdir)]
+
+
+@dataclass
+class AliasFix:
+    rel: str
+    renames: list[tuple[str, str]]          # (alias, canonical), in frontmatter order
+    refused: str = ""                       # why the note is left alone; "" when it can be fixed
+    text: str = ""                          # the rewritten file, BOM included, when it can be fixed
+
+
+def _key_line(key: str) -> re.Pattern[str]:
+    """A top-level `key:` line: column 0, optionally quoted, optional blanks before the colon."""
+    return re.compile(rf"""^(?P<q>["']?){re.escape(key)}(?P=q)(?P<rest>[ \t]*:(?:[ \t]|\r?$))""")
+
+
+def _rename_keys(text: str, renames: list[tuple[str, str]], fm: dict[str, Any]) -> tuple[str, str]:
+    """(new text, "") with each alias key token renamed, or ("", reason) when that is not safe.
+
+    Only the key token of the top-level line changes: its value, comment, quoting, line ending and
+    position stay as written, and so does every other byte of the file. The result is parsed back
+    and must equal the old frontmatter with the keys renamed, so a shape this cannot see refuses.
+    """
+    bom = "﻿" if text.startswith("﻿") else ""
+    body = text[len(bom):]
+    m = kitlib.FM_RE.match(body)
+    if not m:
+        return "", "no frontmatter block found"
+    lines = m.group(1).split("\n")
+    for alias, canonical in renames:
+        hits = [i for i, line in enumerate(lines) if _key_line(alias).match(line)]
+        if len(hits) != 1:
+            return "", f"the line of `{alias}` was not found exactly once at the top level; rename it by hand"
+        lm = _key_line(alias).match(lines[hits[0]])
+        lines[hits[0]] = f"{lm['q']}{canonical}{lm['q']}" + lines[hits[0]][lm.start("rest"):]
+    raw = "\n".join(lines)
+    expected = {dict(renames).get(k, k): v for k, v in fm.items()}
+    try:
+        after = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        after = None
+    if after != expected:
+        return "", "renaming the key would change more than the key; rename it by hand"
+    return bom + body[:m.start(1)] + raw + body[m.end(1):], ""
+
+
+def fix_property_aliases(vault: Path, onto: Ontology | None = None) -> list[AliasFix]:
+    """What `validate --fix-aliases` would rename, note by note; nothing is written here.
+
+    A note that sets an alias and its canonical name, or two aliases of one name, is refused: which
+    value to keep is the author's call. Only property aliases: a value alias would rewrite a value.
+    """
+    vault = Path(vault)
+    onto = onto or load_ontology(vault)
+    out: list[AliasFix] = []
+    for note in graph_notes(vault):
+        fm = note.frontmatter or {}
+        renames = [(k, onto.canonical_key(k)) for k in fm if isinstance(k, str) and onto.canonical_key(k) != k]
+        if not renames:
+            continue
+        fix = AliasFix(note.rel, renames)
+        out.append(fix)
+        targets = [c for _a, c in renames]
+        clash = next((f"both `{a}` and `{c}` are set" for a, c in renames if c in fm), "")
+        dup = next((c for c in targets if targets.count(c) > 1), None)
+        if dup and not clash:
+            clash = " and ".join(f"`{a}`" for a, c in renames if c == dup) + f" both map to `{dup}`"
+        if clash:
+            fix.refused = f"{clash}; merge them by hand"
+            continue
+        try:
+            text = note.path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            fix.refused = f"cannot be read ({type(exc).__name__})"
+            continue
+        fix.text, fix.refused = _rename_keys(text, renames, fm)
+    return out
+
+
 def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | None = None) -> Graph:
     vault = Path(vault)
     onto = onto or load_ontology(vault)
@@ -536,9 +625,7 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
     self_actor = _self_actor(vault)
     g.nodes[SELF_ID] = Node(id=SELF_ID, kind="virtual", type="person", title="me", description="The vault owner", props={"actor": self_actor})
 
-    tdir = kitlib.template_folder(vault)[0]
-    notes = [n for n in kitlib.load_vault(vault)
-             if n.path.name not in kitlib.RESERVED_FILENAMES and not kitlib.in_template_dir(n.rel, tdir)]
+    notes = graph_notes(vault)
     # pass 1: nodes
     for note in notes:
         fm = note.frontmatter or {}
@@ -548,8 +635,8 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
         nid = note.rel
         g.nodes[nid] = Node(id=nid, kind="note", type=ntype, title=title, description=str(fm.get("description") or "").strip(),
                             path=note.rel, mtime=note.path.stat().st_mtime, props=fm)
-        for msg in mapped:
-            g.findings.append(Finding("warning", "property_alias", nid, msg, "rename the property in the note so every tool sees the canonical name"))
+        for msg, suggestion in mapped:
+            g.findings.append(Finding("warning", "property_alias", nid, msg, suggestion))
         if ntype != "unknown" and not onto.has_class(ntype) and onto.classes:
             g.findings.append(Finding("info", "unknown_type", nid, f"type `{ntype}` is not declared in ontology.yml (tolerated)", "add a class or use an existing one"))
     resolver = Resolver(g.nodes, onto, self_actor)

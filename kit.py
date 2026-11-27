@@ -475,8 +475,39 @@ def cmd_index(args) -> int:
     return 0
 
 
+def _fix_aliases(vault: Path, apply: bool) -> int:
+    """`validate --fix-aliases`: rename each aliased frontmatter key to its canonical name (#96).
+
+    A dry run unless `apply`. Each file is written whole and atomically, and only when it changes,
+    so a second run finds nothing and touches nothing. A refused note fails the run: exit 1.
+    """
+    fixes = kitgraph.fix_property_aliases(vault)
+    todo = [f for f in fixes if not f.refused]
+    refused = [f for f in fixes if f.refused]
+    if not fixes:
+        print("no property aliases to rename")
+        return 0
+    if todo:
+        print(f"{'renamed' if apply else 'would rename'} in {len(todo)} note(s):")
+        for f in todo:
+            if apply:
+                kitagent.write_atomic(vault / f.rel, f.text)
+            print(f"  {f.rel}: " + ", ".join(f"{a} → {c}" for a, c in f.renames))
+    if refused:
+        print(f"refused {len(refused)} note(s), left as they are:")
+        for f in refused:
+            print(f"  {f.rel}: {f.refused}")
+    if todo and not apply:
+        print("dry run: nothing written; add --apply to make these renames")
+    elif todo:
+        print("run `kit.py validate` to confirm")
+    return 1 if refused else 0
+
+
 def cmd_validate(args) -> int:
     vault = _vault(args.vault)
+    if args.fix_aliases:
+        return _fix_aliases(vault, args.apply)
     okf = kitlib.validate_okf(vault)
     # A `--vault` that points at an existing but wrong directory is otherwise a green `OK` (#100).
     # Counted from the walk, not `okf.checked`: undecodable notes are reported as errors already.
@@ -1519,8 +1550,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--collection", help="qmd collection name (default: derived from the vault path, so two vaults do not share one index)"); p.add_argument("--no-qmd", action="store_true"); p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("index", help="regenerate index.md"); p.add_argument("--vault"); p.set_defaults(fn=cmd_index)
-    p = sub.add_parser("validate", help="OKF conformance, links, ontology"); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance")
-    p.add_argument("--ontology", action="store_true", help="force the ontology checks (default: on when 99-system/ontology.yml exists)"); p.add_argument("--no-ontology", action="store_true"); p.set_defaults(fn=cmd_validate)
+    # allow_abbrev=False: `--app` must not stand in for `--apply` on a command that writes.
+    vp = p = sub.add_parser("validate", help="OKF conformance, links, ontology", allow_abbrev=False); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance")
+    p.add_argument("--ontology", action="store_true", help="force the ontology checks (default: on when 99-system/ontology.yml exists)"); p.add_argument("--no-ontology", action="store_true")
+    p.add_argument("--fix-aliases", action="store_true",
+                   help="instead of validating, list each note whose frontmatter uses a property alias from the ontology "
+                        "and the rename to its canonical name (dry run); only the key changes, and a note that sets "
+                        "both names is refused")
+    p.add_argument("--apply", action="store_true", help="with --fix-aliases: make the renames"); p.set_defaults(fn=cmd_validate)
     gp = sub.add_parser("graph", help="build, export and query the vault graph"); gsub = gp.add_subparsers(dest="graph_cmd", required=True)
     p = gsub.add_parser("build", help="write .kit/graph.{json,nt,jsonld,sqlite}"); p.add_argument("--vault"); p.add_argument("--out"); p.set_defaults(fn=cmd_graph_build)
     p = gsub.add_parser("export", help="print or write one format"); p.add_argument("--vault"); p.add_argument("--format", choices=["json", "nt", "jsonld"], default="json"); p.add_argument("--out"); p.set_defaults(fn=cmd_graph_export)
@@ -1617,6 +1654,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_agent_settings)
 
     args = ap.parse_args(argv)
+    if args.cmd == "validate" and args.apply and not args.fix_aliases:
+        vp.error("--apply only goes with --fix-aliases; validate itself writes nothing")
     return args.fn(args)
 
 
