@@ -78,10 +78,6 @@ class ConformanceDecidesTheDefaultExitCode(unittest.TestCase):
         self.assertNotIn("do not set the exit code", validate(self.vault).stdout)
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AMisplacedDayNoteIsAHygieneFinding(unittest.TestCase):
     """The year/month rule is this kit's, not the spec's: reported always, fatal only under --strict."""
 
@@ -138,3 +134,7 @@ class AnImpossibleDateIsAFindingNotATraceback(unittest.TestCase):
         r = self.kit("graph", "build")
         self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

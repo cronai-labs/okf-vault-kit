@@ -634,10 +634,6 @@ class MacInstaller(unittest.TestCase):
             self.assertEqual(r.returncode, 0, f"{name}: {r.stderr}")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheSuiteRunsFromTheReleaseArchive(unittest.TestCase):
     """`make release` strips `.github/`, and the zip is where a tester runs the suite without a clone."""
 
@@ -660,3 +656,7 @@ class TheSuiteRunsFromTheReleaseArchive(unittest.TestCase):
                     "skipTest" in window or "is_file()" in window or "HAVE_WORKFLOW" in window,
                     f"{module.name}:{i + 1} reads {stripped} with no skip guard — the suite "
                     f"then errors when run from the release archive, which strips it:\n  {line.strip()}")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -634,10 +634,6 @@ class MinutesPassesTheConfidentialChoice(unittest.TestCase):
         self.assertEqual((fm["people"], fm.get("attendees"), fm["sensitivity"]), ([], None, "internal"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AColonInANoteNameIsNotAUri(unittest.TestCase):
     """`llm ask` screens each search hit with `kit._confidential`. A hit path that only looks like
     a URI scheme (`Re: plan.md`, legal on macOS and Linux) is a note, and must still be judged."""
@@ -649,3 +645,7 @@ class AColonInANoteNameIsNotAUri(unittest.TestCase):
         (v / "Re: plan.md").write_text("---\ntype: note\ndescription: x\nsensitivity: confidential\n---\n",
                                        encoding="utf-8")
         self.assertTrue(kit._confidential(v, "Re: plan.md"))
+
+
+if __name__ == "__main__":
+    unittest.main()
