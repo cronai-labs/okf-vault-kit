@@ -478,6 +478,11 @@ def cmd_index(args) -> int:
 def cmd_validate(args) -> int:
     vault = _vault(args.vault)
     okf = kitlib.validate_okf(vault)
+    # A `--vault` that points at an existing but wrong directory is otherwise a green `OK` (#100).
+    # Counted from the walk, not `okf.checked`: undecodable notes are reported as errors already.
+    # Here and not in validate_okf, which the doctor's report shares and which carries no paths.
+    if next(iter(kitlib.iter_markdown(vault)), None) is None:
+        okf.warnings.append(f"no markdown files under {vault}; is --vault right?")
     links = kitlib.check_links(vault)
     print("== OKF conformance ==")
     print(okf.render())

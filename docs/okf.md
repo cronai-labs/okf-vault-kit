@@ -48,13 +48,17 @@ Actor convention: `human:<id>` for people, `process:<id>` for jobs, `<producer>/
 
 ### What the exit code means
 
-`validate` always prints three sections; only the first decides the default exit code.
+`validate` prints up to five sections; only the first decides the default exit code.
 
 | Section | Whose rules | Fails `validate` | Fails `validate --strict` |
 |---|---|---|---|
 | OKF conformance | the spec, §11 | yes | yes |
 | Links, wikilinks, Bases embeds | this kit's | no | yes |
+| Confidentiality (when `.kit/config.yml` declares floors) | this kit's | no | yes |
+| Ontology file (when the vault has `99-system/ontology.yml`) | this kit's | no | yes |
 | Ontology | this kit's | no | yes |
+
+A directory with no markdown files at all gets a warning in the first section that names the path (`no markdown files under <path>; is --vault right?`): it is not a conformance failure, so plain `validate` still exits 0, and `--strict` fails on it.
 
 §11 names what a consumer **MUST NOT** reject a bundle for, and broken cross-links and a missing
 `index.md` are both on that list. A bundle can be fully conformant and still be a mess — the kit
