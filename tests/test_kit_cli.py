@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -1147,6 +1148,11 @@ class DoctorVaultGitRow(unittest.TestCase):
 
     # A vault made by `init`, under git, with `lines` added to its .gitignore and `files` written.
     def init_vault(self, lines: tuple[str, ...] = (), files: tuple[str, ...] = ()):
+        # Git writes its object files read-only; on Windows that makes rmtree fail with
+        # "Access is denied" when a test builds a second vault in the same place.
+        for d, _, names in os.walk(self.vault):
+            for n in names:
+                os.chmod(os.path.join(d, n), stat.S_IWRITE | stat.S_IREAD)
         shutil.rmtree(self.vault)
         self.assertEqual(run("init", "--target", str(self.vault), "--no-qmd").returncode, 0)
         self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
