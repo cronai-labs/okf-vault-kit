@@ -165,6 +165,8 @@ class Guard(_Open):
         self.assertEqual(plan.allow_read, ["./04-areas", "./.kit/config.yml"], "never re-opened to the shell")
         self.assertIn("./.git", self.plan(allow_git=True).allow_read)
         self.assertNotIn("./.claude", self.plan(allow_git=True).allow_read)
+        self.assertEqual(self.plan(allow_git=True).allow_read, ["./.git", "./04-areas", "./.kit/config.yml"],
+                         "a declared-open .git is listed once")
 
     def test_allow_git_lets_git_through(self):
         write(self.v, ".git/HEAD", "ref: refs/heads/main\n")
@@ -174,6 +176,36 @@ class Guard(_Open):
         self.assertIn("./.git", plan.allow_read)
         self.assertTrue(any("readable through the history" in n for n in plan.notes))
         self.assertNotIn("./.git", self.plan().allow_read)
+
+    def test_allow_git_opens_git_to_the_read_tools_only(self):
+        # A hook written into .git/hooks runs outside the sandbox at the next git command (#126 review).
+        write(self.v, ".git/HEAD", "ref: refs/heads/main\n")
+        write(self.v, ".git/config", "[core]\n")
+        for config in (OPEN_CONFIG, CONFIG + '  open_folders: ["04-areas", ".git"]\n'):
+            set_config(self.v, config)
+            plan = self.plan(allow_git=True)
+            # Made after the settings, so the guard alone judges it by where it lands.
+            symlink(self, self.v / "04-areas/git-link", "../.git")
+            self.assertEqual(self.code("Read", {"file_path": ".git/HEAD"}, plan=plan), 0)
+            self.assertEqual(self.code("Grep", {"pattern": "x", "path": str(self.v / ".git")}, plan=plan), 0)
+            for tool, args in (("Write", {"file_path": ".git/hooks/post-commit", "content": "x"}),
+                               ("Edit", {"file_path": ".git/config", "old_string": "a", "new_string": "b"}),
+                               ("MultiEdit", {"file_path": str(self.v / ".git/config"), "edits": []}),
+                               ("Write", {"file_path": "04-areas/git-link/hooks/pre-commit", "content": "x"}),
+                               ("NotebookEdit", {"notebook_path": ".git/x.ipynb", "new_source": "x"})):
+                self.assertEqual(self.code(tool, args, plan=plan), 2, (config, tool, args))
+            (self.v / "04-areas/git-link").unlink()
+        self.assertEqual(self.code("Write", {"file_path": "04-areas/new.md", "content": "x"}, plan=plan), 0)
+
+    def test_a_pattern_with_braces_is_refused(self):
+        # Whether Glob or Grep expand braces was not observed; `{..,x}` would climb out if they do.
+        path = str(self.v / "04-areas")
+        for tool, key in (("Glob", "pattern"), ("Grep", "glob")):
+            for pat in ("{..,x}/**/*.md", "{/etc,x}/*", "{.,x}./y.md", "{,}../y.md", "{,}/etc/*", "*.{md,txt}"):
+                args = {"pattern": "x", "path": path} if tool == "Grep" else {"path": path}
+                args[key] = pat
+                self.assertEqual(self.code(tool, args), 2, (tool, pat))
+        self.assertEqual(self.code("Glob", {"pattern": "**/*.md", "path": path}), 0)
 
     def test_a_folder_name_the_shell_would_expand(self):
         name = "it's \"$(touch PWNED)\" `touch PWNED2` $HOME ü"
@@ -189,8 +221,18 @@ class Guard(_Open):
     def test_parity_with_the_predicate(self):
         # Read is let through exactly where `kitlib.confidentiality` says False.
         write(self.v, "04-areas/sub/n#.md", MARKED)
+        # The deny rules climb to 04-areas/sub for n#.md; the guard names it literally and leaves its
+        # unlabelled neighbour open, as the predicate does (#126 review).
+        write(self.v, "04-areas/sub/plain.md", "# open\n")
+        # A confidential folder whose name a rule cannot match: the guard must name it itself.
+        set_config(self.v, OPEN_CONFIG.replace('["04-Areas/Board"]', '["04-Areas/Board", "04-areas/team/h#r"]'))
+        write(self.v, "04-areas/team/h#r/plain.md", "# hidden by its folder\n")
+        write(self.v, "04-areas/team/plain.md", "# open\n")
         write(self.v, "07-knowledge/Überblick ä.md", "# open\n")
         plan = self.plan()
+        self.assertIs(kitlib.confidentiality(self.v, "04-areas/sub/plain.md"), False)
+        self.assertIs(kitlib.confidentiality(self.v, "04-areas/team/plain.md"), False)
+        self.assertIs(kitlib.confidentiality(self.v, "04-areas/team/h#r/plain.md"), True)
         for dirpath, dirnames, filenames in os.walk(self.v):
             dirnames[:] = [d for d in dirnames if d != ".git"]
             for name in filenames:

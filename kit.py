@@ -1375,13 +1375,15 @@ def main(argv: list[str] | None = None) -> int:
                                     "allow-open: the vault is denied to the sandbox, the open folders are allowed, "
                                     "what is confidential inside them is denied one by one, and a PreToolUse guard "
                                     "written inline into settings.json refuses the file tools anywhere else, so the "
-                                    "agent reads and writes only inside the open folders (docs/security.md §5).")
+                                    "agent's file tools read and write only inside the open folders; its shell reads "
+                                    "only there, but the kit sets no sandbox write rule (docs/security.md §5).")
     p.add_argument("--vault")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="write settings.json and the kit's manifest (default: preview a diff)")
     mode.add_argument("--check", action="store_true", help="exit 1 when settings.json or the manifest differs from what --apply would write (with the .git choice the last --apply recorded); writes nothing")
     p.add_argument("--allow-git", action="store_true",
-                   help="do not deny .git (in allow-open mode: allow it, and let the guard through to it) — "
+                   help="do not deny .git (in allow-open mode: allow it to the shell, and let the guard pass the read tools, "
+                        "not the edit tools, into it) — "
                         "confidential notes tracked in git then stay readable through the history")
     p.add_argument("--remove", action="store_true",
                    help="take out what the kit added (the entries its manifest owns, the sandbox switches as recorded) "

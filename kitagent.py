@@ -79,6 +79,7 @@ C = json.loads(__DATA__)
 TOOLS = {"Read": "file_path", "Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
          "NotebookRead": "notebook_path", "NotebookEdit": "notebook_path", "Grep": "path", "Glob": "path"}
 PATTERN = {"Grep": "glob", "Glob": "pattern"}
+READS = ("Read", "Grep", "Glob", "NotebookRead")
 
 
 def no(why):
@@ -95,7 +96,9 @@ def under(rel, base):
 
 
 def leaves(p):
-    return p.startswith("~") or os.path.isabs(p) or ".." in re.split(r"[/\\\\]", p)
+    # A brace may expand to `..` or an absolute path (`{..,x}`, `{,}/etc`), and whether Grep or Glob
+    # expand braces was not observed: refused unless proven.
+    return p.startswith("~") or os.path.isabs(p) or ".." in re.split(r"[/\\\\]", p) or "{" in p or "}" in p
 
 
 def rel_to(path, bases):
@@ -109,10 +112,12 @@ def rel_to(path, bases):
     return None
 
 
-def allowed(rel):
+def allowed(rel, write):
     if not rel:
         return False
-    if rel.startswith(".trash/") and not allowed(rel[len(".trash/"):]):
+    if rel.startswith(".trash/") and not allowed(rel[len(".trash/"):], write):
+        return False
+    if write and any(under(rel, r) for r in C["read_only"]):
         return False
     if any(under(rel, d) for d in C["folders"]) or rel in C["files"]:
         return False
@@ -139,7 +144,7 @@ def main():
         no(tool + " with a path that climbs")
     pattern = args.get(PATTERN.get(tool, ""))
     if pattern is not None and (not isinstance(pattern, str) or leaves(pattern)):
-        no(tool + " with a pattern that leaves its folder")
+        no(tool + " with a pattern that may leave its folder (absolute, `..`, `~` or a brace)")
     # A relative path is judged from the cwd of the call and from the project dir: which one the tool
     # uses was not observed, so both must pass.
     fulls = [raw] if os.path.isabs(raw) else [os.path.join(cwd, raw), os.path.join(project, raw)]
@@ -147,7 +152,7 @@ def main():
     for full in fulls:
         lexical = rel_to(os.path.normpath(full), bases)
         resolved = rel_to(os.path.realpath(full), bases[1:])
-        if not (allowed(lexical) and allowed(resolved)):
+        if not (allowed(lexical, tool not in READS) and allowed(resolved, tool not in READS)):
             no(tool + " outside the open folders, or on a denied path")
 
 
@@ -532,7 +537,7 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     The export lists every file outside the open folders too; `./` covers those, so only what lies
     inside an open folder becomes an entry. The guard's lists are the same entries, literal (it needs
     no climb to a folder for a name a rule cannot match), plus `.claude` always and `.git` unless
-    --allow-git.
+    --allow-git, which opens `.git` to the read tools only.
     """
     opens = policy.open_folders
     plan = Plan(allow_git=allow_git, mode=ALLOW_OPEN)
@@ -559,11 +564,15 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     allow = sorted({f"./{f}" for d in policy.declared_open_folders for f in _on_disk(root, d)
                     if not _in_open(f, closed)})
     allow.append(f"./{kitlib.CONFIG_REL}")         # the agent's own kit runs load the policy, as in deny-list mode
-    if allow_git and (root / ".git").is_dir():
+    if allow_git and (root / ".git").is_dir() and "./.git" not in allow:
         allow.append("./.git")
     plan.allow_read = allow
-    # The guard: literal names, matched as the predicate matches (case and Unicode form aside).
-    folders = {kitlib._match_form(r) for k, r in found if k == "folder"}
+    # The guard: literal names, matched as the predicate matches (case and Unicode form aside). Taken
+    # from the export, not from `found`: that holds the folder the deny rules climb to for a name they
+    # cannot match, and the guard would then refuse that name's neighbours, which the predicate leaves open.
+    folders = {kitlib._match_form(r.rstrip("/")) for r in export["confidential_folders"] if _in_open(r.rstrip("/"), opens)}
+    folders |= {kitlib._match_form(r.rstrip("/")) for r in export["confidential_files"]
+                if r.endswith("/") and _in_open(r.rstrip("/"), opens)}
     folders |= {kitlib._match_form(r) for k, r in special if k == "folder"}
     folders |= set(GUARD_ALWAYS_DENIED)
     if not allow_git:
@@ -574,8 +583,11 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     # pattern the deny lists leave to `./` costs nothing here.
     pats = {kitlib._glob_regex(s).pattern for p in policy.paths for s in kitlib.path_rule_spellings(p)}
     pats |= {kitlib._glob_regex(kitlib._match_form(r)).pattern for k, r in special if k == "path"}
+    # --allow-git opens .git to the read tools only: a hook written into .git/hooks would run outside
+    # the sandbox at the next git command. Read-only whether or not .git is also declared open.
     opened = set(opens) | ({".git"} if allow_git else set())
-    plan.guard = {"open": sorted(opened), "folders": sorted(folders), "files": sorted(files), "patterns": sorted(pats)}
+    plan.guard = {"open": sorted(opened), "read_only": [".git"], "folders": sorted(folders),
+                  "files": sorted(files), "patterns": sorted(pats)}
     plan.hook = guard_entry(plan.guard)
     return plan
 
