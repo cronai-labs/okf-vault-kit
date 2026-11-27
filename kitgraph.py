@@ -156,8 +156,28 @@ def _prop_spec(name: str, raw: Any) -> PropSpec:
     rng = raw.get("range") or []
     if isinstance(rng, str):
         rng = [rng]
-    return PropSpec(name=name, type=raw.get("type", "text"), values=[str(v) for v in raw.get("values", [])],
-                    range=list(rng), many=bool(raw.get("many")), soft=bool(raw.get("soft")), required=bool(raw.get("required")))
+    values = raw.get("values") or []
+    ptype = raw.get("type", "text")
+    # A value of the wrong shape is ignored here and reported by `check_ontology_file`.
+    return PropSpec(name=name, type=ptype if isinstance(ptype, str) else "text",
+                    values=[str(v) for v in values] if isinstance(values, list) else [],
+                    range=[str(r) for r in rng] if isinstance(rng, list) else [],
+                    many=bool(raw.get("many")), soft=bool(raw.get("soft")), required=bool(raw.get("required")))
+
+
+def _prop_problems(where: str, raw: Any) -> list[str]:
+    if raw is None or isinstance(raw, str):
+        return []
+    if not isinstance(raw, dict):
+        return [f"`{where}` must be a type name or a mapping (type, values, range, ...); it is read as text"]
+    out = []
+    if not isinstance(raw.get("type", "text"), str):
+        out.append(f"`{where}.type` must be a type name; it is read as text")
+    if raw.get("values") is not None and not isinstance(raw["values"], list):
+        out.append(f"`{where}.values` must be a list; it is ignored")
+    if raw.get("range") is not None and not isinstance(raw["range"], (str, list)):
+        out.append(f"`{where}.range` must name a class or list classes; it is ignored")
+    return out
 
 
 def ontology_path(vault: Path) -> Path | None:
@@ -226,6 +246,8 @@ def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
             out.append(f"{name}: `classes.{cls}.props` must be a mapping of property names; it is ignored")
         if body.get("extends") is not None and not isinstance(body["extends"], str):
             out.append(f"{name}: `classes.{cls}.extends` must name one class; it is ignored")
+        for prop, raw in _mapping(body.get("props")).items():
+            out.extend(f"{name}: {p}" for p in _prop_problems(f"classes.{cls}.props.{prop}", raw))
     for edge, body in _mapping(data.get("edges")).items():
         shape = set(body) if isinstance(body, dict) else set()
         if shape & set(CLASS_KEYS):
