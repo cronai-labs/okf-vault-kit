@@ -190,6 +190,8 @@ def ontology_path(vault: Path) -> Path | None:
 ONTOLOGY_SECTIONS = ("version", "base_iri", "context_file", "classes", "edges", "property_aliases", "value_aliases", "rules")
 EDGE_KEYS = ("inverse", "transitive")
 CLASS_KEYS = ("props", "extends")
+# What `yaml.safe_load` raises besides YAMLError, each seen from a one-line ontology value.
+_CONSTRUCT_ERRORS = (ValueError, LookupError, AttributeError)
 
 
 def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] | None, list[str]]:
@@ -215,6 +217,13 @@ def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] 
         where = f" at line {mark.line + 1}" if mark is not None else ""
         what = getattr(exc, "problem", None) or type(exc).__name__
         return None, [f"{name}: not valid YAML{where} ({what}); the kit's own ontology is used until it is fixed"]
+    except _CONSTRUCT_ERRORS as exc:
+        # The scanner accepted the text, then PyYAML's constructor failed outside YAMLError:
+        # `2026-02-30` is a ValueError, a bad `!!bool`/`!!int`/`!!timestamp` value a KeyError,
+        # IndexError or AttributeError. Each one would otherwise take `validate`, `graph`,
+        # `reconcile` and the bridge down with a traceback.
+        return None, [(f"{name}: not valid YAML (a value cannot be read: {type(exc).__name__}: {exc}); "
+                       "the kit's own ontology is used until it is fixed")]
     if data is None:
         return {}, []
     if not isinstance(data, dict):

@@ -92,6 +92,28 @@ class MalformedFileIsAFindingNotATraceback(OntologyFileCase):
         self.write("classes: [\n")
         self.assert_named_and_survived("not valid YAML")
 
+    def test_yaml_that_scans_but_cannot_be_constructed(self):
+        """PyYAML raises these as ValueError, KeyError, IndexError or AttributeError, not YAMLError.
+
+        Only the kit's own words are asserted: the reason after them is CPython's and may change.
+        """
+        cases = {
+            "impossible date": ("version: 2026-02-30\n", "ValueError"),
+            "impossible timestamp": ("version: 2026-13-01T00:00:00\n", "ValueError"),
+            "bad int tag": ("version: !!int 0b\n", "not valid YAML"),
+            "bad bool tag": ("version: !!bool x\n", "not valid YAML"),
+            "empty int tag": ("version: !!int ''\n", "not valid YAML"),
+            "bad timestamp tag": ("version: !!timestamp x\n", "not valid YAML"),
+        }
+        for name, (text, needle) in cases.items():
+            with self.subTest(name):
+                self.write(self.shipped + text)
+                self.assert_named_and_survived(needle)
+                r = subprocess.run(KIT + ["validate", "--vault", str(self.vault), "--fix-aliases"],
+                                   capture_output=True, text=True, encoding="utf-8", errors="replace", check=False)
+                self.assertNotIn("Traceback", r.stderr + r.stdout, name)
+                self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+
     def test_a_top_level_that_is_not_a_mapping(self):
         self.write("- classes\n- edges\n")
         self.assert_named_and_survived("must be a mapping")
