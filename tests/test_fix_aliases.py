@@ -5,6 +5,7 @@ per note. The warning now says which rename to make, and `--fix-aliases` makes e
 rename: a dry run by default, `--apply` to write, the key token and nothing else, a note that
 sets both names refused, and a second run a no-op.
 """
+import os
 import shutil
 import subprocess
 import sys
@@ -121,6 +122,28 @@ class FixAliases(Case):
         self.assertEqual(path.stat().st_mtime_ns, mtime)
         v = kit("validate", "--vault", str(self.vault))
         self.assertNotIn("property_alias", v.stdout)
+
+    @unittest.skipIf(sys.platform == "win32" or not hasattr(os, "geteuid") or os.geteuid() == 0,
+                     "a read-only folder stops neither Windows' ACLs nor root")
+    def test_a_note_that_cannot_be_written_is_reported_and_the_rest_still_renamed(self):
+        """An OSError from one write ended the run in a traceback, after earlier notes were
+        already rewritten and before the rest; on Windows a locked or read-only note does it."""
+        locked_dir = self.dir / "locked"
+        locked_dir.mkdir()
+        locked = locked_dir / "locked.md"
+        locked.write_text(MEETING, encoding="utf-8")
+        good = self.note("alias-probe.md", MEETING)
+        before = locked.read_bytes()
+        locked_dir.chmod(0o555)
+        self.addCleanup(locked_dir.chmod, 0o755)
+        r = self.fix("--apply")
+        self.assertNotIn("Traceback", r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("02-meetings/locked/locked.md", r.stdout + r.stderr)
+        self.assertIn("could not be written", r.stdout + r.stderr)
+        self.assertIn("renamed in 1 note(s)", r.stdout, "only the note actually written is counted")
+        self.assertEqual(locked.read_bytes(), before)
+        self.assertIn("\npeople: [Alex", good.read_text(encoding="utf-8"), "the other notes are still fixed")
 
     def test_apply_without_fix_aliases_is_a_usage_error(self):
         r = kit("validate", "--vault", str(self.vault), "--apply")

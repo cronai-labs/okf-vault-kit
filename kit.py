@@ -479,7 +479,8 @@ def _fix_aliases(vault: Path, apply: bool) -> int:
     """`validate --fix-aliases`: rename each aliased frontmatter key to its canonical name (#96).
 
     A dry run unless `apply`. Each file is written whole and atomically, and only when it changes,
-    so a second run finds nothing and touches nothing. A refused note fails the run: exit 1.
+    so a second run finds nothing and touches nothing. A refused note, or one that cannot be
+    written, fails the run (exit 1) and the other notes are still renamed.
     """
     data, problems = kitgraph.read_ontology(vault / kitgraph.ONTOLOGY_REL, kitgraph.ONTOLOGY_REL)
     if data is None and problems:
@@ -493,12 +494,24 @@ def _fix_aliases(vault: Path, apply: bool) -> int:
     if not fixes:
         print("no property aliases to rename")
         return 0
+    failed: list[tuple[kitgraph.AliasFix, OSError]] = []
+    if apply:
+        # One note that cannot be written (read-only, locked on Windows, a full disk) is reported
+        # and the run goes on: write_atomic leaves that note as it was, and the others are fixed.
+        for f in todo:
+            try:
+                kitagent.write_atomic(vault / f.rel, f.text)
+            except OSError as exc:
+                failed.append((f, exc))
+        todo = [f for f in todo if all(f is not g for g, _exc in failed)]
     if todo:
         print(f"{'renamed' if apply else 'would rename'} in {len(todo)} note(s):")
         for f in todo:
-            if apply:
-                kitagent.write_atomic(vault / f.rel, f.text)
             print(f"  {f.rel}: " + ", ".join(f"{a} → {c}" for a, c in f.renames))
+    if failed:
+        print(f"could not be written, left as they are: {len(failed)} note(s):")
+        for f, exc in failed:
+            print(f"  {f.rel}: {exc.strerror or exc.__class__.__name__}")
     if refused:
         print(f"refused {len(refused)} note(s), left as they are:")
         for f in refused:
@@ -507,7 +520,7 @@ def _fix_aliases(vault: Path, apply: bool) -> int:
         print("dry run: nothing written; add --apply to make these renames")
     elif todo:
         print("run `kit.py validate` to confirm")
-    return 1 if refused else 0
+    return 1 if refused or failed else 0
 
 
 def cmd_validate(args) -> int:
