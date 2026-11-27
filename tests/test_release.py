@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -347,6 +348,54 @@ class SuiteBootstrap(unittest.TestCase):
                 self.assertLess(inserted.start(), imported.start(),
                                 f"{path.name} imports the bridge before the sys.path insert that makes it importable")
         self.assertTrue(checked, "no test module imports the bridge; this guard has gone stale")
+
+
+class SuiteTimeout(unittest.TestCase):
+    """A hung test fails the run and names itself, rather than holding CI until the job times out. (#94)
+
+    `make check` runs the suite through `kit.py test`, which is unittest, so pytest-timeout does not
+    reach it; the runner arms its own per-test limit.
+    """
+
+    HANGS = ("import time\nimport unittest\n\n\nclass Hangs(unittest.TestCase):\n"
+             "    def test_blocks_forever(self):\n        time.sleep(600)\n")
+
+    def test_a_hung_test_is_stopped_with_a_traceback_that_names_it(self):
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "test_hangs.py").write_text(self.HANGS, encoding="utf-8")
+            env = {**os.environ, "KIT_TEST_TIMEOUT": "2", "PYTHONIOENCODING": "utf-8"}
+            try:
+                r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+            except subprocess.TimeoutExpired:
+                self.fail("the runner let a hung test run past its limit")
+        self.assertNotEqual(r.returncode, 0, "a hung test must fail the run")
+        self.assertIn("test_blocks_forever", r.stderr, "the output must name the test that hung")
+        self.assertIn("Timeout", r.stderr, "the traceback dump says the limit was hit")
+
+    def test_the_limit_can_be_switched_off(self):
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "test_quick.py").write_text(
+                "import unittest\n\n\nclass Quick(unittest.TestCase):\n    def test_passes(self):\n        pass\n",
+                encoding="utf-8")
+            env = {**os.environ, "KIT_TEST_TIMEOUT": "0", "PYTHONIOENCODING": "utf-8"}
+            r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Ran 1 test", r.stderr)
+
+    def test_pytest_runs_under_the_same_limit(self):
+        """`python -m pytest` is the documented alternative; it gets pytest-timeout at the runner's limit."""
+        import tomllib
+
+        from tests import runner
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        extra = project["project"]["optional-dependencies"]["test"]
+        self.assertTrue(any(re.match(r"pytest-timeout\b", dep) for dep in extra),
+                        "pytest-timeout belongs in the test extra, or the ini timeout below means nothing")
+        self.assertEqual(float(project["tool"]["pytest"]["ini_options"]["timeout"]), runner.DEFAULT_LIMIT)
 
 
 class WheelLane(unittest.TestCase):
