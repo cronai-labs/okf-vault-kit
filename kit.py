@@ -20,7 +20,7 @@
   python kit.py minutes recap.txt --title "Sync"  file a recap as a meeting note
   python kit.py proposals list|show|apply|reject   human-in-the-loop writes from a --propose bridge (docs/security.md)
   python kit.py policy export [--out FILE]  what is confidential in the vault, as JSON
-  python kit.py agent-settings claude-code [--apply|--check|--remove]   deny it to Claude Code's own tools (docs/security.md §5)
+  python kit.py agent-settings claude-code [--apply|--check|--remove]   deny it to Claude Code's own tools, or allow only the open folders (docs/security.md §5)
 
 Every command also runs as `uv run kit.py ...` with no manual dependency setup (inline script metadata above).
 """
@@ -551,7 +551,7 @@ def _agent_settings_remove(vault: Path, args) -> int:
     if result is None:
         print(f"nothing to remove: there is no {kitagent.MANIFEST_REL}, so the kit owns nothing in {kitagent.SETTINGS_REL}")
         return 0
-    counts = (f"{len(result.removed)} list entries the kit added, {len(result.restored)} sandbox switch(es) it set, "
+    counts = (f"{len(result.removed)} entries the kit added (list entries and the guard), {len(result.restored)} sandbox switch(es) it set, "
               f"and {kitagent.MANIFEST_REL}")
     for line in result.restored:
         print(f"puts back: {line}")
@@ -592,8 +592,11 @@ def cmd_agent_settings(args) -> int:
     for line in m.warnings:
         print(f"warning: {line}", file=sys.stderr)
     local = [f"warning: {flag} — it overrides what this command writes (docs/security.md §5)" for flag in state.local_flags]
-    summary = (f"{len(state.plan.deny)} deny rule(s) and {len(state.plan.deny_read)} sandbox denyRead entries wanted; "
-               f"{len(m.added)} list entries to add, {len(m.removed)} stale")
+    plan = state.plan
+    wanted = f"{len(plan.deny)} deny rule(s) and {len(plan.deny_read)} sandbox denyRead entries"
+    if plan.mode == kitagent.ALLOW_OPEN:
+        wanted = (f"allow-open: {wanted}, {len(plan.allow_read)} allowRead entries and the open-folder guard")
+    summary = f"{wanted} wanted; {len(m.added)} entries to add, {len(m.removed)} stale"
     if args.check:
         for flag in state.plan.flags:
             print(f"warning: {flag} (docs/security.md §5)", file=sys.stderr)
@@ -1364,17 +1367,22 @@ def main(argv: list[str] | None = None) -> int:
     asub = p.add_subparsers(dest="agent", required=True)
     p = asub.add_parser("claude-code", allow_abbrev=False,
                         help="merge Read(...) deny rules, sandbox denyRead entries and the sandbox switches into "
-                             "<vault>/.claude/settings.json (dry run by default)",
-                        description="Deny the confidential folders and files to Claude Code's own tools, in the vault's "
-                                    ".claude/settings.json. Only a deny list: Claude Code's allow rules cannot carve an "
-                                    "exception out of a deny, so there is no mode that denies the vault and allows open "
-                                    "folders (docs/security.md §5).")
+                             "<vault>/.claude/settings.json, or with open_folders declared the allow-open settings "
+                             "and guard (dry run by default)",
+                        description="Restrict Claude Code's own tools in the vault's .claude/settings.json. The config "
+                                    "picks the mode: without open_folders, a deny list of the confidential folders and "
+                                    "files; with open_folders in the confidentiality block of .kit/config.yml, "
+                                    "allow-open: the vault is denied to the sandbox, the open folders are allowed, "
+                                    "what is confidential inside them is denied one by one, and a PreToolUse guard "
+                                    "written inline into settings.json refuses the file tools anywhere else, so the "
+                                    "agent reads and writes only inside the open folders (docs/security.md §5).")
     p.add_argument("--vault")
     mode = p.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="write settings.json and the kit's manifest (default: preview a diff)")
     mode.add_argument("--check", action="store_true", help="exit 1 when settings.json or the manifest differs from what --apply would write (with the .git choice the last --apply recorded); writes nothing")
     p.add_argument("--allow-git", action="store_true",
-                   help="do not deny .git — confidential notes tracked in git then stay readable through the history")
+                   help="do not deny .git (in allow-open mode: allow it, and let the guard through to it) — "
+                        "confidential notes tracked in git then stay readable through the history")
     p.add_argument("--remove", action="store_true",
                    help="take out what the kit added (the entries its manifest owns, the sandbox switches as recorded) "
                         "and delete the manifest; a dry run unless --apply is given too")

@@ -407,7 +407,7 @@ class Merge(_Vault):
         before = (self.v / SETTINGS).read_bytes()
         r = agent(self.v, "--check")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("2 list entries to add", r.stdout)
+        self.assertIn("2 entries to add", r.stdout)
         self.assertNotIn("new-hidden", r.stdout)
         self.assertEqual((self.v / SETTINGS).read_bytes(), before)
 
