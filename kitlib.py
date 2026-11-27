@@ -918,9 +918,10 @@ def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
         return ConfidentialityPolicy()
     if not isinstance(data, dict):
         raise PolicyConfigError(f"{CONFIG_REL}: the file must be a mapping of keys")
-    # `Confidentiality:`, `confidentialty:` or a bare `confidential_folders:` at the top level would
-    # otherwise read as "no block", which is "nothing is confidential".
-    near = sorted(str(k) for k in data if k != "confidentiality" and str(k).casefold().startswith("confidential"))
+    # `Confidentiality:`, `confidentialty:`, or a bare `confidential_folders:` or `open_folders:` at the
+    # top level would otherwise read as "no block", which is "nothing is confidential".
+    near = sorted(str(k) for k in data if k != "confidentiality" and (
+        str(k).casefold().startswith(("confidential", "open_folder")) or str(k).casefold() in CONFIDENTIALITY_KEYS))
     if near:
         raise PolicyConfigError(f"{CONFIG_REL}: top-level key(s) {', '.join(near)} look like the confidentiality "
                                 "block but are not `confidentiality:` (lower case, with "

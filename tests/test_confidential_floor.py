@@ -348,6 +348,10 @@ BROKEN = {
     "open folder under a confidential folder": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
                                                 '  open_folders: ["04-areas", "05-people/team"]\n'),
     "open folder twice": 'confidentiality:\n  open_folders: ["04-areas", "04-Areas/"]\n',
+    # Indented one level too little: read as "no policy", the whole vault stayed open (#126 review).
+    "open folders at the top level": ('confidentiality:\n  confidential_paths: ["**/salary*"]\n'
+                                      'open_folders: ["04-areas"]\n'),
+    "open folders at the top level, capitalised": 'Open_Folders: ["04-areas"]\n',
 }
 
 
@@ -766,6 +770,8 @@ class OpenFolderConfigErrors(unittest.TestCase):
         self.assertIn("'05-people/team' lies at or under the confidential folder '05-people'",
                       self.error(BROKEN["open folder under a confidential folder"]))
         self.assertIn("lists '04-Areas' twice", self.error(BROKEN["open folder twice"]))
+        for name in ("open folders at the top level", "open folders at the top level, capitalised"):
+            self.assertIn("look like the confidentiality block", self.error(BROKEN[name]), name)
 
     def test_a_confidential_folder_inside_an_open_one_is_fine(self):
         set_config(self.vault, 'confidentiality:\n  confidential_folders: ["04-areas/hr"]\n  open_folders: ["04-areas"]\n')
