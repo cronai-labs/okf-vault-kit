@@ -128,5 +128,48 @@ class MalformedFileIsAFindingNotATraceback(OntologyFileCase):
         self.assertEqual(self.problems(), [])
 
 
+class AliasesOntoSensitivityAreRefused(OntologyFileCase):
+    """#121, the owner's decision: one answer from every reader, by refusing the alias.
+
+    The graph read the normalised props, so `sensitivity: hidden` with a value alias
+    `hidden → confidential` hid the note from the graph only; `index.md`, the digest, `todos`,
+    `llm ask` and the bridge read the raw line and served it. `validate` now refuses such an
+    alias, and the raw `sensitivity:` line stays the only one any reader judges.
+    """
+
+    NOTE = "---\ntype: concept\ntitle: Hidden probe\ndescription: d\nsensitivity: hidden\n---\nbody\n"
+
+    def assert_refused(self, needle: str) -> None:
+        (self.vault / "07-knowledge" / "hidden-probe.md").write_text(self.NOTE, encoding="utf-8")
+        found = [p for p in self.problems() if needle in p]
+        self.assertEqual(len(found), 1, self.problems())
+        self.assertIn("refused", found[0])
+        self.assertIn("raw `sensitivity:` line", found[0])
+        r = validate(self.vault, "--strict")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn(needle, r.stdout)
+
+    def test_a_value_alias_on_sensitivity(self):
+        self.insert_after("value_aliases:\n", "  sensitivity: { hidden: confidential }\n")
+        self.assert_refused("`value_aliases.sensitivity`")
+
+    def test_a_property_alias_onto_sensitivity(self):
+        self.insert_after("property_aliases:\n", "  hidden_level: sensitivity\n")
+        self.assert_refused("`property_aliases.hidden_level`")
+
+    def test_the_readers_judge_the_raw_line_only(self):
+        """The shared predicate is unchanged: no ontology, no alias, the raw value."""
+        self.insert_after("value_aliases:\n", "  sensitivity: { hidden: confidential }\n")
+        path = self.vault / "07-knowledge" / "hidden-probe.md"
+        path.write_text(self.NOTE, encoding="utf-8")
+        note = kitgraph.kitlib.parse_note(path, self.vault)
+        self.assertFalse(kitgraph.kitlib.note_confidential(note))
+
+    def test_the_graph_keeps_its_props_check_as_defence_in_depth(self):
+        node = kitgraph.Node(id="n.md", kind="note", type="concept", title="n", path="n.md",
+                             props={"sensitivity": "confidential"})
+        self.assertTrue(kitgraph.node_confidential(node, lambda _rel: False))
+
+
 if __name__ == "__main__":
     unittest.main()

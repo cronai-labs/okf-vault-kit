@@ -235,10 +235,23 @@ def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
     for alias, target in _mapping(data.get("property_aliases")).items():
         if not isinstance(target, str):
             out.append(f"{name}: `property_aliases.{alias}` must name one property; it is ignored")
+        elif target.strip().lower() == SENSITIVITY and str(alias).strip().lower() != SENSITIVITY:
+            out.append(f"{name}: `property_aliases.{alias}` maps onto `sensitivity` and is refused: {_SENSITIVITY_WHY} "
+                       f"Rename `{alias}` to `sensitivity` in the notes and drop the alias.")
     for prop, table in _mapping(data.get("value_aliases")).items():
         if not isinstance(table, dict):
             out.append(f"{name}: `value_aliases.{prop}` must be a mapping of value → canonical value; it is ignored")
+        if str(prop).strip().lower() == SENSITIVITY:
+            out.append(f"{name}: `value_aliases.{prop}` is refused: {_SENSITIVITY_WHY} "
+                       "Write `sensitivity: confidential` in the notes and drop the alias.")
     return out
+
+
+# #121: an alias could make the graph hide a note the other readers serve. The owner's decision
+# is to refuse it rather than teach every reader the ontology.
+SENSITIVITY = "sensitivity"
+_SENSITIVITY_WHY = ("every reader judges confidentiality by the note's raw `sensitivity:` line only, so an alias "
+                    "would hide a note from the graph and from nothing else.")
 
 
 def check_ontology_file(vault: Path) -> kitlib.Report:
@@ -837,9 +850,11 @@ def context_pack(g: Graph, node: str, depth: int = 1) -> str:
 def node_confidential(node: Node, file_confidential: Callable[[str], bool]) -> bool:
     """Is this graph node a confidential note? `file_confidential` answers for its vault-relative path.
 
-    Actors, sources and virtual nodes carry no note frontmatter. The normalised props are checked
-    first because the ontology can map an alias onto `sensitivity`; the file check is what catches a
-    note whose frontmatter did not parse, whose props are therefore empty.
+    Actors, sources and virtual nodes carry no note frontmatter. The file check is the rule every
+    reader shares: the raw `sensitivity:` line, folder floors and path rules. `validate` refuses an
+    ontology alias onto `sensitivity` (#121), so the normalised props should never say more than
+    the raw line; checking them first is defence in depth for an ontology nobody validated. The
+    file check also catches a note whose frontmatter did not parse, whose props are therefore empty.
     """
     if getattr(node, "kind", "") != "note":
         return False
