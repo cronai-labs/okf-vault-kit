@@ -199,8 +199,9 @@ def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] 
 
     The one reader `load_ontology` and `validate` share, so the file the graph falls back from is
     the file `validate` names. A missing file is no problem; one we cannot decode or parse, or
-    whose top level is not a mapping, is unusable; any other problem leaves the data usable, with
-    the bad entries dropped by `Ontology`.
+    whose top level is not a mapping, is unusable; any other problem leaves the data usable.
+    `Ontology` drops an entry of the wrong shape (a property spec is read as text), but keeps an
+    alias onto `sensitivity` that `validate` refuses: the graph applies it until it is removed.
     """
     path = Path(path)
     name = label or path.name
