@@ -1024,6 +1024,53 @@ class InitKeepsMachineStateOutOfGit(unittest.TestCase):
             self.assertFalse((target / rel).exists(), f"{rel} is per-machine state of the checkout")
         self.assertTrue((target / ".obsidian" / "app.json").is_file(), "the settings themselves still travel")
 
+    def init_from(self, template: Path, target: Path, *extra: str) -> None:
+        import kit
+        with mock.patch.object(kit, "TEMPLATE_VAULT", template), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(kit.main(["init", "--target", str(target), "--no-qmd", *extra]), 0)
+
+    def template_with(self, files: dict[str, str]) -> Path:
+        template = self.tmp / "template"
+        shutil.copytree(VAULT, template, ignore=shutil.ignore_patterns(".kit"))
+        for rel, text in files.items():
+            p = template / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+        return template
+
+    def test_only_the_template_root_s_state_is_left_out(self):
+        """The patterns matched at every depth: a notes folder named `cache`, or a note's
+        `workspace-plan.json`, was dropped from the copy."""
+        notes = ("07-knowledge/cache/hidden-note.md", "03-projects/.kit/hidden.md",
+                 "03-projects/workspace-plan.json", "03-projects/cache")
+        template = self.template_with({rel: "kept" for rel in notes})
+        target = self.tmp / "v"
+        self.init_from(template, target)
+        for rel in notes:
+            with self.subTest(rel=rel):
+                self.assertTrue((target / rel).is_file(), f"{rel} is the user's content, not machine state")
+
+    def test_the_template_s_kit_config_is_copied_and_its_state_is_not(self):
+        """The config holds the floors and open folders; the rest of `.kit/` is per-machine."""
+        config = "# the template's floors\nconfidential_folders: [05-people]\ncollection: \"tpl\"\n"
+        template = self.template_with({".kit/config.yml": config, ".kit/graph.json": "{}",
+                                       ".kit/proposals/hidden-draft.json": "{}"})
+        target = self.tmp / "v"
+        self.init_from(template, target)
+        self.assertEqual(sorted(p.name for p in (target / ".kit").iterdir()), ["config.yml"])
+        self.assertEqual((target / ".kit" / "config.yml").read_text(encoding="utf-8"), config)
+
+    def test_force_keeps_the_vault_s_own_kit_config(self):
+        """`copytree` overwrites: under `--force` the template's config would replace the
+        vault's own floors, and its confidential folders would go open without a word."""
+        template = self.template_with({".kit/config.yml": "collection: \"tpl\"\n"})
+        target = self.tmp / "v"
+        mine = b"confidential_folders: [hidden-folder]\r\ncollection: \"mine\"\r\n"
+        (target / ".kit").mkdir(parents=True)
+        (target / ".kit" / "config.yml").write_bytes(mine)
+        self.init_from(template, target, "--force")
+        self.assertEqual((target / ".kit" / "config.yml").read_bytes(), mine)
+
 
 @unittest.skipUnless(shutil.which("git"), "git not on PATH")
 class DoctorVaultGitRow(unittest.TestCase):

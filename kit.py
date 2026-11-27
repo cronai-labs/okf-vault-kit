@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import fnmatch
 import importlib.metadata
 import json
 import os
@@ -326,7 +327,35 @@ def _report(rows: list[tuple[str, str, str]], vault: Path) -> str:
 
 # What `init` leaves out of the copy: per-machine state the template vault picks up in a checkout.
 # After a plain `graph build` there, `vault/.kit/` holds the sample's graph, audit log and proposals.
-TEMPLATE_STATE = (".kit", "workspace*.json", "cache")
+# Paths from the template root, one glob per segment: matched at every depth, they dropped a notes
+# folder named `cache` or a note's `workspace-plan.json`. The template's `.kit/config.yml` is
+# copied on its own, after the copy (`_copy_template_config`).
+TEMPLATE_STATE = (".kit", ".obsidian/workspace*.json", ".obsidian/cache")
+
+
+def _template_state(root: Path):
+    """A `copytree` ignore callable that leaves out TEMPLATE_STATE under `root`, and only there."""
+    patterns = [tuple(pat.split("/")) for pat in TEMPLATE_STATE]
+
+    def ignore(src: str, names: list[str]) -> set[str]:
+        here = Path(src).relative_to(root).parts
+        return {name for name in names for pat in patterns
+                if len(pat) == len(here) + 1
+                and all(fnmatch.fnmatch(part, glob) for part, glob in zip((*here, name), pat, strict=True))}
+    return ignore
+
+
+def _copy_template_config(target: Path) -> None:
+    """Copy the template's `.kit/config.yml`, the one file under `.kit/` that is not machine state.
+
+    Never over the vault's own: under `init --force` that would swap its confidential folders for
+    the template's, and open what it hid without a word.
+    """
+    src = TEMPLATE_VAULT / kitproviders.CONFIG_REL
+    dst = target / kitproviders.CONFIG_REL
+    if src.is_file() and not (dst.exists() or dst.is_symlink()):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
 
 # Written from code, not shipped as `vault/.gitignore`: `copytree` overwrites what it copies, so a
 # template file would replace a user's own .gitignore under `init --force`, and the repository's
@@ -360,7 +389,8 @@ def cmd_init(args) -> int:
     target = Path(args.target).expanduser().resolve()
     if target.exists() and any(target.iterdir()) and not args.force:
         sys.exit(f"{target} exists and is not empty (use --force to overwrite files)")
-    shutil.copytree(TEMPLATE_VAULT, target, dirs_exist_ok=True, ignore=shutil.ignore_patterns(*TEMPLATE_STATE))
+    shutil.copytree(TEMPLATE_VAULT, target, dirs_exist_ok=True, ignore=_template_state(TEMPLATE_VAULT))
+    _copy_template_config(target)
     _write_vault_gitignore(target)
     actor = args.actor
     if actor:
