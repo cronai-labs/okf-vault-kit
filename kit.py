@@ -69,7 +69,7 @@ def _vault(arg: str | None, write: bool = False) -> Path:
     """
     named = arg or os.environ.get("KIT_VAULT")
     p = Path(named or TEMPLATE_VAULT).expanduser().resolve()
-    if not named:
+    if not _vault_given(arg):
         if write:
             print(f"refused: no vault given, and this command writes — it will not change the kit's own sample vault "
                   f"({p}). Pass --vault ~/Notes/vault or set KIT_VAULT; to change the sample itself, pass --vault {p}",
@@ -80,6 +80,11 @@ def _vault(arg: str | None, write: bool = False) -> Path:
         sys.exit(f"vault not found: {p}")
     _warn_undecodable(p)
     return p
+
+
+def _vault_given(arg: str | None) -> bool:
+    """True when the user named the vault (--vault or KIT_VAULT), False on the sample fallback."""
+    return bool(arg or os.environ.get("KIT_VAULT"))
 
 
 def _warn_undecodable(vault: Path) -> None:
@@ -719,9 +724,13 @@ def cmd_graph_export(args) -> int:
 
 
 def cmd_graph_query(args) -> int:
-    # --rebuild asks for a write; the rebuild a stale or unredacted .kit/graph.sqlite triggers on its
-    # own is a cache refresh into .kit/, which is derived state the repository ignores, not template content.
+    # --rebuild asks for a write. The rebuild a missing, stale or unredacted .kit/graph.sqlite
+    # triggers on its own is a cache refresh into the vault's .kit/: in a vault the user named it
+    # happens, but the kit's sample is only read when no vault was given, so there the query is
+    # answered from memory instead. `init` copies that sample whole, and a release archive has no
+    # .gitignore to keep a graph cache out of every new vault (#114).
     vault = _vault(args.vault, write=args.rebuild)
+    may_write = args.rebuild or _vault_given(args.vault)
     db = vault / kitgraph.KIT_DIR / "graph.sqlite"
     want = kitgraph.CONFIDENTIAL_SHOWN if args.show_confidential else kitgraph.CONFIDENTIAL_HIDDEN
     import sqlite3
@@ -734,13 +743,13 @@ def cmd_graph_query(args) -> int:
     # confidential nodes off the disk. --show-confidential never writes them as a side effect of a
     # query unless --rebuild asks for it; `graph build --show-confidential` is the deliberate way.
     # A stale file is rewritten in the mode it already has, so that never adds them either.
-    if args.rebuild or (not args.show_confidential and have != want) or (have == want and stale):
+    if may_write and (args.rebuild or (not args.show_confidential and have != want) or (have == want and stale)):
         if db.exists() and have != want and not args.rebuild:
             print(f"{db} was built with confidential notes in it; rebuilding it without them", file=sys.stderr)
         onto = kitgraph.load_ontology(vault)
         kitgraph.write_artifacts(vault, _graph(vault, args.show_confidential, onto), onto)
-        have = want
-    if have == want:
+        have, stale = want, False
+    if have == want and not stale:
         con = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)  # as_uri(): drive letters and spaces are not URI-safe
     else:
         con = kitgraph.to_sqlite(_graph(vault, args.show_confidential), ":memory:")

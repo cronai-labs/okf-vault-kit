@@ -801,6 +801,39 @@ class NoVaultGivenIsNotTheTemplate(unittest.TestCase):
         r = self.kit_run("validate", "--vault", str(self.kit / "vault"))
         self.assertNotIn("sample vault", r.stderr)
 
+    def test_a_reader_writes_nothing_into_the_fallback(self):
+        """A read must not leave `.kit/` in the template either: `init` copies the template whole,
+        and a release archive has no .gitignore to keep a graph cache or a proposals folder out."""
+        readers = [
+            ("proposals", "list"),
+            ("proposals", "show", "p-1"),
+            ("graph", "query", "SELECT count(*) AS n FROM nodes"),
+        ]
+        for argv in readers:
+            with self.subTest(argv=" ".join(argv)):
+                shutil.rmtree(self.kit / "vault" / ".kit", ignore_errors=True)   # each reader on its own
+                r = self.kit_run(*argv)
+                self.assertNotIn("no vault given", r.stderr, "a reader is not refused")
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse((self.kit / "vault" / ".kit").exists(),
+                                 f"{' '.join(argv)} created .kit/ in the template vault")
+        r = self.kit_run("graph", "query", "SELECT count(*) AS n FROM nodes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertGreater(int(r.stdout.splitlines()[1]), 0, "the query is still answered, from memory")
+
+    def test_a_stale_cache_in_the_fallback_is_answered_from_memory_not_rewritten(self):
+        v = self.kit / "vault"
+        r = self.kit_run("graph", "build", "--vault", str(v))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        built = self.snapshot()
+        extra = v / "zz-added-after-the-build.md"
+        extra.write_text("---\ntype: note\ntitle: Added after the build\n---\n\nBody.\n", encoding="utf-8")
+        r = self.kit_run("graph", "query", "SELECT count(*) AS n FROM nodes WHERE title = 'Added after the build'")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines()[1], "1", "the answer reflects the notes on disk, not the stale file")
+        after = self.snapshot(); after.pop(extra.relative_to(v).as_posix())
+        self.assertEqual(after, built, "a read rewrote the template's graph cache")
+
 
 class McpConfigAcrossTheWslBoundary(unittest.TestCase):
     """In WSL the file lands in the Linux home, which LM Studio on Windows never reads."""
