@@ -354,7 +354,7 @@ class SuiteTimeout(unittest.TestCase):
     """A hung test fails the run and names itself, rather than holding CI until the job times out. (#94)
 
     `make check` runs the suite through `kit.py test`, which is unittest, so pytest-timeout does not
-    reach it; the runner arms its own per-test limit.
+    reach it; the runner arms its own limit, for each test and for the class and module fixtures.
     """
 
     HANGS = ("import time\nimport unittest\n\n\nclass Hangs(unittest.TestCase):\n"
@@ -373,6 +373,49 @@ class SuiteTimeout(unittest.TestCase):
         self.assertNotEqual(r.returncode, 0, "a hung test must fail the run")
         self.assertIn("test_blocks_forever", r.stderr, "the output must name the test that hung")
         self.assertIn("Timeout", r.stderr, "the traceback dump says the limit was hit")
+
+    # unittest runs class and module fixtures outside startTest/stopTest, so a limit armed only
+    # there let a hung setUpClass (where test_e2e_qmd.py indexes with qmd) run unbounded.
+    FIXTURE_HANGS = {
+        "setUpModule": "def setUpModule():\n    time.sleep(8)\n\n\n",
+        "setUpClass": "",
+        "tearDownClass": "",
+    }
+
+    def fixture_module(self, where: str) -> str:
+        body = "import time\nimport unittest\n\n\n" + self.FIXTURE_HANGS[where]
+        body += "class Fixture(unittest.TestCase):\n"
+        if where in ("setUpClass", "tearDownClass"):
+            body += f"    @classmethod\n    def {where}(cls):\n        time.sleep(8)\n\n"
+        return body + "    def test_passes(self):\n        pass\n"
+
+    def test_a_hung_class_or_module_fixture_is_stopped_too(self):
+        import kit
+        for where in self.FIXTURE_HANGS:
+            with self.subTest(fixture=where), tempfile.TemporaryDirectory() as tmp:
+                Path(tmp, "test_fixture_hangs.py").write_text(self.fixture_module(where), encoding="utf-8")
+                env = {**os.environ, "KIT_TEST_TIMEOUT": "1", "PYTHONIOENCODING": "utf-8"}
+                r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+                self.assertNotEqual(r.returncode, 0, f"a hung {where} must fail the run:\n{r.stderr}")
+                self.assertIn("Timeout", r.stderr, "the traceback dump says the limit was hit")
+                self.assertIn(where, r.stderr, "the traceback names the fixture that hung")
+
+    def test_a_limit_the_runner_cannot_arm_is_refused(self):
+        """`nan` switched the limit off without a word; `inf` and 1e10 crashed the first test. (#94)"""
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "test_quick.py").write_text(
+                "import unittest\n\n\nclass Quick(unittest.TestCase):\n    def test_passes(self):\n        pass\n",
+                encoding="utf-8")
+            for value in ("nan", "inf", "-inf", "1e10", "-1", "soon"):
+                with self.subTest(KIT_TEST_TIMEOUT=value):
+                    env = {**os.environ, "KIT_TEST_TIMEOUT": value, "PYTHONIOENCODING": "utf-8"}
+                    r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                                       encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+                    self.assertNotEqual(r.returncode, 0, f"KIT_TEST_TIMEOUT={value} must be refused")
+                    self.assertIn("KIT_TEST_TIMEOUT", r.stderr, "the refusal names the setting")
+                    self.assertNotIn("Traceback", r.stderr, "a refusal, not a crash")
 
     def test_the_limit_can_be_switched_off(self):
         import kit

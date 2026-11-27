@@ -5,10 +5,10 @@ The suite is plain `unittest` (runs with `pytest` too). Offline tests always run
 ```bash
 uv run --with 'mcp>=2,<3' kit.py test           # everything, verbose (the SDK enables the real MCP session test)
 uv run kit.py test -p "test_bridge.py"          # one module
-python -m pytest tests -q                       # if you prefer pytest (needs pyyaml installed)
+python -m pytest tests -q                       # if you prefer pytest (needs pyyaml and pytest-timeout installed)
 ```
 
-Every test runs under a time limit, 300 seconds by default, so a test that hangs fails the run and names itself instead of holding CI until the job's `timeout-minutes`. `kit.py test` (and so `make check` and CI) runs the suite through `tests/runner.py`, which arms `faulthandler` for each test: past the limit it prints every thread's traceback after the test's name and exits 1. `KIT_TEST_TIMEOUT` changes the limit. Under pytest the same limit comes from `pytest-timeout` in the `test` extra and `timeout` in `pyproject.toml`; `--timeout=0` switches it off there.
+Every test, and every class or module fixture (`setUpClass`, `setUpModule` and their teardowns), runs under a time limit, 300 seconds by default, so a hang fails the run and says where instead of holding CI until the job's `timeout-minutes`. `kit.py test` (and so `make check` and CI) runs the suite through `tests/runner.py`, which keeps a `faulthandler` watchdog armed for the whole run and restarts it whenever a test starts or stops: past the limit it prints every thread's traceback and exits 1. A hung test is named by the line the verbose runner printed last; a hung fixture by its frame in the traceback. `KIT_TEST_TIMEOUT` changes the limit; a value that is not a finite, non-negative number the platform's timer can hold is refused. Under pytest the same limit comes from `pytest-timeout` in the `test` extra and `timeout` in `pyproject.toml`; `--timeout=0` switches it off there. Without the plugin installed, pytest warns `Unknown config option: timeout` and runs with no limit.
 
 ## Layers
 
@@ -44,7 +44,7 @@ Last real-model run, 2026-11-25, `minicpm5-2b` in LM Studio on macOS with `KIT_E
 | `KIT_LLM_API_KEY` | bearer token if the server requires one |
 | `KIT_E2E_EMBED=1` | run `qmd embed` + vector + hybrid queries (downloads models once, minutes on CPU; raise `KIT_TEST_TIMEOUT` or set it to 0) |
 | `KIT_E2E_BENCH=1` | run `qmd bench` with `tests/fixtures/qmd-bench.json` (also embeds first; the same note on `KIT_TEST_TIMEOUT`) |
-| `KIT_TEST_TIMEOUT` | per-test limit in seconds for `kit.py test` (default 300; 0 switches it off) |
+| `KIT_TEST_TIMEOUT` | limit in seconds for each test and each class or module fixture under `kit.py test` (default 300; 0 switches it off). Raise it for the embed and bench tiers, and for `test_e2e_llm.py` on a slow local model: one model call may take 180 s and `llm smoke` 300 s |
 | `KIT_E2E_TOOLS=1` | assert the model emits an OpenAI-style tool call, and that it can drive the bridge's real tools to an answer |
 | `KIT_VAULT` | default vault path for `kit.py` commands |
 
