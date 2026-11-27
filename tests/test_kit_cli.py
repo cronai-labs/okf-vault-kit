@@ -1123,6 +1123,15 @@ class DoctorVaultGitRow(unittest.TestCase):
         self.assertIn("ok", row)
         self.assertNotIn("warning", row.lower())
 
+    def test_a_re_include_under_an_ignored_folder_counts_as_the_fix_sees_it(self):
+        """git cannot re-include a file below an excluded folder: `.kit/` with `!.kit/config.yml`
+        still ignores the config, so the row counts it, and the fix lists it, consistently."""
+        self.init_vault(lines=("!.kit/config.yml",))
+        self.assertEqual(git_in(self.vault, "add", "-f", ".kit/config.yml").returncode, 0)
+        self.assertIn("WARNING: 1 file(s)", self.row(self.doctor()))
+        listed = git_in(self.vault, "ls-files", "-ci", "--exclude-standard")
+        self.assertEqual(listed.stdout.split(), [".kit/config.yml"])
+
     def test_only_files_the_rules_cover_are_counted_and_the_fix_lists_just_those(self):
         hidden = ".obsidian/plugins/hidden-plugin/data.json"
         self.init_vault(lines=(f"!{self.LINTER}",), files=(self.LINTER, hidden))
