@@ -26,8 +26,8 @@ class Docs(unittest.TestCase):
         for doc in self.docs():
             text = re.sub(r"```.*?```", "", doc.read_text(encoding="utf-8"), flags=re.DOTALL)
             for m in LINK.finditer(text):
-                target = m.group(1)
-                if target.startswith(("http://", "https://", "mailto:", "#")):
+                target = kitlib.local_link(m.group(1))
+                if target is None:
                     continue
                 path = (doc.parent / urllib.parse.unquote(target.split("#")[0])).resolve()
                 self.assertTrue(path.exists(), f"{doc.relative_to(ROOT)}: broken link {target}")

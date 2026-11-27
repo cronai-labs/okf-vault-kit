@@ -955,8 +955,8 @@ def _lines_referencing(path: Path, targets: set[Path], vault: Path) -> list[int]
             continue
         bare = kitlib.CODE_SPAN_RE.sub("", line)
         for m in list(kitlib.MD_LINK_RE.finditer(bare)) + list(kitlib.MD_IMAGE_RE.finditer(bare)):
-            target = m.group(1)
-            if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
+            target = kitlib.local_link(m.group(1))
+            if target is None:
                 continue
             target = urllib.parse.unquote(target.split("#", 1)[0])
             if not target:
@@ -1189,7 +1189,7 @@ def cmd_llm_smoke(args) -> int:
 def _confidential(vault: Path, rel: str) -> bool:
     """True when the note is confidential — by its own `sensitivity`, or by a folder floor or path
     rule in `.kit/config.yml` — the line the MCP bridge enforces."""
-    if not rel or rel.startswith(("http://", "https://")):
+    if not rel or kitlib.is_external_link(rel):
         return False
     # The shared predicate fails closed like the bridge: an unreadable note, a YAML error or a
     # block a BOM hid counts as confidential. A path to no file stays False, as in the bridge.

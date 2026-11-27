@@ -34,7 +34,7 @@ ONTOLOGY_REL = "99-system/ontology.yml"
 DEFAULT_ONTOLOGY = Path(__file__).resolve().parent / "config" / "ontology.yml"
 KIT_DIR = ".kit"
 SELF_ID = "self"
-MD_LINK_VALUE = re.compile(r"^\s*\[([^\]]*)\]\(([^)\s]+)\)\s*$")
+MD_LINK_VALUE = re.compile(r"^\s*\[([^\]]*)\]\((<[^<>\n]*>|[^)\s]+)\)\s*$")
 WIKI_VALUE = re.compile(r"^\s*\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]\s*$")
 FOOTNOTE_REF = re.compile(r"\[\^([^\]]+)\](?!:)")
 KNOWLEDGE_ROOT = "knowledge"
@@ -287,9 +287,9 @@ class Resolver:
             return SELF_ID, "self", [SELF_ID]
         m = MD_LINK_VALUE.match(raw)
         if m:
-            target = urllib.parse.unquote(m.group(2).split("#", 1)[0])
-            if target.startswith(("http://", "https://")):
+            if kitlib.is_external_link(m.group(2)):
                 return None, "external", []
+            target = urllib.parse.unquote(kitlib.link_target(m.group(2)).split("#", 1)[0])
             base = Path(from_path).parent if from_path else Path("")
             rel = (base / target) if not target.startswith("/") else Path(target.lstrip("/"))
             rel = Path(*[p for p in rel.as_posix().split("/") if p not in ("", ".")])
@@ -473,10 +473,9 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
         # body links
         text = kitlib._strip_unrendered(note.body)
         for m in kitlib.MD_LINK_RE.finditer(text):
-            target = m.group(1)
-            if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
+            if kitlib.local_link(m.group(1)) is None:
                 continue
-            tid, _method, _ = resolver.resolve(f"[x]({target})", None, note.rel)
+            tid, _method, _ = resolver.resolve(f"[x]({m.group(1)})", None, note.rel)
             if tid and tid != nid:
                 g.add_edge(nid, "links_to", tid, "body")
         for m in kitlib.WIKILINK_RE.finditer(text):

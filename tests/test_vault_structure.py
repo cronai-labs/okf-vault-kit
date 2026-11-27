@@ -155,7 +155,7 @@ class VaultStructure(unittest.TestCase):
             path = VAULT / "90-templates" / f"{name}.md"
             body = kitlib._strip_unrendered(kitlib.parse_note(path, VAULT).body)
             targets = [m.group(1) for m in kitlib.MD_LINK_RE.finditer(body)]
-            local = [x for x in targets if not x.startswith(("http://", "https://", "mailto:", "#"))]
+            local = [x for x in targets if kitlib.local_link(x) is not None]
             self.assertEqual(local, [], f"{name}.md: relative link(s) break once the note is filed elsewhere")
 
     def test_required_ontology_properties_are_prefilled_in_templates(self):
