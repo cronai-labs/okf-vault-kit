@@ -1,6 +1,6 @@
 # Examples — walkthroughs on the sample vault
 
-The template vault doubles as the sample: every **(example)** note is a fixture the tests use. Run these against the template (`vault/`) or against your own copy.
+The template vault doubles as the sample: every **(example)** note is a fixture the tests use. Run these against the template (`vault/`) or against your own copy. Without `--vault` or `KIT_VAULT` the read commands read the template and say so on stderr; the commands that write refuse it until you name it, so the writing steps below need `--vault ./vault` (or `export KIT_VAULT=./vault`) to change the template, which every later `init` copies.
 
 ## 1. Find a decision from the terminal (qmd)
 

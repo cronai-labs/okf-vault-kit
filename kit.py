@@ -58,8 +58,24 @@ DEFAULT_MODEL = os.environ.get("KIT_LLM_MODEL", "")
 IS_WINDOWS = platform.system() == "Windows"
 
 
-def _vault(arg: str | None) -> Path:
-    p = Path(arg or os.environ.get("KIT_VAULT") or TEMPLATE_VAULT).expanduser().resolve()
+def _vault(arg: str | None, write: bool = False) -> Path:
+    """The vault a command acts on: --vault, else KIT_VAULT, else the kit's own sample (#114).
+
+    The sample is a fallback for reading only. A command that writes refuses it unless it was
+    named, because the template is what every later `init` copies and a release archive has no
+    git to undo a change with; `--vault vault` (what `make lint` passes) is a deliberate choice.
+    A reader says on stderr that it read the sample, so an answer about the sample is never
+    taken for one about the user's own notes, and stdout stays the command's output.
+    """
+    named = arg or os.environ.get("KIT_VAULT")
+    p = Path(named or TEMPLATE_VAULT).expanduser().resolve()
+    if not named:
+        if write:
+            print(f"refused: no vault given, and this command writes — it will not change the kit's own sample vault "
+                  f"({p}). Pass --vault ~/Notes/vault or set KIT_VAULT; to change the sample itself, pass --vault {p}",
+                  file=sys.stderr)
+            sys.exit(2)
+        print(f"note: reading the kit's sample vault ({p}) — pass --vault or set KIT_VAULT to read yours", file=sys.stderr)
     if not p.exists():
         sys.exit(f"vault not found: {p}")
     _warn_undecodable(p)
@@ -304,7 +320,7 @@ def _write_kit_config(vault: Path, collection: str) -> None:
 # ---------------------------------------------------------------- index / validate / log
 
 def cmd_index(args) -> int:
-    out = kitlib.write_index(_vault(args.vault))
+    out = kitlib.write_index(_vault(args.vault, write=True))
     print(f"wrote {out}")
     return 0
 
@@ -345,7 +361,7 @@ def cmd_validate(args) -> int:
 
 
 def cmd_log(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=True)
     if kitlib.append_log(vault, args.message, args.kind) is None:
         print("log.md is not valid UTF-8 — nothing was written; re-save it as UTF-8 and log again")
         return 1
@@ -569,7 +585,7 @@ def _agent_settings_remove(vault: Path, args) -> int:
 
 
 def cmd_agent_settings(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.apply)
     if args.apply and vault == TEMPLATE_VAULT.resolve():
         sys.exit("that vault is the kit's own sample, not yours — --apply would write into this checkout. "
                  "Pass your own: --vault ~/Notes/vault")
@@ -662,7 +678,7 @@ def _hidden_line(full: int, shown: kitgraph.Graph) -> str:
 
 
 def cmd_graph_build(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=True)            # it writes .kit/graph.* into the vault
     onto = kitgraph.load_ontology(vault)
     full = kitgraph.build_graph(vault, onto)
     g = full if args.show_confidential else kitgraph.redact_vault(full, vault)
@@ -697,7 +713,9 @@ def cmd_graph_export(args) -> int:
 
 
 def cmd_graph_query(args) -> int:
-    vault = _vault(args.vault)
+    # --rebuild asks for a write; the rebuild a stale or unredacted .kit/graph.sqlite triggers on its
+    # own is a cache refresh into .kit/, which is derived state the repository ignores, not template content.
+    vault = _vault(args.vault, write=args.rebuild)
     db = vault / kitgraph.KIT_DIR / "graph.sqlite"
     want = kitgraph.CONFIDENTIAL_SHOWN if args.show_confidential else kitgraph.CONFIDENTIAL_HIDDEN
     import sqlite3
@@ -769,7 +787,7 @@ def cmd_graph_pack(args) -> int:
 # ---------------------------------------------------------------- reconcile / todos / minutes
 
 def cmd_reconcile(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.apply)
     changes = kitrecon.reconcile(vault, apply=args.apply)
     if args.json:
         print(json.dumps([c.__dict__ for c in changes], indent=1, ensure_ascii=False))
@@ -784,7 +802,7 @@ def cmd_reconcile(args) -> int:
 
 
 def cmd_todos(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.sync_done or args.digest is not None)
     full = kitrecon.todo_report(vault, sync_done=args.sync_done)
     # What is listed leaves out tasks in confidential notes, as the bridge's vault_todos does: the
     # listing is what gets pasted into a model or a ticket (#52). What acts works on every task:
@@ -846,7 +864,7 @@ def _decode_recap(data: bytes, source: str) -> str:
 
 
 def cmd_minutes(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=not args.dry_run)
     if args.file == "-":
         text = _decode_recap(sys.stdin.buffer.read(), "the recap on stdin")
     else:
@@ -980,7 +998,7 @@ def _frontmatter_repairs(note: kitlib.Note, dead: set[str]) -> dict[str, Any]:
 
 
 def cmd_examples(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=not args.dry_run)
     if args.action != "remove":
         return 2
     samples = _sample_notes(vault)
@@ -1060,7 +1078,7 @@ def cmd_proposals(args) -> int:
 
 
 def _proposals(args, bridge_policy, vault_bridge) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.action in ("apply", "reject"))
     store = bridge_policy.ProposalStore(vault / kitgraph.KIT_DIR / "proposals")
     if args.action == "list":
         items = store.pending()

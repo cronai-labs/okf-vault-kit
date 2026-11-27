@@ -46,7 +46,7 @@ Last real-model run, 2026-11-25, `minicpm5-2b` in LM Studio on macOS with `KIT_E
 | `KIT_E2E_BENCH=1` | run `qmd bench` with `tests/fixtures/qmd-bench.json` (also embeds first; the same note on `KIT_TEST_TIMEOUT`) |
 | `KIT_TEST_TIMEOUT` | limit in seconds for each test and each class or module fixture under `kit.py test` (default 300; 0 switches it off). Raise it for the embed and bench tiers, and for `test_e2e_llm.py` on a slow local model: one model call may take 180 s and `llm smoke` 300 s |
 | `KIT_E2E_TOOLS=1` | assert the model emits an OpenAI-style tool call, and that it can drive the bridge's real tools to an answer |
-| `KIT_VAULT` | default vault path for `kit.py` commands |
+| `KIT_VAULT` | default vault path for `kit.py` commands; without it and without `--vault`, commands that write refuse to act on the kit's sample vault |
 
 ## What is deliberately not automated
 

@@ -727,6 +727,81 @@ class TheSampleVaultIsNotYours(unittest.TestCase):
             shutil.rmtree(v.parent, ignore_errors=True)
 
 
+class NoVaultGivenIsNotTheTemplate(unittest.TestCase):
+    """Without --vault or KIT_VAULT every command fell back to the kit's own sample vault (#114).
+
+    A writer then changed the template: `examples remove` deleted the sample set with no prompt,
+    and every later `init` copied the damage. These run a *copy* of the kit, so a writer that
+    still acts cannot touch this checkout's vault/ while the test watches it fail.
+    """
+
+    def setUp(self):
+        self.kit = Path(tempfile.mkdtemp(prefix="okf-kitcopy-"))
+        self.addCleanup(shutil.rmtree, self.kit, ignore_errors=True)
+        for p in ROOT.glob("*.py"):
+            shutil.copy2(p, self.kit / p.name)
+        shutil.copy2(ROOT / "VERSION", self.kit / "VERSION")
+        for d in ("mcp", "config", "vault"):
+            shutil.copytree(ROOT / d, self.kit / d, ignore=shutil.ignore_patterns("__pycache__", ".kit"))
+        self.env = dict(os.environ)
+        self.env.pop("KIT_VAULT", None)
+        self.recap = self.kit / "recap.txt"
+        self.recap.write_text("We agreed to ship.\n", encoding="utf-8")
+
+    def kit_run(self, *args, env=None):
+        return subprocess.run([sys.executable, str(self.kit / "kit.py"), *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", check=False, cwd=self.kit, env=env or self.env)
+
+    def snapshot(self) -> dict[str, bytes]:
+        v = self.kit / "vault"
+        return {p.relative_to(v).as_posix(): p.read_bytes() for p in v.rglob("*") if p.is_file()}
+
+    def test_every_writer_refuses_the_fallback_and_writes_nothing(self):
+        writers = [
+            ("log", "hello"),
+            ("index",),
+            ("examples", "remove"),
+            ("minutes", str(self.recap), "--title", "Sync"),
+            ("reconcile", "--apply"),
+            ("todos", "--digest"),
+            ("todos", "--sync-done"),
+            ("proposals", "apply", "p-1"),
+            ("proposals", "reject", "p-1"),
+            ("graph", "build"),
+            ("graph", "query", "SELECT 1", "--rebuild"),
+        ]
+        before = self.snapshot()
+        for argv in writers:
+            with self.subTest(argv=" ".join(argv)):
+                r = self.kit_run(*argv)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("refused:", r.stderr)
+                self.assertIn("--vault", r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(self.snapshot(), before, f"{' '.join(argv)} wrote into the template vault")
+
+    def test_naming_the_template_explicitly_is_allowed(self):
+        """`make lint` validates vault/ by name, and a maintainer regenerates its index the same way."""
+        r = self.kit_run("index", "--vault", str(self.kit / "vault"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.kit_run("log", "hello", env=dict(self.env, KIT_VAULT=str(self.kit / "vault")))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_reader_says_which_vault_it_read_on_stderr(self):
+        for argv in (("validate",), ("examples", "remove", "--dry-run"), ("reconcile",), ("todos", "--json")):
+            with self.subTest(argv=" ".join(argv)):
+                r = self.kit_run(*argv)
+                self.assertNotIn("refused:", r.stderr)
+                lines = [l for l in r.stderr.splitlines() if "sample vault" in l]
+                self.assertEqual(len(lines), 1, r.stderr)
+                self.assertIn("--vault", lines[0])
+                self.assertNotIn("sample vault", r.stdout, "stdout stays the command's own output")
+
+    def test_a_named_vault_gets_no_notice(self):
+        r = self.kit_run("validate", "--vault", str(self.kit / "vault"))
+        self.assertNotIn("sample vault", r.stderr)
+
+
 class McpConfigAcrossTheWslBoundary(unittest.TestCase):
     """In WSL the file lands in the Linux home, which LM Studio on Windows never reads."""
 
