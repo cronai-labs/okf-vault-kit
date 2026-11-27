@@ -233,6 +233,9 @@ class Guard(_Open):
         self.assertIs(kitlib.confidentiality(self.v, "04-areas/sub/plain.md"), False)
         self.assertIs(kitlib.confidentiality(self.v, "04-areas/team/plain.md"), False)
         self.assertIs(kitlib.confidentiality(self.v, "04-areas/team/h#r/plain.md"), True)
+        self.assertIn(kitlib._match_form("04-areas/team/h#r"), plan.guard["folders"], "named by the guard itself")
+        write(self.v, "04-areas/team/h#r/later.md", "# hidden by its folder, made after the settings\n")
+        self.assertEqual(self.code("Read", {"file_path": "04-areas/team/h#r/later.md"}, plan=plan), 2)
         for dirpath, dirnames, filenames in os.walk(self.v):
             dirnames[:] = [d for d in dirnames if d != ".git"]
             for name in filenames:
