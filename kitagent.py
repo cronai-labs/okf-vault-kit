@@ -133,8 +133,6 @@ def main():
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
         cwd = project
     raw = args.get(TOOLS[tool])
-    if raw is None and tool in PATTERN:
-        raw = cwd
     if not isinstance(raw, str) or not raw or "\\0" in raw:
         no(str(tool) + " names no usable path")
     if raw.startswith("~") or ".." in re.split(r"[/\\\\]", raw):
@@ -142,11 +140,15 @@ def main():
     pattern = args.get(PATTERN.get(tool, ""))
     if pattern is not None and (not isinstance(pattern, str) or leaves(pattern)):
         no(tool + " with a pattern that leaves its folder")
-    full = raw if os.path.isabs(raw) else os.path.join(cwd, raw)
-    lexical = rel_to(os.path.normpath(full), [os.path.normpath(os.path.abspath(project)), os.path.realpath(project)])
-    resolved = rel_to(os.path.realpath(full), [os.path.realpath(project)])
-    if not (allowed(lexical) and allowed(resolved)):
-        no(tool + " outside the open folders, or on a denied path")
+    # A relative path is judged from the cwd of the call and from the project dir: which one the tool
+    # uses was not observed, so both must pass.
+    fulls = [raw] if os.path.isabs(raw) else [os.path.join(cwd, raw), os.path.join(project, raw)]
+    bases = [os.path.normpath(os.path.abspath(project)), os.path.realpath(project)]
+    for full in fulls:
+        lexical = rel_to(os.path.normpath(full), bases)
+        resolved = rel_to(os.path.realpath(full), bases[1:])
+        if not (allowed(lexical) and allowed(resolved)):
+            no(tool + " outside the open folders, or on a denied path")
 
 
 try:
@@ -552,7 +554,10 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
                                   pattern_keep=lambda pat: _may_reach(pat, opens))
     wanted += found
     _add_entries(plan, wanted)
-    allow = sorted({f"./{f}" for d in policy.declared_open_folders for f in _on_disk(root, d)})
+    # `.claude` is never re-opened to the shell, nor `.git` without --allow-git, even when declared open.
+    closed = (".claude",) + (() if allow_git else (".git",))
+    allow = sorted({f"./{f}" for d in policy.declared_open_folders for f in _on_disk(root, d)
+                    if not _in_open(f, closed)})
     allow.append(f"./{kitlib.CONFIG_REL}")         # the agent's own kit runs load the policy, as in deny-list mode
     if allow_git and (root / ".git").is_dir():
         allow.append("./.git")
@@ -1185,8 +1190,11 @@ def _guard_flags(plan: Plan, current: Any, local: Any) -> list[str]:
     pre = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
     pre = pre if isinstance(pre, list) else []
     guards = [e for e in pre if is_guard(e)]
-    if not _has(pre, plan.hook):
-        flags.append("open-folder guard altered" if guards else "open-folder guard missing")
+    if not guards:
+        flags.append("open-folder guard missing")
+    elif any(not same_json(e, plan.hook) for e in guards):
+        # Also when a correct guard stands beside it: the altered one is no longer the kit's to remove.
+        flags.append("open-folder guard altered")
     if any(isinstance(h, dict) and GUARD_MARKER in str(h.get("command")) and h.get("onFailure") != "block"
            for e in guards for h in e["hooks"]):
         flags.append("open-folder guard without onFailure: block")

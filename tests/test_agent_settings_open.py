@@ -113,10 +113,12 @@ class Guard(_Open):
                      str(self.v.parent / "elsewhere.md"), "~/notes.md", str(self.v)):
             self.assertEqual(self.code("Read", {"file_path": path}), 2, path)
 
-    def test_relative_paths_resolve_against_the_hook_cwd(self):
-        self.assertEqual(self.code("Read", {"file_path": "plover.md"}, cwd=self.v / "04-areas"), 0)
-        self.assertEqual(self.code("Read", {"file_path": "plover.md"}), 2, "no plover.md at the root")
+    def test_a_relative_path_must_pass_from_the_cwd_and_the_project_dir(self):
+        # Which base the tool resolves a relative path against was not observed, so both must pass.
         self.assertEqual(self.code("Read", {"file_path": OPEN_REL}), 0)
+        self.assertEqual(self.code("Read", {"file_path": "plover.md"}, cwd=self.v / "04-areas"), 2)
+        self.assertEqual(self.code("Read", {"file_path": "plover.md"}), 2, "no plover.md at the root")
+        self.assertEqual(self.code("Read", {"file_path": OPEN_REL}, cwd=self.v / "05-people"), 2)
 
     def test_case_variants(self):
         self.assertEqual(self.code("Read", {"file_path": "04-AREAS/Plover.md"}), 0)
@@ -127,6 +129,9 @@ class Guard(_Open):
         self.assertEqual(self.code("Grep", {"pattern": "kestrel", "path": str(self.v / "04-areas")}), 0)
         self.assertEqual(self.code("Grep", {"pattern": "kestrel"}), 2, "no path: the project root")
         self.assertEqual(self.code("Glob", {"pattern": "**/*.md"}), 2, "no path: the project root")
+        # No path is refused wherever the session stands: the tool's own default is not observed.
+        self.assertEqual(self.code("Grep", {"pattern": "kestrel"}, cwd=self.v / "04-areas"), 2)
+        self.assertEqual(self.code("Glob", {"pattern": "*.md"}, cwd=self.v / "04-areas"), 2)
         self.assertEqual(self.code("Glob", {"pattern": "**/*.md", "path": str(self.v / "07-knowledge")}), 0)
         for tool, args in (("Glob", {"pattern": "../**/*.md", "path": str(self.v / "04-areas")}),
                            ("Glob", {"pattern": f"{self.v}/**/*.md", "path": str(self.v / "04-areas")}),
@@ -157,6 +162,9 @@ class Guard(_Open):
         self.assertEqual(self.code("Read", {"file_path": ".git/HEAD"}, plan=plan), 2)
         self.assertIn("Read(./.claude/**)", plan.deny)
         self.assertIn("Read(./.git/**)", plan.deny)
+        self.assertEqual(plan.allow_read, ["./04-areas", "./.kit/config.yml"], "never re-opened to the shell")
+        self.assertIn("./.git", self.plan(allow_git=True).allow_read)
+        self.assertNotIn("./.claude", self.plan(allow_git=True).allow_read)
 
     def test_allow_git_lets_git_through(self):
         write(self.v, ".git/HEAD", "ref: refs/heads/main\n")
@@ -378,6 +386,15 @@ class AllowOpenDoctor(_Open):
         self.edit(lambda s: s["hooks"]["PreToolUse"][0]["hooks"][0].update(
             command=s["hooks"]["PreToolUse"][0]["hooks"][0]["command"].replace("sys.exit(2)", "sys.exit(0)")))
         self.assertIn("open-folder guard altered", self.row())
+
+    def test_an_altered_guard_left_beside_a_new_one(self):
+        agent(self.v, "--apply")
+        self.edit(lambda s: s["hooks"]["PreToolUse"][0]["hooks"][0].pop("onFailure"))
+        agent(self.v, "--apply")                  # writes a correct guard; the altered one is not the kit's any more
+        self.assertEqual(len(self.guards()), 2)
+        status = self.row()
+        self.assertIn("open-folder guard altered", status)
+        self.assertIn("without onFailure", status)
 
     def test_a_missing_guard_and_a_missing_on_failure(self):
         agent(self.v, "--apply")
