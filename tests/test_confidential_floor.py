@@ -343,8 +343,6 @@ BROKEN = {
     "open folder absolute": 'confidentiality:\n  open_folders: ["/etc"]\n',
     "open folder escapes": 'confidentiality:\n  open_folders: ["04-areas/../../x"]\n',
     "open folder not a list": "confidentiality:\n  open_folders: 04-areas\n",
-    # Values PyYAML scans but cannot construct, raised outside yaml.YAMLError: ValueError, KeyError,
-    # IndexError, AttributeError. Anywhere in the file, the block cannot be known either.
     "open folder is a confidential folder": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
                                              '  open_folders: ["05-People"]\n'),
     "open folder under a confidential folder": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
@@ -388,7 +386,9 @@ class HubRowsFollowTheFloor(unittest.TestCase):
         self.assertIn(self.ROW, (self.vault / kitrecon.PROJECT_HUB).read_text(encoding="utf-8"))
 
 
-# What `yaml.safe_load` raises besides YAMLError, one case per exception class seen.
+# Values PyYAML scans but cannot construct, raised outside yaml.YAMLError: ValueError, KeyError,
+# IndexError, AttributeError, one case per exception class seen. Anywhere in the file, the block
+# cannot be known either.
 UNCONSTRUCTABLE = {
     "impossible date": 'updated: 2026-02-30\nconfidentiality:\n  confidential_folders: ["05-people"]\n',
     "bool tag": 'confidentiality:\n  confidential_folders: ["05-people"]\nflag: !!bool maybe\n',
