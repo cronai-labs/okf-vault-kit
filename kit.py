@@ -228,7 +228,7 @@ _GIT_PROBES = {
 # re-included (one plugin's data.json). `.kit/config.yml` is named: a vault from before the
 # `.kit/*` rule ignores it, so `ls-files -ci` lists it there, and it holds the floors a clone needs.
 # No glob in it either: the report's redactor reads `*/data.json` as an absolute path and cuts it.
-_GIT_FIX = "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists, except .kit/config.yml"
+_GIT_FIX = "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists in the vault, except .kit/config.yml"
 # Kept in git whatever rule covers it: the confidentiality floors and open folders (#54).
 _GIT_KEPT = kitproviders.CONFIG_REL.as_posix()
 
@@ -280,7 +280,7 @@ def _vault_git_row(vault: Path) -> str | None:
     if n_tracked:
         parts.append(f"WARNING: {n_tracked} file(s) under .kit/ or plugin data.json already tracked — "
                      + ("add the lines `kit.py init` writes to .gitignore, then " if exposed else "")
-                     + f"run {_GIT_FIX} in the vault and commit; if that history was pushed, rewrite it "
+                     + f"run {_GIT_FIX}, and commit; if that history was pushed, rewrite it "
                      "and rotate any key it holds")
     if exposed:
         parts.append(f"warning: not ignored: {', '.join(exposed)} — `git add .` would commit them; "
