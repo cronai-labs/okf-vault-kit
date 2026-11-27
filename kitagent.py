@@ -1219,7 +1219,8 @@ def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any], curre
 
 
 # What a flag about settings.json as it is becomes in a dry run, when --apply's own write fixes it.
-WILL_FIX = {"open-folder guard missing": "the open-folder guard will be added"}
+WILL_FIX = {"open-folder guard missing": "the open-folder guard will be added",
+            "open-folder guard altered": "the open-folder guard will be replaced"}
 
 
 def will_fix(flag: str) -> str:
