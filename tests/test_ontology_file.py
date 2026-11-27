@@ -160,6 +160,18 @@ class AliasesOntoSensitivityAreRefused(OntologyFileCase):
         self.insert_after("property_aliases:\n", "  hidden_level: sensitivity\n")
         self.assert_refused("`property_aliases.hidden_level`")
 
+    def test_a_property_alias_that_differs_from_sensitivity_only_in_case_or_spacing(self):
+        """`Sensitivity: confidential` was hidden by the graph and served by every other reader,
+        which read the exact key `sensitivity`; the identity exemption let it through."""
+        for alias in ("Sensitivity", "SENSITIVITY", "'sensitivity '"):
+            with self.subTest(alias):
+                self.insert_after("property_aliases:\n", f"  {alias}: sensitivity\n")
+                self.assert_refused(f"`property_aliases.{alias.strip(chr(39))}`")
+
+    def test_the_identity_entry_is_not_refused(self):
+        self.insert_after("property_aliases:\n", "  sensitivity: sensitivity\n")
+        self.assertEqual(self.problems(), [])
+
     def test_the_readers_judge_the_raw_line_only(self):
         """The shared predicate is unchanged: no ontology, no alias, the raw value."""
         self.insert_after("value_aliases:\n", "  sensitivity: { hidden: confidential }\n")

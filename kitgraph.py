@@ -260,7 +260,9 @@ def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
     for alias, target in _mapping(data.get("property_aliases")).items():
         if not isinstance(target, str):
             out.append(f"{name}: `property_aliases.{alias}` must name one property; it is ignored")
-        elif target.strip().lower() == SENSITIVITY and str(alias).strip().lower() != SENSITIVITY:
+        elif target.strip().lower() == SENSITIVITY and alias != target:
+            # Only the identity entry is harmless. `Sensitivity: sensitivity` is not: the readers
+            # match the exact key `sensitivity`, so the graph alone would see `Sensitivity:`.
             out.append(f"{name}: `property_aliases.{alias}` maps onto `sensitivity` and is refused: {_SENSITIVITY_WHY} "
                        f"Rename `{alias}` to `sensitivity` in the notes and drop the alias.")
     for prop, table in _mapping(data.get("value_aliases")).items():
