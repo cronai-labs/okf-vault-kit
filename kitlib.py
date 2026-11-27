@@ -319,13 +319,14 @@ class Report:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     checked: int = 0
+    unit: str = "markdown files"
 
     @property
     def ok(self) -> bool:
         return not self.errors
 
     def render(self) -> str:
-        lines = [f"checked {self.checked} markdown files"]
+        lines = [f"checked {self.checked} {self.unit}"]
         for e in self.errors:
             lines.append(f"ERROR  {e}")
         for w in self.warnings:

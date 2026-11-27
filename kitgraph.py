@@ -53,17 +53,31 @@ class PropSpec:
     required: bool = False
 
 
+def _mapping(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 class Ontology:
+    """The ontology as the readers use it.
+
+    A section or entry of the wrong shape is dropped here, never trusted: `check_ontology_file`
+    is what reports it, and a reader that indexed into it would turn one bad line into a traceback
+    in `graph`, `reconcile` and the bridge.
+    """
+
     def __init__(self, data: dict[str, Any], source: Path | None = None):
-        self.data = data or {}
+        self.data = _mapping(data)
         self.source = source
-        self.base_iri: str = self.data.get("base_iri", "urn:okf-vault-kit:")
-        self.context_file: str = self.data.get("context_file", "context.jsonld")
-        self.classes: dict[str, dict] = self.data.get("classes", {}) or {}
-        self.edges: dict[str, dict] = self.data.get("edges", {}) or {}
-        self.property_aliases: dict[str, str] = self.data.get("property_aliases", {}) or {}
-        self.value_aliases: dict[str, dict] = self.data.get("value_aliases", {}) or {}
-        self.rules: dict[str, bool] = self.data.get("rules", {}) or {}
+        base_iri, context_file = self.data.get("base_iri"), self.data.get("context_file")
+        self.base_iri: str = base_iri if isinstance(base_iri, str) else "urn:okf-vault-kit:"
+        self.context_file: str = context_file if isinstance(context_file, str) else "context.jsonld"
+        self.classes: dict[str, dict] = {k: _mapping(v) for k, v in _mapping(self.data.get("classes")).items()}
+        self.edges: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("edges")).items() if isinstance(v, dict)}
+        self.property_aliases: dict[str, str] = {k: v for k, v in _mapping(self.data.get("property_aliases")).items()
+                                                 if isinstance(v, str)}
+        self.value_aliases: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("value_aliases")).items()
+                                               if isinstance(v, dict)}
+        self.rules: dict[str, bool] = _mapping(self.data.get("rules"))
         self._props_cache: dict[str, dict[str, PropSpec]] = {}
 
     # -- classes
@@ -72,9 +86,9 @@ class Ontology:
 
     def ancestors(self, cls: str) -> list[str]:
         out, seen = [], set()
-        while cls and cls not in seen and cls in self.classes:
+        while isinstance(cls, str) and cls and cls not in seen and cls in self.classes:
             out.append(cls); seen.add(cls)
-            cls = (self.classes[cls] or {}).get("extends")
+            cls = self.classes[cls].get("extends")
         return out
 
     def is_a(self, cls: str, ancestor: str) -> bool:
@@ -87,7 +101,7 @@ class Ontology:
         merged: dict[str, PropSpec] = {}
         chain = self.ancestors(cls) or ["node"]
         for c in reversed(chain):
-            for name, raw in ((self.classes.get(c) or {}).get("props") or {}).items():
+            for name, raw in _mapping(self.classes.get(c, {}).get("props")).items():
                 merged[name] = _prop_spec(name, raw)
         self._props_cache[cls] = merged
         return merged
@@ -135,7 +149,7 @@ class Ontology:
 def _prop_spec(name: str, raw: Any) -> PropSpec:
     if isinstance(raw, str):
         return PropSpec(name=name, type=raw)
-    raw = raw or {}
+    raw = _mapping(raw)
     rng = raw.get("range") or []
     if isinstance(rng, str):
         rng = [rng]
@@ -150,16 +164,105 @@ def ontology_path(vault: Path) -> Path | None:
     return DEFAULT_ONTOLOGY if DEFAULT_ONTOLOGY.exists() else None
 
 
+ONTOLOGY_SECTIONS = ("version", "base_iri", "context_file", "classes", "edges", "property_aliases", "value_aliases", "rules")
+EDGE_KEYS = ("inverse", "transitive")
+CLASS_KEYS = ("props", "extends")
+
+
+def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] | None, list[str]]:
+    """Parse one ontology file: (data, problems), data None when the file cannot be used at all.
+
+    The one reader `load_ontology` and `validate` share, so the file the graph falls back from is
+    the file `validate` names. A missing file is no problem; one we cannot decode or parse, or
+    whose top level is not a mapping, is unusable; any other problem leaves the data usable, with
+    the bad entries dropped by `Ontology`.
+    """
+    path = Path(path)
+    name = label or path.name
+    text = kitlib.read_text(path)
+    if text is None:
+        if not path.exists():
+            return None, []
+        return None, [(f"{name}: cannot be read as UTF-8 text; the kit's own ontology is used until it is "
+                       "re-saved as UTF-8")]
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1}" if mark is not None else ""
+        what = getattr(exc, "problem", None) or type(exc).__name__
+        return None, [f"{name}: not valid YAML{where} ({what}); the kit's own ontology is used until it is fixed"]
+    if data is None:
+        return {}, []
+    if not isinstance(data, dict):
+        return None, [(f"{name}: the top level must be a mapping of sections ({', '.join(ONTOLOGY_SECTIONS[3:])}), "
+                       f"not a {type(data).__name__}; the kit's own ontology is used until it is fixed")]
+    return data, _structure_problems(data, name)
+
+
+def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
+    out: list[str] = []
+    for key, value in data.items():
+        if key in ONTOLOGY_SECTIONS:
+            continue
+        hint = " — a class belongs under `classes:`" if isinstance(value, dict) and set(CLASS_KEYS) & set(value) else ""
+        out.append(f"{name}: unknown top-level key `{key}`, ignored (known: {', '.join(ONTOLOGY_SECTIONS)}){hint}")
+    for key in ("base_iri", "context_file"):
+        if key in data and not isinstance(data[key], str):
+            out.append(f"{name}: `{key}` must be a string; the default is used")
+    for key in ONTOLOGY_SECTIONS[3:]:
+        if data.get(key) is not None and not isinstance(data[key], dict):
+            out.append(f"{name}: `{key}:` must be a mapping, not a {type(data[key]).__name__}; the section is ignored")
+    for cls, body in _mapping(data.get("classes")).items():
+        if body is None:
+            continue
+        if not isinstance(body, dict):
+            out.append(f"{name}: `classes.{cls}` must be a mapping (props, extends); it is read as empty")
+            continue
+        if body.get("props") is not None and not isinstance(body["props"], dict):
+            out.append(f"{name}: `classes.{cls}.props` must be a mapping of property names; it is ignored")
+        if body.get("extends") is not None and not isinstance(body["extends"], str):
+            out.append(f"{name}: `classes.{cls}.extends` must name one class; it is ignored")
+    for edge, body in _mapping(data.get("edges")).items():
+        shape = set(body) if isinstance(body, dict) else set()
+        if shape & set(CLASS_KEYS):
+            has = ", ".join(f"`{k}`" for k in CLASS_KEYS if k in shape)
+            out.append(f"{name}: `edges.{edge}` looks like a class (it has {has}) — classes belong under `classes:`; "
+                       f"under `edges:` it declares nothing, and notes of type `{edge}` read as an unknown type")
+        elif not shape & set(EDGE_KEYS):
+            out.append(f"{name}: `edges.{edge}` declares neither `inverse` nor `transitive`, so it is ignored — "
+                       "an edge entry needs one of them (a class belongs under `classes:`)")
+    for alias, target in _mapping(data.get("property_aliases")).items():
+        if not isinstance(target, str):
+            out.append(f"{name}: `property_aliases.{alias}` must name one property; it is ignored")
+    for prop, table in _mapping(data.get("value_aliases")).items():
+        if not isinstance(table, dict):
+            out.append(f"{name}: `value_aliases.{prop}` must be a mapping of value → canonical value; it is ignored")
+    return out
+
+
+def check_ontology_file(vault: Path) -> kitlib.Report:
+    """`validate`'s report on the vault's own ontology file (none checked when the vault has none)."""
+    path = Path(vault) / ONTOLOGY_REL
+    rep = kitlib.Report(unit="ontology file")
+    if not path.exists():
+        return rep
+    rep.checked = 1
+    rep.errors.extend(read_ontology(path, ONTOLOGY_REL)[1])
+    return rep
+
+
 def load_ontology(vault: Path) -> Ontology:
     """The vault's ontology, falling back to the kit's own.
 
-    A vault ontology we cannot decode is the same situation as a vault without one: the fallback
-    is a graph built on the shipped classes, not no graph at all. `validate` names the file.
+    A vault ontology we cannot decode or parse, or whose top level is not a mapping, is the same
+    situation as a vault without one: the fallback is a graph built on the shipped classes, not
+    no graph at all and not a traceback. `validate` names the file (`check_ontology_file`).
     """
     for p in (Path(vault) / ONTOLOGY_REL, DEFAULT_ONTOLOGY):
-        text = kitlib.read_text(p)      # None for a file that is missing as well as one we cannot decode
-        if text is not None:
-            return Ontology(yaml.safe_load(text) or {}, p)
+        data, _problems = read_ontology(p)
+        if data is not None:
+            return Ontology(data, p)
     return Ontology({})
 
 

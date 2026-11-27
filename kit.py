@@ -489,7 +489,14 @@ def cmd_validate(args) -> int:
         print(f"== Confidentiality: floors, path rules and open folders in {kitlib.CONFIG_REL} ==")
         print(floors.render())
     hygiene.append(floors)
-    use_onto = not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)
+    # The file itself, whenever the vault has one, `--no-ontology` or not: the graph, `reconcile`
+    # and the bridge apply it regardless, so a misplaced block or a refused alias is never unseen.
+    onto_file = kitgraph.check_ontology_file(vault)
+    if onto_file.checked:
+        print(f"== Ontology file: {kitgraph.ONTOLOGY_REL} ==")
+        print(onto_file.render())
+        hygiene.append(onto_file)
+    use_onto =not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)
     if use_onto:
         g = kitgraph.build_graph(vault)
         onto = kitgraph.ontology_report(g)
