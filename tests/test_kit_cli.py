@@ -806,6 +806,7 @@ class NoVaultGivenIsNotTheTemplate(unittest.TestCase):
             ("proposals", "reject", "p-1"),
             ("graph", "build"),
             ("graph", "query", "SELECT 1", "--rebuild"),
+            ("validate", "--fix-aliases", "--apply"),
         ]
         before = self.snapshot()
         for argv in writers:

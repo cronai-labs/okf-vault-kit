@@ -524,7 +524,7 @@ def _fix_aliases(vault: Path, apply: bool) -> int:
 
 
 def cmd_validate(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=bool(args.fix_aliases and args.apply))
     if args.fix_aliases:
         return _fix_aliases(vault, args.apply)
     okf = kitlib.validate_okf(vault)
