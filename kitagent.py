@@ -74,6 +74,7 @@ EDIT_CLAUDE = "Edit(./.claude/**)"
 WRITE_PROTECTED = (kitlib.CONFIG_REL, MANIFEST_DIR)
 EDIT_PROTECTED = (f"Edit(./{kitlib.CONFIG_REL})", f"Edit(./{MANIFEST_DIR}/**)")
 DENY_WRITE = [f"./{rel}" for rel in WRITE_PROTECTED]
+ROOT_DENY_READ = ("./", "./*")       # the vault, for macOS and for Linux (see claude_code_plan)
 # The guard itself. Standard library only, and old-Python safe (no walrus, no removeprefix): it runs
 # under whatever `python3` is on PATH. `__DATA__` becomes a string literal holding the JSON of the
 # open and denied lists, so the guard reads no file at run time: a canary showed that a hook whose
@@ -557,9 +558,12 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     git_wanted: list[tuple[str, str]] = []
     _git_notes(root, plan, git_wanted, how="is denied with the rest of the vault")
     special += git_wanted
-    # The vault itself goes to the sandbox as `./`, and the agent may not edit its own settings,
-    # which hold the guard: with that rule it could not switch the guard off by any tool in the canary.
-    plan.deny, plan.deny_read = [EDIT_CLAUDE, *EDIT_PROTECTED], ["./"]
+    # The vault itself goes to the sandbox as `./` and as `./*`. macOS denies the folder from `./`; the
+    # Linux sandbox (bubblewrap, Claude Code 2.1.332) ignored `./`, `.` and the absolute path and left the
+    # whole vault and `.git` readable to the shell, and only `./*` (each entry of the vault) denied it there,
+    # also for a folder made at the root after the session started. The agent may not edit its own
+    # settings, which hold the guard: with that rule it could not switch the guard off by any tool.
+    plan.deny, plan.deny_read = [EDIT_CLAUDE, *EDIT_PROTECTED], list(ROOT_DENY_READ)
     wanted: list[tuple[str, str]] = []
     # The kit's own files are outside the open folders unless one is declared over them: then on the lists.
     wanted += [(k, r) for k, r in special if _in_open(r.rstrip("*").rstrip("."), opens)]
