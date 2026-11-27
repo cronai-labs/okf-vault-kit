@@ -270,14 +270,22 @@ def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
     for alias, target in _mapping(data.get("property_aliases")).items():
         if not isinstance(target, str):
             out.append(f"{name}: `property_aliases.{alias}` must name one property; it is ignored")
-        elif target.strip().lower() == SENSITIVITY and alias != target:
+    for prop, table in _mapping(data.get("value_aliases")).items():
+        if not isinstance(table, dict):
+            out.append(f"{name}: `value_aliases.{prop}` must be a mapping of value → canonical value; it is ignored")
+    return out + _sensitivity_refusals(data, name)
+
+
+def _sensitivity_refusals(data: dict[str, Any], name: str) -> list[str]:
+    """The aliases onto `sensitivity` the file declares (#121): a security finding, not hygiene."""
+    out: list[str] = []
+    for alias, target in _mapping(data.get("property_aliases")).items():
+        if isinstance(target, str) and target.strip().lower() == SENSITIVITY and alias != target:
             # Only the identity entry is harmless. `Sensitivity: sensitivity` is not: the readers
             # match the exact key `sensitivity`, so the graph alone would see `Sensitivity:`.
             out.append(f"{name}: `property_aliases.{alias}` maps onto `sensitivity` and is refused: {_SENSITIVITY_WHY} "
                        f"Rename `{alias}` to `sensitivity` in the notes and drop the alias.")
-    for prop, table in _mapping(data.get("value_aliases")).items():
-        if not isinstance(table, dict):
-            out.append(f"{name}: `value_aliases.{prop}` must be a mapping of value → canonical value; it is ignored")
+    for prop in _mapping(data.get("value_aliases")):
         if str(prop).strip().lower() == SENSITIVITY:
             out.append(f"{name}: `value_aliases.{prop}` is refused: {_SENSITIVITY_WHY} "
                        "Write `sensitivity: confidential` in the notes and drop the alias.")
@@ -291,14 +299,29 @@ _SENSITIVITY_WHY = ("every reader judges confidentiality by the note's raw `sens
                     "would hide a note from the graph and from nothing else.")
 
 
-def check_ontology_file(vault: Path) -> kitlib.Report:
+@dataclass
+class OntologyFileReport(kitlib.Report):
+    """`errors` holds every finding; `refused` repeats the aliases onto `sensitivity` among them.
+
+    Those fail `validate` without `--strict` (#121, the owner's decision): an alias there hides a
+    note from the graph and from no other reader, which is a confidentiality misconfiguration,
+    not a matter of style. The file's other findings are this kit's rules, gated by `--strict`.
+    """
+
+    refused: list[str] = field(default_factory=list)
+
+
+def check_ontology_file(vault: Path) -> OntologyFileReport:
     """`validate`'s report on the vault's own ontology file (none checked when the vault has none)."""
     path = Path(vault) / ONTOLOGY_REL
-    rep = kitlib.Report(unit="ontology file")
+    rep = OntologyFileReport(unit="ontology file")
     if not path.exists():
         return rep
     rep.checked = 1
-    rep.errors.extend(read_ontology(path, ONTOLOGY_REL)[1])
+    data, problems = read_ontology(path, ONTOLOGY_REL)
+    rep.errors.extend(problems)
+    if data is not None:
+        rep.refused = _sensitivity_refusals(data, ONTOLOGY_REL)
     return rep
 
 

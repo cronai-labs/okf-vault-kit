@@ -2,7 +2,8 @@
 
 OKF v0.2 §11 names what a consumer MUST NOT reject a bundle for — broken cross-links and a
 missing `index.md` among them. The reports always print; only the exit code is in question,
-and it is the half CI reads.
+and it is the half CI reads. One finding outside conformance fails it too: an ontology alias onto
+`sensitivity` (#121), tested in test_ontology_file.py.
 """
 import shutil
 import subprocess

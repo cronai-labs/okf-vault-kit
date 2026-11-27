@@ -560,16 +560,23 @@ def cmd_validate(args) -> int:
         hygiene.append(onto)
 
     # OKF v0.2 §11 lists what a consumer MUST NOT reject a bundle for, and broken cross-links and
-    # a missing index.md are both on that list. So conformance alone decides the default exit
-    # code: a bundle can be conformant and still be a mess, and only the first is ours to assert.
-    # Our own rules are gated by --strict, which is what `make lint` and CI run.
+    # a missing index.md are both on that list. So conformance decides the default exit code: a
+    # bundle can be conformant and still be a mess, and only the first is ours to assert. Our own
+    # rules are gated by --strict, which is what `make lint` and CI run. One exception: an alias
+    # onto `sensitivity` is a confidentiality misconfiguration, not hygiene, and fails either way
+    # (#121, the owner's decision) — the graph applies it and hides a note every other reader serves.
     conformance_failed = bool(okf.errors)
-    hygiene_failed = any(r.errors or r.warnings for r in hygiene) or bool(okf.warnings)
+    security_failed = bool(onto_file.refused)
+    hygiene_failed = (any(r.errors or r.warnings for r in hygiene if r is not onto_file) or bool(okf.warnings)
+                      or len(onto_file.errors) > len(onto_file.refused) or bool(onto_file.warnings))
+    if security_failed:
+        print(f"\nerror: the alias onto `sensitivity` in {kitgraph.ONTOLOGY_REL} (above) is a confidentiality "
+              "misconfiguration, not a style rule, so it fails `validate` with or without --strict.")
     if hygiene_failed and not args.strict:
-        print("\nnote: the findings above outside `OKF conformance` are this kit's rules, not the "
-              "spec's — OKF v0.2 §11 forbids rejecting a bundle for them, so they do not set the "
-              "exit code. Run `validate --strict` to fail on them too (this is what CI runs).")
-    return 1 if conformance_failed or (args.strict and hygiene_failed) else 0
+        print(f"\nnote: the {'other ' if security_failed else ''}findings above outside `OKF conformance` are "
+              "this kit's rules, not the spec's — OKF v0.2 §11 forbids rejecting a bundle for them, so they do "
+              "not set the exit code. Run `validate --strict` to fail on them too (this is what CI runs).")
+    return 1 if conformance_failed or security_failed or (args.strict and hygiene_failed) else 0
 
 
 def cmd_log(args) -> int:
@@ -1570,7 +1577,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("index", help="regenerate index.md"); p.add_argument("--vault"); p.set_defaults(fn=cmd_index)
     # allow_abbrev=False: `--app` must not stand in for `--apply` on a command that writes.
-    vp = p = sub.add_parser("validate", help="OKF conformance, links, ontology", allow_abbrev=False); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance")
+    vp = p = sub.add_parser("validate", help="OKF conformance, links, ontology", allow_abbrev=False); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance "
+                        "and an ontology alias onto `sensitivity`, which fail either way")
     p.add_argument("--ontology", action="store_true", help="force the ontology checks (default: on when 99-system/ontology.yml exists)"); p.add_argument("--no-ontology", action="store_true")
     p.add_argument("--fix-aliases", action="store_true",
                    help="instead of validating, list each note whose frontmatter uses a property alias from the ontology "

@@ -77,6 +77,23 @@ class StructureIsChecked(OntologyFileCase):
         self.assertEqual(self.problems(), [])
 
 
+class StructureFindingsStayHygiene(OntologyFileCase):
+    """#121 made the sensitivity refusal fail plain `validate`; the other findings did not move."""
+
+    def test_a_class_under_edges_or_an_unknown_key_fails_only_strict(self):
+        for name, edit in (("class under edges", lambda: self.insert_after(
+                               "edges:\n", "  widget:\n    extends: note\n    props:\n      colour: text\n")),
+                           ("unknown top-level key", lambda: self.write(
+                               self.shipped + "\nclasess:\n  widget: {extends: note}\n"))):
+            with self.subTest(name):
+                edit()
+                r = validate(self.vault)
+                self.assertEqual(r.returncode, 0, r.stdout)
+                self.assertIn("do not set the exit code", r.stdout)
+                self.assertNotIn("with or without --strict", r.stdout)
+                self.assertEqual(validate(self.vault, "--strict").returncode, 1)
+
+
 class MalformedFileIsAFindingNotATraceback(OntologyFileCase):
     def assert_named_and_survived(self, needle: str) -> None:
         onto = kitgraph.load_ontology(self.vault)
@@ -201,6 +218,36 @@ class AliasesOntoSensitivityAreRefused(OntologyFileCase):
         path.write_text(self.NOTE, encoding="utf-8")
         note = kitgraph.kitlib.parse_note(path, self.vault)
         self.assertFalse(kitgraph.kitlib.note_confidential(note))
+
+    def test_plain_validate_fails_on_it_too(self):
+        """The owner's decision on #121: a security misconfiguration, not hygiene, so the exit code
+        does not wait for `--strict`, and the note that excuses hygiene findings does not claim it."""
+        for section, entry, needle in (("value_aliases:\n", "  sensitivity: { hidden: confidential }\n",
+                                        "`value_aliases.sensitivity`"),
+                                       ("property_aliases:\n", "  hidden_level: sensitivity\n",
+                                        "`property_aliases.hidden_level`")):
+            with self.subTest(needle):
+                self.insert_after(section, entry)
+                r = validate(self.vault)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertIn(needle, r.stdout)
+                self.assertIn("fails `validate` with or without --strict", r.stdout)
+                self.assertNotIn("do not set the exit code", r.stdout,
+                                 "the only finding sets the exit code; the hygiene note would say it does not")
+
+    def test_with_no_ontology_too(self):
+        """`--no-ontology` skips the graph's report, not the file check: the bridge still applies it."""
+        self.insert_after("value_aliases:\n", "  sensitivity: { hidden: confidential }\n")
+        self.assertEqual(validate(self.vault, "--no-ontology").returncode, 1)
+
+    def test_alongside_a_hygiene_finding_both_notes_are_printed(self):
+        self.insert_after("value_aliases:\n", "  sensitivity: { hidden: confidential }\n")
+        self.write(self.path.read_text(encoding="utf-8") + "\nclasess:\n  widget: {extends: note}\n")
+        r = validate(self.vault)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("fails `validate` with or without --strict", r.stdout)
+        self.assertIn("do not set the exit code", r.stdout)
 
     def test_the_graph_keeps_its_props_check_as_defence_in_depth(self):
         node = kitgraph.Node(id="n.md", kind="note", type="concept", title="n", path="n.md",
