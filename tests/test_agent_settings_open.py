@@ -248,7 +248,8 @@ class AllowOpenPlan(_Open):
     def test_the_config_picks_the_mode(self):
         plan = self.plan()
         self.assertEqual(plan.mode, kitagent.ALLOW_OPEN)
-        self.assertEqual(plan.deny_read[0], "./")
+        # `./` denies the vault on macOS; only `./*` did on Linux (bubblewrap ignored `./`).
+        self.assertEqual(plan.deny_read[:2], ["./", "./*"])
         self.assertEqual(plan.deny[0], "Edit(./.claude/**)")
         self.assertEqual(plan.allow_read, ["./04-areas", "./07-knowledge", "./08-resources", "./.kit/config.yml"])
         set_config(self.v, CONFIG)
@@ -325,7 +326,7 @@ class AllowOpenMerge(_Open):
         self.assertIn('"onFailure": "block"', r.stdout)
         self.assertEqual(agent(self.v, "--apply").returncode, 0)
         s = read_settings(self.v)
-        self.assertEqual(s["sandbox"]["filesystem"]["denyRead"][0], "./")
+        self.assertEqual(s["sandbox"]["filesystem"]["denyRead"][:2], ["./", "./*"])
         self.assertIn("./04-areas", s["sandbox"]["filesystem"]["allowRead"])
         self.assertIn("Edit(./.claude/**)", s["permissions"]["deny"])
         self.assertEqual(len(self.guards()), 1)
