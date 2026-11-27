@@ -530,6 +530,24 @@ class DoctorReport(unittest.TestCase):
         self.assertEqual(kit._scrub("a sentence; with punctuation, and no path"),
                          "a sentence; with punctuation, and no path")
 
+    def test_a_relative_glob_survives_and_an_absolute_path_is_still_reduced(self):
+        """`/` after a glob character is inside a relative pattern, not the start of an absolute
+        path: `.obsidian/plugins/*/data.json` came out as `.obsidian/plugins/*data.json` (#114)."""
+        import kit
+        for kept in ("'.obsidian/plugins/*/data.json'", "Read(.obsidian/plugins/*/data.json)",
+                     "09-archive/**/*.md", "notes/?/x.md"):
+            self.assertEqual(kit._scrub(kept), kept, "a relative glob is not a path to redact")
+        # every place a real absolute path stands in the report is still reduced to its basename
+        for raw in ("/Users/someone/Kunde-Example/m.gguf", "at /Users/someone/Kunde-Example/m.gguf",
+                    "'/Users/someone/Kunde-Example/m.gguf'", '"/Users/someone/Kunde-Example/m.gguf"',
+                    "(/Users/someone/Kunde-Example/m.gguf)", "[/Users/someone/Kunde-Example/m.gguf]",
+                    "--vault=/Users/someone/Kunde-Example/m.gguf", "vault:/Users/someone/Kunde-Example/m.gguf",
+                    "/Users/someone/Kunde-Example/.obsidian/plugins/*/m.gguf",
+                    r"C:\Users\someone\Kunde-Example\m.gguf", "~/Kunde-Example/m.gguf"):
+            out = kit._scrub(raw)
+            self.assertNotIn("Kunde-Example", out, raw)
+            self.assertIn("m.gguf", out, raw)
+
     def test_the_sdk_row_is_not_fooled_by_the_repo_s_own_mcp_directory(self):
         """This repository has a directory named `mcp/`, so from the repo root a bare
         `import mcp` succeeds as a namespace package. Detection must ask the package database,

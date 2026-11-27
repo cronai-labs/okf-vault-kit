@@ -35,7 +35,11 @@ _URL_OR_PATH = re.compile(
     # is install hints (`@tobilu/qmd`, `09-archive/**`, `docs/quickstart.md`) and treating those
     # as paths reduces them to a basename, which costs more than the disclosure it prevents.
     # The residual gap — a relative `--vault Client/notes` — is stated in ALPHA.md.
-    r"|(?<![\w.~])(?P<path>(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]|~?/|\.{1,2}[\\/])"
+    # A `/` right after a glob character (`*`, `?`) is inside a relative pattern, not the start of
+    # an absolute path: `.obsidian/plugins/*/data.json` came out as `.obsidian/plugins/*data.json`
+    # (#114). Only those two: each character added here is one after which a real absolute path
+    # would no longer be redacted, so `]`, `)` and `}`, which the report can put before one, stay out.
+    r"|(?<![\w.~*?])(?P<path>(?:[A-Za-z]:[\\/]|\\\\[^\s\\/]|~?/|\.{1,2}[\\/])"
     rf"(?:[^\s\]\),;]"
     rf"|[ \t](?![ \t]*[A-Za-z][A-Za-z0-9+.\-]*://)(?={_PATH_GOES_ON})"
     rf"|[\),;](?=[^\s\[\]\n]*[\\/]))+)"
