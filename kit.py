@@ -320,7 +320,7 @@ def cmd_validate(args) -> int:
     hygiene = [links]
     floors = kitlib.check_confidentiality(vault)
     if floors.errors or floors.warnings or floors.checked:
-        print(f"== Confidentiality: floors and path rules in {kitlib.CONFIG_REL} ==")
+        print(f"== Confidentiality: floors, path rules and open folders in {kitlib.CONFIG_REL} ==")
         print(floors.render())
     hygiene.append(floors)
     use_onto = not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)

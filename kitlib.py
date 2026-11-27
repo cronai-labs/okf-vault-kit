@@ -713,7 +713,7 @@ def note_confidential(note: Note) -> bool:
 # ---------------------------------------------------------------- confidentiality floors (#120)
 
 CONFIG_REL = ".kit/config.yml"          # the vault's kit config; kitproviders reads the same file, leniently
-CONFIDENTIALITY_KEYS = ("confidential_folders", "confidential_paths")
+CONFIDENTIALITY_KEYS = ("confidential_folders", "confidential_paths", "open_folders")
 TRASH_PREFIX = ".trash/"                # judged as well with this removed, in match form
 
 
@@ -767,7 +767,9 @@ class ConfidentialityPolicy:
     """What `.kit/config.yml` declares confidential regardless of any note's own frontmatter.
 
     `folders` are vault-relative folders: the folder and everything below it. `paths` are
-    vault-relative globs for single files of any type. Both are stored in match form.
+    vault-relative globs for single files of any type. `open_folders`, once declared, turn the
+    default around (#126): every path outside them is confidential, and inside them the folders,
+    path rules and labels still hide what they hide. All three are stored in match form.
     """
     folders: tuple[str, ...] = ()
     paths: tuple[str, ...] = ()
@@ -776,13 +778,37 @@ class ConfidentialityPolicy:
     # for the policy export: an agent's own deny lists match literally, not case-folded.
     declared_folders: tuple[str, ...] = field(default=(), compare=False)
     declared_paths: tuple[str, ...] = field(default=(), compare=False)
+    open_folders: tuple[str, ...] = ()
+    declared_open_folders: tuple[str, ...] = field(default=(), compare=False)
 
     @classmethod
-    def build(cls, folders: Iterable[str] = (), paths: Iterable[str] = ()) -> ConfidentialityPolicy:
-        folders, paths = tuple(folders), tuple(paths)
+    def build(cls, folders: Iterable[str] = (), paths: Iterable[str] = (),
+              open_folders: Iterable[str] = ()) -> ConfidentialityPolicy:
+        folders, paths, open_folders = tuple(folders), tuple(paths), tuple(open_folders)
         f = tuple(_match_form(x) for x in folders)
         p = tuple(_match_form(x) for x in paths)
-        return cls(f, p, tuple(_glob_regex(s) for x in p for s in path_rule_spellings(x)), folders, paths)
+        return cls(f, p, tuple(_glob_regex(s) for x in p for s in path_rule_spellings(x)), folders, paths,
+                   tuple(_match_form(x) for x in open_folders), open_folders)
+
+    @property
+    def declares_anything(self) -> bool:
+        return bool(self.folders or self.paths or self.open_folders)
+
+    def outside_open(self, rel: str) -> bool:
+        """With `open_folders` declared: does this reference lie outside every open folder? (#126)
+
+        False when none are declared. Judged on the path as written, with `.trash/` removed (a
+        deleted note keeps the verdict of the place it came from), and with `.md` added: the
+        reference `open` may be the root note `open.md`. A path that leaves the vault is outside.
+        Symlinks are `confidential_floor`'s business.
+        """
+        if not self.open_folders:
+            return False
+        form = _match_form(rel).removeprefix(TRASH_PREFIX)
+        if form in ("", "..") or form.startswith("../"):
+            return True
+        forms = {form} if form.endswith(".md") else {form, form + ".md"}
+        return not all(any(f == o or f.startswith(o + "/") for o in self.open_folders) for f in forms)
 
     def in_folder(self, rel: str) -> bool:
         """Is this vault-relative path a declared folder or below one? (Path rules aside.)"""
@@ -816,6 +842,11 @@ _PATH_RULE_REFUSED = set("[]\\!#")
 
 def _policy_entries(block: dict, key: str) -> list[str]:
     value = block.get(key)
+    if key == "open_folders" and key in block and not value:
+        # `open_folders:` with nothing after it, or `[]`: half-edited, and reading it as "not
+        # declared" would open the whole vault again.
+        raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders is empty; list at least one folder, "
+                                "or remove the key to leave every folder open")
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
@@ -833,6 +864,9 @@ def _policy_entries(block: dict, key: str) -> list[str]:
                                         "a path rule names files — put a folder under confidential_folders")
         entry = raw.strip().replace("\\", "/")
         parts = [x for x in entry.split("/") if x not in ("", ".")]
+        if not parts and key == "open_folders":
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders entry {raw!r} names the vault root; "
+                                    "list folders below it (to leave everything open, remove the key)")
         if not parts:
             raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} has an empty entry {raw!r}")
         if entry.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", entry):
@@ -842,7 +876,29 @@ def _policy_entries(block: dict, key: str) -> list[str]:
         if key == "confidential_folders" and _GLOB_CHARS.intersection(entry):
             raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.confidential_folders entry {raw!r} is a pattern; "
                                     "folders are literal, put patterns under confidential_paths")
+        if key == "open_folders" and _GLOB_CHARS.intersection(entry):
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders entry {raw!r} is a pattern; "
+                                    "open folders are literal")
         out.append("/".join(parts))
+    return out
+
+
+def _open_entries(block: dict, confidential_folders: list[str]) -> list[str]:
+    """`open_folders`, refused where it would contradict itself or a confidential folder (#126)."""
+    out = _policy_entries(block, "open_folders")
+    seen: dict[str, str] = {}
+    floors = [_match_form(x) for x in confidential_folders]
+    for entry in out:
+        form = _match_form(entry)
+        if form in seen:
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders lists {entry!r} twice "
+                                    f"(as {seen[form]!r} too; matching ignores case)")
+        seen[form] = entry
+        hit = next((c for c, f in zip(confidential_folders, floors, strict=True)
+                    if form == f or form.startswith(f + "/")), None)
+        if hit is not None:
+            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders entry {entry!r} lies at or under the "
+                                    f"confidential folder {hit!r}; confidential wins, so it would open nothing")
     return out
 
 
@@ -873,8 +929,9 @@ def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
     if unknown:
         raise PolicyConfigError(f"{CONFIG_REL}: unknown key(s) under confidentiality: {', '.join(unknown)} "
                                 f"(known: {', '.join(CONFIDENTIALITY_KEYS)})")
-    return ConfidentialityPolicy.build(_policy_entries(block, "confidential_folders"),
-                                       _policy_entries(block, "confidential_paths"))
+    folders = _policy_entries(block, "confidential_folders")
+    return ConfidentialityPolicy.build(folders, _policy_entries(block, "confidential_paths"),
+                                       _open_entries(block, folders))
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -980,11 +1037,13 @@ def confidentiality_config_error(root: Path) -> str | None:
     return None
 
 
-def _real_rels(root: Path, rel: str) -> list[str]:
+def _real_rels(root: Path, rel: str, strict: bool = False) -> list[str] | None:
     """Where a reference lands once symlinks are resolved, relative to the resolved vault root.
 
     Only targets inside the vault: one outside it has no vault-relative path to judge, so the
-    reference is judged by its own spelling alone.
+    reference is judged by its own spelling alone. With `strict` (open folders, #126) a target
+    outside the vault, the vault root itself, or a path that cannot be resolved is None instead:
+    such a reference is not proven to be inside an open folder.
     """
     try:
         real_root = os.path.realpath(root)
@@ -995,9 +1054,11 @@ def _real_rels(root: Path, rel: str) -> list[str]:
             inner = os.path.relpath(real, real_root)
             if inner != "." and not inner.startswith(".." + os.sep) and inner != ".." and not os.path.isabs(inner):
                 out.append(inner.replace(os.sep, "/"))
+            elif strict:
+                return None
         return out
     except (OSError, ValueError):      # ValueError: another drive on Windows
-        return []
+        return None if strict else []
 
 
 def confidential_floor(root: Path, rel: str) -> bool | None:
@@ -1006,16 +1067,23 @@ def confidential_floor(root: Path, rel: str) -> bool | None:
     Judged on the path as written and on where it lands once symlinks are resolved: a link outside
     a floor to a note inside it, or a linked folder, would otherwise carry the note past the floor,
     since only a `sensitivity` line travels with the content.
+
+    With `open_folders` declared (#126), a reference is cleared only when it is inside an open
+    folder as written and wherever it lands; a link out of the vault, or one that cannot be
+    resolved, is not inside one. Root files such as `index.md` are then confidential too.
     """
     try:
         policy = confidentiality_policy(root)
     except PolicyConfigError:
         return None
-    if not (policy.folders or policy.paths):
+    if not policy.declares_anything:
         return False
-    if policy.covers(rel):
+    if policy.covers(rel) or policy.outside_open(rel):
         return True
-    return any(policy.covers(r) for r in _real_rels(root, rel))
+    reals = _real_rels(root, rel, strict=bool(policy.open_folders))
+    if reals is None:
+        return True
+    return any(policy.covers(r) or policy.outside_open(r) for r in reals)
 
 
 def own_confidentiality(root: Path, rel: str) -> bool | None:
@@ -1076,11 +1144,30 @@ def note_confidential_in(root: Path, note: Note) -> bool:
     return confidential_floor(root, note.rel) is not False or note_confidential(note)
 
 
+def _folder_exists(root: Path, rel: str) -> bool:
+    """Is there a folder at `rel`, matched as the predicate matches (case and Unicode form aside)?"""
+    base = Path(root)
+    for seg in rel.split("/"):
+        want = _match_form(seg)
+        try:
+            with os.scandir(base) as it:
+                hit = next((e.name for e in it if _match_form(e.name) == want and e.is_dir()), None)
+        except OSError:
+            return False
+        if hit is None:
+            return False
+        base = base / hit
+    return True
+
+
 def check_confidentiality(root: Path) -> Report:
     """`validate`'s view of the floors: a broken config, and notes that claim less than their floor.
 
     A note inside a floor whose own `sensitivity` says something else stays confidential; the
-    warning is there so the label in the note does not mislead the person reading it.
+    warning is there so the label in the note does not mislead the person reading it. Only the
+    declared folders and path rules raise that warning: a note outside the open folders (#126) is
+    confidential by default, and warning about every labelled one would bury the rest. An open
+    folder that does not exist is a warning too.
     """
     root = Path(root)
     rep = Report()
@@ -1089,8 +1176,12 @@ def check_confidentiality(root: Path) -> Report:
     except PolicyConfigError as exc:
         rep.errors.append(f"{exc} — until this is fixed every reader treats every note as confidential")
         return rep
-    if not (policy.folders or policy.paths):
+    if not policy.declares_anything:
         return rep
+    for folder in policy.declared_open_folders:
+        if not _folder_exists(root, folder):
+            rep.warnings.append(f"{CONFIG_REL}: open folder {folder!r} does not exist in the vault — check its "
+                                "spelling (it opens nothing until it does)")
     if policy.declared_paths:
         # A rule that matches nothing is most often a misspelling, and it hides nothing. Every
         # file, not only notes: path rules exist for CSVs and attachments.

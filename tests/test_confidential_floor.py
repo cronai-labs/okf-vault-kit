@@ -17,6 +17,7 @@ from http.server import HTTPServer
 from pathlib import Path
 
 import kit
+import kitagent
 import kitgraph
 import kitrecon
 from tests.helpers import ROOT, kitlib, temp_vault
@@ -332,6 +333,21 @@ BROKEN = {
     "capitalised block": 'Confidentiality:\n  confidential_folders: ["05-people"]\n',
     "misspelt block": 'confidentialty:\n  confidential_folders: ["05-people"]\n',
     "key at the top level": 'confidential_folders: ["05-people"]\n',
+    # open_folders (#126): each of these would open more than it says, or nothing at all.
+    "open folders empty": "confidentiality:\n  open_folders: []\n",
+    "open folders null": "confidentiality:\n  open_folders:\n",
+    "open folder dot": 'confidentiality:\n  open_folders: ["."]\n',
+    "open folder dot slash": 'confidentiality:\n  open_folders: ["./"]\n',
+    "open folder root": 'confidentiality:\n  open_folders: ["/"]\n',
+    "open folder glob": 'confidentiality:\n  open_folders: ["04-areas/*"]\n',
+    "open folder absolute": 'confidentiality:\n  open_folders: ["/etc"]\n',
+    "open folder escapes": 'confidentiality:\n  open_folders: ["04-areas/../../x"]\n',
+    "open folder not a list": "confidentiality:\n  open_folders: 04-areas\n",
+    "open folder is a confidential folder": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
+                                             '  open_folders: ["05-People"]\n'),
+    "open folder under a confidential folder": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
+                                                '  open_folders: ["04-areas", "05-people/team"]\n'),
+    "open folder twice": 'confidentiality:\n  open_folders: ["04-areas", "04-Areas/"]\n',
 }
 
 
@@ -497,8 +513,13 @@ class Parity(_FloorVault):
 
     Per reader, two checks: no hidden path is served, listed, cited or a node (the sample's visible
     notes link to its people notes, and that link is the visible note's content, so a bare path in
-    the text is not a leak); and no field of the planted notes appears anywhere.
+    the text is not a leak); and no field of the planted notes appears anywhere. A subclass runs
+    the same checks on another vault (open folders, #126) by overriding the class attributes.
     """
+
+    PLANTED = (*HIDDEN_NOTES, CSV_REL)        # planted files every reader must hide
+    PLANTED_MARKERS = MARKERS                 # their fields, none of which may appear anywhere
+    ASK_HITS = (NO_FM_REL, LABELLED_REL, HARRIER_REL, RAISED_REL)    # hidden notes the search finds
 
     def setUp(self):
         super().setUp()
@@ -507,16 +528,25 @@ class Parity(_FloorVault):
         self.hidden = {r for r in self.rels if kitlib.is_confidential(self.vault, r)}
 
     def assert_clean(self, text: str, where: str):
-        for rel in (*HIDDEN_NOTES, CSV_REL):
+        for rel in self.PLANTED:
             self.assertNotIn(rel, text, f"{rel} in {where}")
-        for marker in MARKERS:
+        for marker in self.PLANTED_MARKERS:
             self.assertNotIn(marker.lower(), text.lower(), f"{marker!r} in {where}")
 
     def test_the_fixture_has_what_the_test_needs(self):
-        self.assertTrue({*HIDDEN_NOTES, CSV_REL} <= self.hidden, self.hidden)
+        self.assertTrue(set(self.PLANTED) <= self.hidden, self.hidden)
         self.assertNotIn(OPEN_REL, self.hidden)
         self.assertNotIn(CSV_OPEN_REL, self.hidden)
         self.assertTrue({"05-people/alex-example.md", "05-people/sam-example.md"} <= self.hidden)
+
+    def test_the_policy_export(self):
+        export = kitagent.policy_export(self.vault)
+        folders = kitlib.ConfidentialityPolicy.build(export["confidential_folders"])
+        listed = set(export["confidential_files"])
+        for rel in sorted(self.hidden):
+            self.assertTrue(rel in listed or folders.in_folder(rel), f"{rel} missing from the export")
+        for rel in (OPEN_REL, CSV_OPEN_REL):
+            self.assertFalse(rel in listed or folders.in_folder(rel), f"{rel} exported")
 
     def test_the_bridge_refuses_every_hidden_path(self):
         g = guarded(self.vault)
@@ -555,7 +585,7 @@ class Parity(_FloorVault):
 
     def test_llm_ask(self):
         hits = {kit.kitproviders.hit_rel(h["file"]) for h in kit._search_hits(self.vault, QUESTION, 50, None, "naive")}
-        self.assertTrue({NO_FM_REL, LABELLED_REL, HARRIER_REL, RAISED_REL} <= hits, "the search must find the hidden notes")
+        self.assertTrue(set(self.ASK_HITS) <= hits, "the search must find the hidden notes")
         Records.seen = []
         srv = HTTPServer(("127.0.0.1", 0), Records)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
@@ -574,6 +604,222 @@ class Parity(_FloorVault):
         left_out = re.search(r"^(\d+) matching confidential note\(s\)", r.stdout, re.M)
         self.assertIsNotNone(left_out, r.stdout)
         self.assertGreaterEqual(int(left_out.group(1)), 4)
+
+
+# ---------------------------------------------------------------- open folders (#126)
+
+# The floor fixture again, turned around: three open folders (one spelt in another case than on
+# disk), and inside them the same confidential folder, path rules and label as above. Everything
+# outside them is confidential by default, like the planted note below, which has no label at all.
+OPEN_CONFIG = CONFIG + '  open_folders: ["04-Areas", "07-knowledge", "08-RESOURCES"]\n'
+CONDOR_REL = "03-projects/condor-brief.md"
+CONDOR = "# Condor brief\n\nCONDOR-BODY kestrel board pack terms.\n\n- [ ] CONDOR-TASK send the kestrel brief — me, due 2026-09-20\n"
+OPEN_MARKERS = (*MARKERS, "condor-brief", "Condor brief", "CONDOR-BODY", "CONDOR-TASK")
+
+
+def open_vault() -> Path:
+    v = floor_vault()
+    set_config(v, OPEN_CONFIG)
+    write(v, CONDOR_REL, CONDOR)
+    return v
+
+
+class _OpenVault(unittest.TestCase):
+    def setUp(self):
+        self.vault = open_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+
+
+class OpenFoldersDecide(_OpenVault):
+    def test_outside_every_open_folder_is_confidential(self):
+        for rel in (CONDOR_REL, CONDOR_REL.removesuffix(".md"), "05-people/alex-example.md", "index.md", "log.md",
+                    "Inbox.md", ".kit/config.yml", "00-home/no-such-note.md", "", "04-areas-old/x.md", "../x.md"):
+            self.assertIs(kitlib.confidentiality(self.vault, rel), True, repr(rel))
+        self.assertIs(kitlib.own_confidentiality(self.vault, CONDOR_REL), False, "the note itself says nothing")
+
+    def test_inside_an_open_folder_the_note_decides(self):
+        for rel in (OPEN_REL, CSV_OPEN_REL, "07-knowledge/hybrid-search.md", "04-AREAS/plover", "./04-areas/x/../plover.md"):
+            self.assertIs(kitlib.confidentiality(self.vault, rel), False, rel)
+
+    def test_a_label_inside_an_open_folder_still_hides(self):
+        self.assertIs(kitlib.confidentiality(self.vault, RAISED_REL), True)
+        with self.assertRaises(bp.PolicyError):
+            guarded(self.vault).read_note(RAISED_REL)
+
+    def test_a_confidential_folder_and_a_path_rule_inside_an_open_folder_still_hide(self):
+        for rel in (NO_FM_REL, LABELLED_REL, HARRIER_REL, CSV_REL):
+            self.assertIs(kitlib.confidentiality(self.vault, rel), True, rel)
+
+    def test_the_trash_keeps_the_verdict_of_where_a_note_came_from(self):
+        write(self.vault, ".trash/04-areas/old.md", "# Old\n")
+        write(self.vault, ".trash/03-projects/old.md", "# Old\n")
+        write(self.vault, ".trash/04-areas/board/old.md", "# Old\n")
+        self.assertIs(kitlib.confidentiality(self.vault, ".trash/04-areas/old.md"), False)
+        self.assertIs(kitlib.confidentiality(self.vault, ".trash/03-projects/old.md"), True)
+        self.assertIs(kitlib.confidentiality(self.vault, ".trash/04-areas/board/old.md"), True)
+
+    def test_the_cli_shows_everything_with_show_confidential(self):
+        g = bp.Guarded(ob.FsBackend(self.vault), bp.Policy(audit_path=None, hide_confidential=False), self.vault)
+        self.assertIn("CONDOR-BODY", g.read_note(CONDOR_REL))
+        with self.assertRaises(bp.PolicyError):
+            guarded(self.vault).read_note(CONDOR_REL)
+
+    def test_the_bridge_writes_only_inside_open_folders(self):
+        g = bp.Guarded(ob.FsBackend(self.vault), bp.Policy(audit_path=None), self.vault)
+        with self.assertRaisesRegex(bp.PolicyError, "confidential"):
+            g.create_note("00-inbox/new-idea", "x")
+        g.create_note("04-areas/new-idea", "x")
+        self.assertTrue((self.vault / "04-areas/new-idea.md").exists())
+
+    def test_minutes_link_no_person_outside_the_open_folders(self):
+        set_config(self.vault, OPEN_CONFIG.replace('["04-Areas"', '["02-meetings", "04-Areas"'))
+        res = guarded(self.vault).file_minutes("Alex Example joined.\nDecision: ship it", "Open sync", "2026-09-21",
+                                               people="Sam Example")
+        self.assertNotIn("05-people", json.dumps(res))
+        body = (self.vault / res["path"]).read_text(encoding="utf-8")
+        self.assertNotIn("05-people", body)
+        self.assertNotIn("alex-example", body)
+
+    def test_hub_rows_outside_the_open_folders_are_removed(self):
+        self.assertIn("hub_confidential_row",
+                      [c.code for c in kitrecon.reconcile(self.vault) if c.file == kitrecon.PROJECT_HUB])
+
+    def test_validate_warns_about_an_open_folder_that_does_not_exist(self):
+        set_config(self.vault, OPEN_CONFIG.replace('"07-knowledge"', '"07-knowlege"'))
+        r = run("validate", "--vault", str(self.vault))
+        self.assertIn("warn   .kit/config.yml: open folder '07-knowlege' does not exist", r.stdout)
+        self.assertNotIn("open folder '04-Areas'", r.stdout, "matching ignores case")
+        self.assertNotIn("open folder '08-RESOURCES'", r.stdout)
+        self.assertIn("== Confidentiality: floors, path rules and open folders", r.stdout)
+
+    def test_validate_does_not_warn_about_labels_outside_the_open_folders(self):
+        r = run("validate", "--vault", str(self.vault))
+        self.assertIn(f"warn   {LABELLED_REL}: `sensitivity: internal` inside a folder or path", r.stdout)
+        self.assertNotRegex(r.stdout, r"warn   0[0-35-9][^:]*: `sensitivity:", "the default is no declared floor")
+
+
+class OpenFoldersAndLinks(unittest.TestCase):
+    """A reference is cleared only when it is inside an open folder as written and wherever it lands."""
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+        set_config(self.vault, 'confidentiality:\n  open_folders: ["04-areas"]\n')
+        write(self.vault, "05-people/alice.md", "# Alice\n\nALICE-BODY\n")
+
+    def test_a_link_from_an_open_folder_to_a_note_outside_it(self):
+        symlink(self, self.vault / "04-areas/alice.md", Path("../05-people/alice.md"))
+        for ref in ("04-areas/alice.md", "04-areas/alice"):
+            self.assertIs(kitlib.confidentiality(self.vault, ref), True, ref)
+        with self.assertRaises(bp.PolicyError):
+            guarded(self.vault).read_note("04-areas/alice")
+        self.assertNotIn("ALICE-BODY", json.dumps(guarded(self.vault).search("ALICE-BODY")))
+
+    def test_a_linked_folder_from_an_open_folder_to_outside_it(self):
+        symlink(self, self.vault / "04-areas/people", Path("../05-people"))
+        self.assertIs(kitlib.confidentiality(self.vault, "04-areas/people/alice.md"), True)
+
+    def test_a_link_from_an_open_folder_out_of_the_vault(self):
+        outside = self.vault.parent / "elsewhere"
+        write(outside, "bob.md", "# Bob\n")
+        symlink(self, self.vault / "04-areas/ext", outside)
+        self.assertIs(kitlib.confidentiality(self.vault, "04-areas/ext/bob.md"), True, "not proven inside an open folder")
+        symlink(self, self.vault / "04-areas/bob.md", outside / "bob.md")
+        self.assertIs(kitlib.confidentiality(self.vault, "04-areas/bob"), True)
+
+    def test_a_link_into_an_open_folder_from_outside_is_judged_by_its_own_path_too(self):
+        symlink(self, self.vault / "03-projects/platform.md", Path("../04-areas/platform-engineering.md"))
+        self.assertIs(kitlib.confidentiality(self.vault, "04-areas/platform-engineering.md"), False)
+        self.assertIs(kitlib.confidentiality(self.vault, "03-projects/platform.md"), True)
+
+    def test_a_link_inside_the_open_folder(self):
+        symlink(self, self.vault / "04-areas/pe.md", Path("platform-engineering.md"))
+        self.assertIs(kitlib.confidentiality(self.vault, "04-areas/pe.md"), False)
+
+
+class OpenFolderConfigErrors(unittest.TestCase):
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+
+    def error(self, text: str) -> str:
+        set_config(self.vault, text)
+        with self.assertRaises(kitlib.PolicyConfigError) as ctx:
+            kitlib.confidentiality_policy(self.vault)
+        return str(ctx.exception)
+
+    def test_the_messages_say_what_is_wrong(self):
+        self.assertIn("open_folders is empty", self.error(BROKEN["open folders empty"]))
+        self.assertIn("open_folders is empty", self.error(BROKEN["open folders null"] + "#"))
+        for name in ("open folder dot", "open folder dot slash", "open folder root"):
+            self.assertIn("names the vault root", self.error(BROKEN[name] + "#" * len(name)), name)
+        self.assertIn("is a pattern", self.error(BROKEN["open folder glob"]))
+        self.assertIn("must be relative to the vault", self.error(BROKEN["open folder absolute"]))
+        self.assertIn("must not use `..`", self.error(BROKEN["open folder escapes"]))
+        self.assertIn("at or under the confidential folder '05-people'",
+                      self.error(BROKEN["open folder is a confidential folder"]))
+        self.assertIn("'05-people/team' lies at or under the confidential folder '05-people'",
+                      self.error(BROKEN["open folder under a confidential folder"]))
+        self.assertIn("lists '04-Areas' twice", self.error(BROKEN["open folder twice"]))
+
+    def test_a_confidential_folder_inside_an_open_one_is_fine(self):
+        set_config(self.vault, 'confidentiality:\n  confidential_folders: ["04-areas/hr"]\n  open_folders: ["04-areas"]\n')
+        pol = kitlib.confidentiality_policy(self.vault)
+        self.assertEqual(pol.open_folders, ("04-areas",))
+        self.assertEqual(pol.declared_open_folders, ("04-areas",))
+        self.assertIs(kitlib.confidentiality(self.vault, "04-areas/hr/x.md"), True)
+
+    def test_the_declared_spelling_is_kept(self):
+        set_config(self.vault, 'confidentiality:\n  open_folders: ["./04-Areas/", "07-knowledge\\\\notes"]\n')
+        pol = kitlib.confidentiality_policy(self.vault)
+        self.assertEqual(pol.declared_open_folders, ("04-Areas", "07-knowledge/notes"))
+        self.assertEqual(pol.open_folders, ("04-areas", "07-knowledge/notes"))
+
+
+class OpenFoldersChangeTheSignature(unittest.TestCase):
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+
+    def test_declaring_and_changing_open_folders_make_the_graph_stale(self):
+        def digest() -> str:
+            return kitgraph.signature_digest(kitgraph.note_set_signature(self.vault))
+
+        seen = [digest()]
+        for text in ('confidentiality:\n  open_folders: ["04-areas"]\n',
+                     'confidentiality:\n  open_folders: ["04-areas", "07-knowledge"]\n'):
+            set_config(self.vault, text)
+            seen.append(digest())
+        self.assertEqual(len(set(seen)), 3, "each config state has its own signature")
+
+    def test_the_bridge_graph_cache_follows_open_folders(self):
+        g = guarded(self.vault)
+        rel = "03-projects/search-relaunch.md"
+        self.assertIn(rel, g.graph().nodes)
+        set_config(self.vault, 'confidentiality:\n  open_folders: ["04-areas"]\n')
+        self.assertNotIn(rel, g.graph().nodes)
+
+
+class OpenParity(Parity):
+    """`Parity` on the open-folders vault: the default-confidential note joins the planted ones."""
+
+    PLANTED = (*HIDDEN_NOTES, CSV_REL, CONDOR_REL)
+    PLANTED_MARKERS = OPEN_MARKERS
+    ASK_HITS = (NO_FM_REL, LABELLED_REL, HARRIER_REL, RAISED_REL, CONDOR_REL)
+
+    def setUp(self):
+        self.vault = open_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+        files = [p for p in self.vault.rglob("*") if p.is_file() and kitlib._visible(p.relative_to(self.vault))]
+        self.rels = sorted(p.relative_to(self.vault).as_posix() for p in files)
+        self.hidden = {r for r in self.rels if kitlib.is_confidential(self.vault, r)}
+
+    def test_everything_outside_the_open_folders_is_hidden(self):
+        for rel in self.rels:
+            if not rel.lower().startswith(("04-areas/", "07-knowledge/", "08-resources/")):
+                self.assertIn(rel, self.hidden)
+        self.assertIn("index.md", self.hidden)
+        self.assertIn("07-knowledge/hybrid-search.md", set(self.rels) - self.hidden)
 
 
 if __name__ == "__main__":
