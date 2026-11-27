@@ -255,6 +255,34 @@ class Workflow(unittest.TestCase):
         self.assertTrue(called <= targets, f"CI calls targets the Makefile lacks: {called - targets}")
         self.assertIn("check", called, "the Makefile claims CI runs `check`; it must")
 
+    def test_the_secret_scan_fails_closed(self):
+        """gitleaks exits 0 when git cannot read the history, and a shallow checkout hides it. (#53)
+
+        Its exit code covers leaks only, so the step has to check the rest itself: a full checkout,
+        a positive commit count and no `ERR` line, with the exit code surviving the `tee`.
+        """
+        steps = self.jobs["security"]["steps"]
+        checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+        self.assertEqual((checkout.get("with") or {}).get("fetch-depth"), 0,
+                         "a shallow checkout scans only the fetched commits")
+        install = next((s for s in steps if "gitleaks" in str(s.get("name", "")).lower()
+                        and "install" in str(s.get("name", "")).lower()), None)
+        self.assertIsNotNone(install, "the security job no longer installs gitleaks")
+        self.assertIn("sha256sum -c", install["run"], "the gitleaks archive is no longer checksum-verified")
+        scans = [s for s in steps if re.search(r'gitleaks"?\s+git\b', s.get("run", ""))]
+        self.assertEqual(len(scans), 1, "exactly one step runs `gitleaks git`")
+        scan, run = scans[0], scans[0]["run"]
+        self.assertNotRegex(run, r'gitleaks"?\s+detect\b', "`detect` is deprecated; use `gitleaks git`")
+        self.assertTrue(scan.get("shell") == "bash" or "pipefail" in run,
+                        "without pipefail the `tee` swallows gitleaks' exit code, and a leak passes")
+        self.assertIn("tee", run, "the scan's log is what the count and ERR checks read")
+        self.assertIn("--no-color", run, "ANSI codes hide the count and the ERR level from the checks")
+        self.assertIn("--is-shallow-repository", run, "the step must refuse a shallow checkout")
+        self.assertIn("commits scanned", run, "the step must require a positive commit count")
+        self.assertRegex(run, r"-gt 0", "the step must require a positive commit count")
+        self.assertIn(" ERR ", run, "the step must fail on any ERR line")
+        self.assertGreaterEqual(run.count("::error::"), 4, "each failure names its cause in an ::error::")
+
 
 class LintGate(unittest.TestCase):
     """Ruff is the Python gate, and it hangs off `make lint` — so CI picks it up with no job of its own."""
