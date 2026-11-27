@@ -529,7 +529,7 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     policy = kitlib.confidentiality_policy(root)
     if policy.open_folders:
         return _allow_open_plan(root, export, policy, allow_git)
-    plan = Plan(allow_git=allow_git, deny=list(EDIT_PROTECTED), deny_write=list(DENY_WRITE))
+    plan = Plan(allow_git=allow_git, deny=[EDIT_CLAUDE, *EDIT_PROTECTED], deny_write=list(DENY_WRITE))
     wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED]
     _git_notes(root, plan, wanted)
     wanted += _confidential_entries(export, plan, keep=lambda rel: True, ancestor_ok=bool,
