@@ -141,6 +141,21 @@ class Note:
     fm_error: str | None = None
 
 
+# What PyYAML's safe constructors raise, instead of a YAMLError, for a value that parses as YAML
+# but cannot be built: ValueError (a date that does not exist, `!!int 0x`, `!!float x`), KeyError
+# (`!!bool x`), IndexError (`!!int ''`), AttributeError (`!!timestamp x`). Probed across every
+# safe tag; nothing else came out.
+YAML_CONSTRUCTOR_ERRORS = (ValueError, KeyError, IndexError, AttributeError)
+
+
+def _constructor_error(exc: Exception) -> str:
+    """The finding for a frontmatter value PyYAML could not build; the raw message alone says little."""
+    hint = ("a date or time that does not exist? YAML reads an unquoted YYYY-MM-DD as a date; fix it, or quote it"
+            if isinstance(exc, ValueError) else
+            "a value its explicit YAML tag (`!!bool`, `!!int`, `!!timestamp` …) cannot hold? fix the value, or drop the tag")
+    return f"frontmatter cannot be read: {exc.__class__.__name__}: {exc} — {hint}"
+
+
 def split_frontmatter(text: str) -> tuple[str | None, str]:
     m = FM_RE.match(text)
     if not m:
@@ -177,13 +192,14 @@ def parse_note(path: Path, root: Path) -> Note:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:  # pragma: no cover - exercised via tests with bad yaml
         return Note(path, rel, None, body, fm_error=f"YAML error: {exc}")
-    except ValueError as exc:
-        # Valid syntax, impossible value: PyYAML reads an unquoted `2026-02-30` as a date and its
-        # constructor raises a bare ValueError, which took every command over the vault down (#114).
-        # The note is kept with no frontmatter, as for a YAML error: `validate` names it, and every
-        # reader treats it as confidential, because we cannot tell that it is not.
-        return Note(path, rel, None, body, fm_error=(f"frontmatter cannot be read: {exc} — a date or time that does not "
-                                                     "exist? YAML reads an unquoted YYYY-MM-DD as a date; fix it, or quote it"))
+    except YAML_CONSTRUCTOR_ERRORS as exc:
+        # Valid syntax, a value PyYAML cannot build, and its constructors raise plain Python errors
+        # rather than a YAMLError: ValueError for an unquoted `2026-02-30` (read as a date), and
+        # KeyError, IndexError or AttributeError for an explicit tag on the wrong value (`!!bool x`,
+        # `!!int ''`, `!!timestamp x`). Each took every command over the vault down (#114). The note
+        # is kept with no frontmatter, as for a YAML error: `validate` names it, and every reader
+        # treats it as confidential, because we cannot tell that it is not.
+        return Note(path, rel, None, body, fm_error=_constructor_error(exc))
     if data is None:
         data = {}
     if not isinstance(data, dict):

@@ -97,38 +97,51 @@ class AMisplacedDayNoteIsAHygieneFinding(unittest.TestCase):
         self.assertEqual(validate(self.vault, "--strict").returncode, 1)
 
 
-class AnImpossibleDateIsAFindingNotATraceback(unittest.TestCase):
-    """`created: 2026-02-30` parses as YAML syntax, then PyYAML's date constructor raised a bare
-    ValueError, which stopped `validate`, `index` and `graph build` with a traceback (#114, #108)."""
+class FrontmatterAConstructorCannotBuildIsAFindingNotATraceback(unittest.TestCase):
+    """Valid YAML syntax whose value PyYAML's constructor cannot build: `created: 2026-02-30` raised
+    a bare ValueError, and an explicit tag on the wrong value (`!!bool x`, `!!int ''`,
+    `!!timestamp x`) a KeyError, IndexError or AttributeError. Each stopped `validate`, `index` and
+    `graph build` with a traceback (#114, #108); each is now what a YAML error is: a finding."""
 
-    REL = "07-knowledge/bad-date.md"
+    CASES = {
+        "07-knowledge/bad-date.md": "created: 2026-02-30",
+        "07-knowledge/bad-bool.md": "flag: !!bool x",
+        "07-knowledge/bad-int.md": "count: !!int ''",
+        "07-knowledge/bad-timestamp.md": "created: !!timestamp x",
+    }
 
     def setUp(self):
         self.vault = temp_vault()
         self.addCleanup(shutil.rmtree, self.vault.parent, ignore_errors=True)
-        (self.vault / self.REL).write_text(
-            "---\ntype: concept\ntitle: Bad date\ndescription: probe\ncreated: 2026-02-30\n---\n\nbody\n",
-            encoding="utf-8", newline="\n")
+        for rel, line in self.CASES.items():
+            (self.vault / rel).write_text(
+                f"---\ntype: concept\ntitle: Bad value\ndescription: probe\n{line}\n---\n\nbody\n",
+                encoding="utf-8", newline="\n")
 
     def kit(self, *args):
         return subprocess.run(KIT + [*args, "--vault", str(self.vault)], capture_output=True, text=True,
                               encoding="utf-8", errors="replace", check=False)
 
-    def test_validate_names_the_file_and_fails_conformance(self):
-        """Its frontmatter cannot be read at all, so `type` cannot be checked: an OKF error, exit 1."""
+    def test_validate_names_each_file_and_fails_conformance(self):
+        """Its frontmatter cannot be read at all, so `type` cannot be checked: an OKF error, exit 1.
+        No assertion on PyYAML's or Python's own wording: it differs between Python versions."""
         r = validate(self.vault)
         self.assertNotIn("Traceback", r.stderr)
-        self.assertIn(f"{self.REL}: frontmatter cannot be read", r.stdout)
-        self.assertIn("day is out of range for month", r.stdout)
+        for rel in self.CASES:
+            with self.subTest(rel):
+                self.assertIn(f"{rel}: frontmatter cannot be read", r.stdout)
         self.assertEqual(r.returncode, 1, r.stdout)
 
-    def test_index_names_the_file_and_leaves_it_out(self):
+    def test_index_names_each_file_and_leaves_it_out(self):
         r = self.kit("index")
         self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn(self.REL, r.stderr)
-        self.assertNotIn("bad-date", (self.vault / "index.md").read_text(encoding="utf-8"),
-                         "frontmatter we cannot read counts as confidential")
+        index = (self.vault / "index.md").read_text(encoding="utf-8")
+        for rel in self.CASES:
+            with self.subTest(rel):
+                self.assertIn(rel, r.stderr)
+                self.assertNotIn(rel.rpartition("/")[2].removesuffix(".md"), index,
+                                 "frontmatter we cannot read counts as confidential")
 
     def test_graph_build_still_builds(self):
         r = self.kit("graph", "build")
