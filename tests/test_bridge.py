@@ -184,6 +184,25 @@ class FsBackend(unittest.TestCase):
         self.assertTrue(self.b.graph_neighbors("03-projects/search-relaunch.md", 1))
         self.assertIn("search-relaunch", self.b.graph_context("03-projects/search-relaunch.md"))
 
+    def test_the_policy_layer_hides_a_note_whose_date_cannot_be_read(self):
+        """The raw backend above still lists the note; what an agent sees goes through the policy,
+        which cannot read the note's `sensitivity:` once its frontmatter fails, so treats it as
+        confidential, and the other notes stay reachable (#114)."""
+        import bridge_policy as bp
+        rel = "07-knowledge/bad-date.md"
+        (self.vault / rel).write_text("---\ntype: concept\ntitle: Bad date\ndescription: x\ncreated: 2026-02-30\n"
+                                      "---\nhybrid search BADDATE-BODY\n", encoding="utf-8")
+        g = bp.Guarded(self.b, bp.Policy(audit_path=None), self.vault)
+        self.assertNotIn(rel, g.list_files("07-knowledge"))
+        self.assertIn("07-knowledge/hybrid-search.md", g.list_files("07-knowledge"))
+        hits = g.search("hybrid search", 10)
+        self.assertTrue(hits)
+        self.assertNotIn(rel, [h["file"] for h in hits])
+        with self.assertRaises(bp.PolicyError):
+            g.read_note(rel)
+        self.assertNotIn(rel, {r[0] for r in g.graph_query("SELECT id FROM nodes")["rows"]})
+        self.assertIsInstance(g.todos()["open"], int)
+
     def test_a_note_we_cannot_decode_is_a_bridge_error_on_every_tool_that_touches_it(self):
         """The tools that name one file, rather than scanning: with --show-confidential nothing
         stops them earlier, and a UnicodeDecodeError traceback is not an answer a model can act on."""
