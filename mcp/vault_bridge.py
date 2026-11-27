@@ -674,7 +674,8 @@ def main(argv=None) -> int:
     pol.add_argument("--deny-write", help="comma-separated folder prefixes model-chosen writes may never touch (default: 05-people,99-system,90-templates,09-archive,.obsidian,.kit,index.md,log.md,context.jsonld); "
                                           "file_meeting_minutes still appends its one-line provenance entry to log.md, which is how a vault records that a tool wrote something")
     pol.add_argument("--allow-write", help="comma-separated folder prefixes that are the only writable ones")
-    pol.add_argument("--show-confidential", action="store_true", help="expose notes with sensitivity: confidential (hidden by default)")
+    pol.add_argument("--show-confidential", action="store_true", help="expose notes with sensitivity: confidential, and files a confidential folder, path rule or "
+                          "open_folders in .kit/config.yml hides (hidden by default)")
     pol.add_argument("--max-write-bytes", type=int, default=20_000); pol.add_argument("--max-writes-per-minute", type=int, default=20)
     pol.add_argument("--allow-overwrite", action="store_true", help="let the model pass overwrite=true on vault_create_note (denied by default: it blanks an existing note)")
     pol.add_argument("--propose", action="store_true", help="writes become proposals in .kit/proposals/ (kit.py proposals apply)")

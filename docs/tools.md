@@ -29,7 +29,15 @@ providers:
   search: naive        # or qmd, or auto
 ```
 
-The same file declares which folders and files are confidential as a whole, whatever their notes say (`confidentiality:`, with `confidential_folders` and `confidential_paths`). That block is read strictly, and a broken one hides every note from every reader until it is fixed: [security.md](security.md#scoped-hiding-confidential-folders-and-path-rules).
+The same file declares which folders and files are confidential as a whole, whatever their notes say (`confidentiality:`, with `confidential_folders` and `confidential_paths`), or turns the default around with `open_folders`: everything outside the folders it lists is then confidential, and inside them the folders, path rules and labels still hide what they hide. That block is read strictly, and a broken one hides every note from every reader until it is fixed: [security.md](security.md#scoped-hiding-confidential-folders-and-path-rules), and for open folders [security.md](security.md#open-folders-everything-else-is-confidential).
+
+```yaml
+# <vault>/.kit/config.yml
+confidentiality:
+  confidential_folders: ["05-people"]
+  confidential_paths: ["08-resources/exports/*.csv"]
+  open_folders: ["04-areas", "07-knowledge"]      # optional: everything else is confidential
+```
 
 `auto` takes the first provider that reports itself usable. That is what makes a locked-down
 machine survivable: if the package registry is blocked and qmd never installs, the search slot
@@ -127,14 +135,14 @@ uv run kit.py todos [--show-confidential]
 uv run kit.py minutes recap.txt --title "Sync" [--keep-open]
 uv run kit.py examples remove [--dry-run]                                # delete the sample notes and repair what referred to them
 uv run kit.py policy export [--out FILE]                                 # what is confidential, as JSON
-uv run kit.py agent-settings claude-code [--apply | --check] [--allow-git]   # deny it to Claude Code's own tools
+uv run kit.py agent-settings claude-code [--apply | --check | --remove] [--allow-git]   # deny it to Claude Code's own tools
 uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault          # MCP server, headless
 uv run mcp/vault_bridge.py --backend cli --vault-name "vault"          # MCP server via official CLI
 ```
 
-`policy export` and `agent-settings claude-code` turn the vault's policy into a coding agent's own read restrictions: the export lists every confidential folder, path rule and file as the vault spells them, and the generator merges matching `Read(...)` deny rules, `sandbox.filesystem.denyRead` entries and the sandbox switches into the vault's `.claude/settings.json` (dry run by default, `--apply` to write, `--check` for CI, `.git` denied unless `--allow-git`). `kit.py doctor` reports drift. What each entry is, what it does not cover, and what was tested: [security.md §5](security.md#generated-from-the-vault-kitpy-agent-settings-claude-code).
+`policy export` and `agent-settings claude-code` turn the vault's policy into a coding agent's own read restrictions: the export lists every confidential folder, path rule and file as the vault spells them, and the generator merges matching `Read(...)` deny rules, `sandbox.filesystem.denyRead` entries and the sandbox switches into the vault's `.claude/settings.json` (dry run by default, `--apply` to write, `--check` for CI, `--remove` to undo, `.git` denied unless `--allow-git`). With `open_folders` declared it writes allow-open settings instead: the vault denied to the sandbox, the open folders allowed, what is confidential inside them denied one by one, and a PreToolUse guard written inline into `settings.json` that refuses the agent's file tools anywhere outside the open folders, for writes as well as reads. `kit.py doctor` reports drift, and a guard that is missing, altered or switched off. What each entry is, what it does not cover, and what was tested: [security.md §5](security.md#generated-from-the-vault-kitpy-agent-settings-claude-code) and [allow-open mode](security.md#allow-open-mode).
 
-Notes marked `sensitivity: confidential`, and the files a confidential folder or path rule in `.kit/config.yml` covers ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)), stay out of what `kit.py` hands a model or writes to disk, as they stay out of the bridge's tools:
+Notes marked `sensitivity: confidential`, the files a confidential folder or path rule in `.kit/config.yml` covers ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)), and, with `open_folders` declared, every file outside the open folders, stay out of what `kit.py` hands a model or writes to disk, as they stay out of the bridge's tools:
 
 - `llm ask` leaves a confidential search hit out of the prompt whole (no path, no title, no snippet) and only prints how many it left out: the confidential hits that ranked ahead of the last source it sends. It asks the search for more hits than it uses, so the hits it leaves out do not shrink the list of sources the model gets. With `--graph`, the context packs come from the redacted graph, so a visible note's pack does not name a confidential neighbour either. A confidential note's title counts as confidential, on the bridge and in the CLI alike.
 - `graph build`, `export`, `query`, `neighbors`, `path` and `pack` use the same redacted graph as the bridge's graph tools by default: confidential notes, their edges, their findings, and every derived value or finding of another note that refers to one are left out of `.kit/graph.json`, `graph.jsonld`, `graph.nt`, `graph.sqlite` and the printed output. `graph build` prints how many notes it left out; the other graph commands do not. `--show-confidential` includes them, with the same meaning as the bridge's flag; use it only for output that stays with you.
