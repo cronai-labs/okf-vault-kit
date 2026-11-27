@@ -352,6 +352,9 @@ BROKEN = {
     "open folders at the top level": ('confidentiality:\n  confidential_paths: ["**/salary*"]\n'
                                       'open_folders: ["04-areas"]\n'),
     "open folders at the top level, capitalised": 'Open_Folders: ["04-areas"]\n',
+    "open folders at the top level, hyphenated": 'open-folders: ["04-areas"]\n',
+    "open folders at the top level, run together": 'openfolders: ["04-areas"]\n',
+    "confidential folders at the top level, spaced": 'confidential folders: ["05-people"]\n',
 }
 
 

@@ -920,8 +920,10 @@ def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
         raise PolicyConfigError(f"{CONFIG_REL}: the file must be a mapping of keys")
     # `Confidentiality:`, `confidentialty:`, or a bare `confidential_folders:` or `open_folders:` at the
     # top level would otherwise read as "no block", which is "nothing is confidential".
+    def _key(k: Any) -> str:          # `Open-Folders`, `open folders`, `openfolders` all read as open_folders
+        return str(k).casefold().replace("-", "_").replace(" ", "_")
     near = sorted(str(k) for k in data if k != "confidentiality" and (
-        str(k).casefold().startswith(("confidential", "open_folder")) or str(k).casefold() in CONFIDENTIALITY_KEYS))
+        _key(k).startswith(("confidential", "open_folder", "openfolder")) or _key(k) in CONFIDENTIALITY_KEYS))
     if near:
         raise PolicyConfigError(f"{CONFIG_REL}: top-level key(s) {', '.join(near)} look like the confidentiality "
                                 "block but are not `confidentiality:` (lower case, with "
