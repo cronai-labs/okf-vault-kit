@@ -184,7 +184,11 @@ class Plan(_Vault):
                           (f"Read(./{CSV_REL})", f"./{CSV_REL}")):
             self.assertIn(perm, plan.deny)
             self.assertIn(sbx, plan.deny_read)
-        self.assertEqual(len(plan.deny), len(plan.deny_read))
+        # One sandbox entry per Read rule; the Edit rules pair with denyWrite instead.
+        self.assertEqual(len([e for e in plan.deny if e.startswith("Read(")]), len(plan.deny_read))
+        # The agent may not edit its own settings, the config or the manifest: under bypassPermissions
+        # Claude Code does not protect `.claude/` by itself, and the settings hold every rule here.
+        self.assertEqual([e for e in plan.deny if not e.startswith("Read(")], [kitagent.EDIT_CLAUDE, *kitagent.EDIT_PROTECTED])
         self.assertNotIn("Read(./.kit/config.yml)", plan.deny)   # the agent's own kit runs need it
 
     def test_files_the_kit_derives_are_always_denied(self):
@@ -407,7 +411,7 @@ class Merge(_Vault):
         before = (self.v / SETTINGS).read_bytes()
         r = agent(self.v, "--check")
         self.assertEqual(r.returncode, 1)
-        self.assertIn("2 list entries to add", r.stdout)
+        self.assertIn("2 entries to add", r.stdout)
         self.assertNotIn("new-hidden", r.stdout)
         self.assertEqual((self.v / SETTINGS).read_bytes(), before)
 

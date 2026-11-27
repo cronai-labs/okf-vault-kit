@@ -9,7 +9,13 @@ Two layers, both pure functions of the vault so the CLI, `--check` and `doctor` 
   claude_code_*   Claude Code's `permissions.deny` `Read(...)` rules and `sandbox.filesystem.denyRead`
                   entries for that export, merged into the vault's `.claude/settings.json`. Which entries
                   the kit added is recorded in a manifest beside the policy, not in settings.json, so an
-                  entry the user wrote is never removed.
+                  entry the user wrote is never removed. With `open_folders` declared (#126) the plan is
+                  allow-open instead: `./` denied to the sandbox, the open folders in `allowRead`, what is
+                  confidential inside them denied one by one, edits to `.claude/` denied, and a
+                  PreToolUse guard (GUARD_CODE) inline in settings.json for the Read, Grep and Glob tools,
+                  which the sandbox does not govern. In both modes the config and the manifest are
+                  write-protected (`Edit(...)` deny rules and `sandbox.filesystem.denyWrite`): the
+                  bridge reads the config live, so an agent that could edit it could widen the policy.
 
 Standard library only, apart from what kitlib needs.
 """
@@ -21,6 +27,7 @@ import difflib
 import json
 import os
 import posixpath
+import shlex
 import tempfile
 import unicodedata
 from dataclasses import dataclass, field
@@ -50,6 +57,143 @@ SANDBOX_FLAGS = {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnav
 UNSAFE_CHARS = frozenset("*?[]\\!#")
 PATTERN_UNSAFE = frozenset("[]\\!#")      # a path rule keeps its * and ?, which mean the same there
 APPLY_HINT = f"run `{GENERATOR} --apply` with the same --vault"
+DENY_LIST, ALLOW_OPEN = "deny-list", "allow-open"
+# Allow-open mode (#126): the file tools a PreToolUse guard sees, and how long it may take. The
+# guard is the only control over the Read, Grep and Glob tools there: the sandbox governs shell
+# commands only, and a permission rule cannot re-open a folder under a denied root.
+HOOK_MATCHER = "Read|Grep|Glob|NotebookRead|Edit|Write|MultiEdit|NotebookEdit"
+HOOK_TIMEOUT = 10
+GUARD_MARKER = "okf-vault-kit open-folder guard"
+# Never readable or writable through the file tools in allow-open mode, whatever `open_folders`
+# says: the agent's own settings (which hold the guard), and git's object store unless --allow-git.
+GUARD_ALWAYS_DENIED = (".claude",)
+EDIT_CLAUDE = "Edit(./.claude/**)"
+# Write-protected in both modes, against the shell (sandbox denyWrite) and the file tools (Edit
+# rules): the policy the bridge reads live, and the manifest that says which entries are the kit's.
+# A canary on Claude Code 2.1.330 appended to the config from the agent's shell without them.
+WRITE_PROTECTED = (kitlib.CONFIG_REL, MANIFEST_DIR)
+EDIT_PROTECTED = (f"Edit(./{kitlib.CONFIG_REL})", f"Edit(./{MANIFEST_DIR}/**)")
+DENY_WRITE = [f"./{rel}" for rel in WRITE_PROTECTED]
+# The guard itself. Standard library only, and old-Python safe (no walrus, no removeprefix): it runs
+# under whatever `python3` is on PATH. `__DATA__` becomes a string literal holding the JSON of the
+# open and denied lists, so the guard reads no file at run time: a canary showed that a hook whose
+# script file is missing does not run at all, even with `onFailure: "block"`.
+GUARD_CODE = '''\
+# okf-vault-kit open-folder guard, written by kit.py agent-settings claude-code (docs/security.md).
+# Exit 2 refuses the tool call: unless every path it names is proven to lie inside an open folder
+# and outside every denied entry, and on any error at all.
+import json, os, re, sys, unicodedata
+C = json.loads(__DATA__)
+TOOLS = {"Read": "file_path", "Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+         "NotebookRead": "notebook_path", "NotebookEdit": "notebook_path", "Grep": "path", "Glob": "path"}
+PATTERN = {"Grep": "glob", "Glob": "pattern"}
+READS = ("Read", "Grep", "Glob", "NotebookRead")
+
+
+def no(why):
+    sys.stderr.write("okf-vault-kit guard: " + why + "; this vault allows its file tools only inside its open folders\\n")
+    sys.exit(2)
+
+
+def form(p):
+    return unicodedata.normalize("NFC", p.replace(os.sep, "/")).casefold()
+
+
+def under(rel, base):
+    return rel == base or rel.startswith(base + "/")
+
+
+def leaves(p):
+    # A brace may expand to `..` or an absolute path (`{..,x}`, `{,}/etc`), and whether Grep or Glob
+    # expand braces was not observed: refused unless proven.
+    return p.startswith("~") or os.path.isabs(p) or ".." in re.split(r"[/\\\\]", p) or "{" in p or "}" in p
+
+
+def rel_to(path, bases):
+    f = form(path)
+    for b in bases:
+        b = form(b).rstrip("/")
+        if f == b:
+            return ""
+        if f.startswith(b + "/"):
+            return f[len(b) + 1:]
+    return None
+
+
+def allowed(rel, write):
+    if not rel:
+        return False
+    if rel.startswith(".trash/") and not allowed(rel[len(".trash/"):], write):
+        return False
+    if write and any(under(rel, r) for r in C["read_only"]):
+        return False
+    if any(under(rel, d) for d in C["folders"]) or rel in C["files"]:
+        return False
+    if any(re.fullmatch(x, rel, re.DOTALL) for x in C["patterns"]):
+        return False
+    return any(under(rel, o) for o in C["open"])
+
+
+def main():
+    data = json.loads(sys.stdin.read())
+    if not isinstance(data, dict):
+        no("unknown hook input")
+    tool, args = data.get("tool_name"), data.get("tool_input")
+    if tool not in TOOLS or not isinstance(args, dict):
+        no("unknown tool or input shape")
+    project = os.environ.get("CLAUDE_PROJECT_DIR") or os.getcwd()
+    cwd = data.get("cwd")
+    if not isinstance(cwd, str) or not os.path.isabs(cwd):
+        cwd = project
+    raw = args.get(TOOLS[tool])
+    if not isinstance(raw, str) or not raw or "\\0" in raw:
+        no(str(tool) + " names no usable path")
+    if raw.startswith("~") or ".." in re.split(r"[/\\\\]", raw):
+        no(tool + " with a path that climbs")
+    pattern = args.get(PATTERN.get(tool, ""))
+    if pattern is not None and (not isinstance(pattern, str) or leaves(pattern)):
+        no(tool + " with a pattern that may leave its folder (absolute, `..`, `~` or a brace)")
+    # A relative path is judged from the cwd of the call and from the project dir: which one the tool
+    # uses was not observed, so both must pass.
+    fulls = [raw] if os.path.isabs(raw) else [os.path.join(cwd, raw), os.path.join(project, raw)]
+    bases = [os.path.normpath(os.path.abspath(project)), os.path.realpath(project)]
+    for full in fulls:
+        lexical = rel_to(os.path.normpath(full), bases)
+        resolved = rel_to(os.path.realpath(full), bases[1:])
+        if not (allowed(lexical, tool not in READS) and allowed(resolved, tool not in READS)):
+            no(tool + " outside the open folders, or on a denied path")
+
+
+try:
+    main()
+except SystemExit:
+    raise
+except BaseException as exc:
+    no("could not check the call (" + exc.__class__.__name__ + ")")
+'''
+
+
+def guard_command(data: dict[str, Any]) -> str:
+    """The hook command: `python3 -I -c '<GUARD_CODE>'` with `data` embedded as a JSON string literal.
+
+    `-I` keeps the environment's PYTHON* variables, the user's site-packages and the current folder
+    out of the interpreter. The JSON is ASCII (`json.loads` rebuilds any other character), and the
+    whole program is quoted for `sh -c` by `shlex.quote`, so no folder name can end the quoting.
+    """
+    literal = json.dumps(json.dumps(data, sort_keys=True))
+    return "python3 -I -c " + shlex.quote(GUARD_CODE.replace("__DATA__", literal, 1))
+
+
+def guard_entry(data: dict[str, Any]) -> dict[str, Any]:
+    """The `hooks.PreToolUse` entry: owned through the manifest by exactly this content."""
+    return {"matcher": HOOK_MATCHER,
+            "hooks": [{"type": "command", "command": guard_command(data), "timeout": HOOK_TIMEOUT, "onFailure": "block"}]}
+
+
+def is_guard(entry: Any) -> bool:
+    """Does this `hooks.PreToolUse` entry carry the kit's guard (as written, or altered since)?"""
+    return isinstance(entry, dict) and isinstance(entry.get("hooks"), list) and any(
+        isinstance(h, dict) and isinstance(h.get("command"), str) and GUARD_MARKER in h["command"] for h in entry["hooks"])
 
 
 class AgentSettingsError(ValueError):
@@ -233,64 +377,105 @@ def _derived(rel: str) -> bool:
 class Plan:
     deny: list[str] = field(default_factory=list)          # permissions.deny entries the kit wants
     deny_read: list[str] = field(default_factory=list)     # sandbox.filesystem.denyRead entries
+    deny_write: list[str] = field(default_factory=list)    # sandbox.filesystem.denyWrite entries
     notes: list[str] = field(default_factory=list)         # preview lines: escalations, skips, git
     flags: list[str] = field(default_factory=list)         # short doctor-safe flags, no vault paths
     allow_git: bool = False
+    mode: str = DENY_LIST
+    allow_read: list[str] = field(default_factory=list)    # sandbox.filesystem.allowRead (allow-open)
+    hook: dict[str, Any] | None = None                     # the hooks.PreToolUse entry (allow-open)
+    guard: dict[str, Any] | None = None                    # the lists embedded in the hook
 
 
-def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False) -> Plan:
-    """The entries for an export. Raises AgentSettingsError when a file would need the whole vault denied."""
-    root = Path(root).resolve()
-    plan = Plan(allow_git=allow_git)
-    wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED]
+def _git_notes(root: Path, plan: Plan, wanted: list[tuple[str, str]], how: str = "is denied") -> None:
+    """The `.git` choice and the history-outside warning, for either mode."""
     if (root / ".git").is_dir():
-        if allow_git:
+        if plan.allow_git:
             plan.notes.append("--allow-git: `.git` is not denied, so confidential notes tracked in git stay readable "
                               "through the history (`git show`, `git grep HEAD`)")
         else:
             wanted.append(("folder", ".git"))
-            plan.notes.append("`.git` is denied, so confidential notes tracked in git cannot be read through the "
+            plan.notes.append(f"`.git` {how}, so confidential notes tracked in git cannot be read through the "
                               "history; the agent cannot use git in this vault either (--allow-git keeps git)")
     outside = git_outside(root)
     if outside is not None:
         plan.notes.append(f"the vault's git history lives outside it ({outside}); the kit denies nothing outside the "
                           "vault, so confidential notes tracked there stay readable through git")
         plan.flags.append("git history outside the vault not denied")
-    root_hits = 0
+
+
+def _in_open(rel: str, opens: tuple[str, ...]) -> bool:
+    """Is this vault-relative path at or under an open folder (match forms, as the predicate compares)?"""
+    form = kitlib._match_form(rel)
+    return any(form == o or form.startswith(o + "/") for o in opens)
+
+
+def _below_open(rel: str, opens: tuple[str, ...]) -> bool:
+    """Strictly below an open folder: denying it leaves the open folder itself open."""
+    form = kitlib._match_form(rel)
+    return any(form.startswith(o + "/") for o in opens)
+
+
+def _may_reach(pattern: str, opens: tuple[str, ...]) -> bool:
+    """Could this path rule match a file inside an open folder? Conservative: a wildcard in a name
+    before the pattern runs past the open folder counts as a match."""
+    segs = kitlib._match_form(pattern).split("/")
+    for o in opens:
+        oseg = o.split("/")
+        for i, seg in enumerate(segs):
+            if "*" in seg or "?" in seg:
+                return True
+            if i >= len(oseg):
+                return True               # literally below the open folder
+            if seg != oseg[i]:
+                break
+    return False
+
+
+def _confidential_entries(export: dict[str, Any], plan: Plan, keep, ancestor_ok, pattern_keep) -> list[tuple[str, str]]:
+    """The (kind, rel) entries for the export's confidential folders, files and path rules.
+
+    `keep` picks the paths this mode lists (all of them, or those inside the open folders);
+    `ancestor_ok` says whether a name a rule cannot match literally may be denied through that folder;
+    `pattern_keep` picks the path rules carried over as patterns. Raises AgentSettingsError when a
+    name could be denied only through a folder `ancestor_ok` refuses.
+    """
+    refused = 0
     escalated: dict[str, int] = {}
-    folders = []
-    for rel in export["confidential_folders"]:
+    folders: list[str] = []
+    files: list[str] = []
+
+    def place(rel: str, is_dir: bool) -> None:
+        nonlocal refused
         if literal_safe(rel):
-            folders.append(rel)
-            continue
+            (folders if is_dir else files).append(rel)
+            return
         anc = _safe_ancestor(rel)
-        if not anc:
-            root_hits += 1
+        if not ancestor_ok(anc):
+            refused += 1
         else:
             escalated[anc] = escalated.get(anc, 0) + 1
-    files = []
+
+    for rel in export["confidential_folders"]:
+        if keep(rel):
+            place(rel, True)
     for rel in export["confidential_files"]:
         is_dir = rel.endswith("/")
         rel = rel.rstrip("/")
-        if rel in AGENT_OWN or _under(rel, MANIFEST_DIR) or _derived(rel):
-            continue           # the kit's own files: denied above, or never denied
+        if not keep(rel) or rel in AGENT_OWN or _under(rel, MANIFEST_DIR) or _derived(rel):
+            continue           # outside this mode's reach, or the kit's own files: denied above, or never
         if rel == kitlib.CONFIG_REL:
             plan.notes.append(f"not denied: {kitlib.CONFIG_REL} (a path rule covers it, but the agent's own kit runs "
                               "need it, and a policy they cannot read hides everything from them)")
             continue
-        if literal_safe(rel):
-            (folders if is_dir else files).append(rel)
-            continue
-        anc = _safe_ancestor(rel)
-        if not anc:
-            root_hits += 1
-        else:
-            escalated[anc] = escalated.get(anc, 0) + 1
-    if root_hits:
+        place(rel, is_dir)
+    if refused:
+        where = ("inside the open folders" if plan.mode == ALLOW_OPEN else "at the vault root")
+        cover = ("an open folder itself or a folder above it" if plan.mode == ALLOW_OPEN else "the vault itself")
         raise AgentSettingsError(
-            f"{root_hits} confidential file(s) or folder(s) at the vault root have names a permission rule cannot "
+            f"{refused} confidential file(s) or folder(s) {where} have names a permission rule cannot "
             "match literally (one of * ? [ ] \\ ! #, a leading or trailing space, or a line break), and the only "
-            "folder that would cover them is the vault itself. Rename them, or move them into a confidential "
+            f"folder that would cover them is {cover}. Rename them, or move them into a confidential "
             "folder, and run again")
     for anc, n in sorted(escalated.items()):
         folders.append(anc)
@@ -298,6 +483,8 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
                           "permission rule cannot match literally")
     patterns = []
     for pat in export["confidential_paths"]:
+        if not pattern_keep(pat):
+            continue
         if kitlib.ConfidentialityPolicy.build(paths=[pat]).covers(kitlib.CONFIG_REL):
             plan.notes.append(f"path rule {pat!r} is not carried over as a pattern, since it would deny "
                               f"{kitlib.CONFIG_REL}; the files it matches now are denied one by one, a file it "
@@ -317,10 +504,14 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     if any(_under(kitlib.CONFIG_REL, g) for g in chosen):
         plan.notes.append(f"{kitlib.CONFIG_REL} is denied with the folder that holds it; the agent's own kit runs "
                           "then cannot read the policy and hide everything from it")
-    wanted += [("folder", f) for f in chosen]
-    wanted += [("path", p) for p in patterns]
-    wanted += [("file", f) for f in sorted(set(files)) if not any(_under(f, g) for g in chosen)]
-    seen: set[str] = set()
+    out = [("folder", f) for f in chosen]
+    out += [("path", p) for p in patterns]
+    out += [("file", f) for f in sorted(set(files)) if not any(_under(f, g) for g in chosen)]
+    return out
+
+
+def _add_entries(plan: Plan, wanted: list[tuple[str, str]]) -> None:
+    seen = set(plan.deny)
     for kind, rel in wanted:
         perm, sbx = entries(kind, rel)
         if perm in seen:
@@ -328,6 +519,85 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
         seen.add(perm)
         plan.deny.append(perm)
         plan.deny_read.append(sbx)
+
+
+def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False) -> Plan:
+    """The entries for an export, in the mode the config picks: allow-open when `open_folders` is
+    declared, the deny list otherwise. Raises AgentSettingsError when a file would need the whole
+    vault (or, in allow-open mode, a whole open folder) denied."""
+    root = Path(root).resolve()
+    policy = kitlib.confidentiality_policy(root)
+    if policy.open_folders:
+        return _allow_open_plan(root, export, policy, allow_git)
+    plan = Plan(allow_git=allow_git, deny=[EDIT_CLAUDE, *EDIT_PROTECTED], deny_write=list(DENY_WRITE))
+    wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED]
+    _git_notes(root, plan, wanted)
+    wanted += _confidential_entries(export, plan, keep=lambda rel: True, ancestor_ok=bool,
+                                    pattern_keep=lambda pat: True)
+    _add_entries(plan, wanted)
+    return plan
+
+
+def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.ConfidentialityPolicy,
+                     allow_git: bool) -> Plan:
+    """Allow-open (#126): deny the vault (`./`) to the shell, re-open the open folders, deny what is
+    confidential inside them one by one, and guard the file tools with a PreToolUse hook.
+
+    The export lists every file outside the open folders too; `./` covers those, so only what lies
+    inside an open folder becomes an entry. The guard's lists are the same entries, literal (it needs
+    no climb to a folder for a name a rule cannot match), plus `.claude` always and `.git` unless
+    --allow-git, which opens `.git` to the read tools only.
+    """
+    opens = policy.open_folders
+    plan = Plan(allow_git=allow_git, mode=ALLOW_OPEN, deny_write=list(DENY_WRITE))
+    plan.notes.append("allow-open: the vault is denied to the agent and only the open folders "
+                      f"({len(policy.declared_open_folders)}) are allowed; its file tools can read and write "
+                      "only inside them, and a PreToolUse guard refuses every other path")
+    special: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED, ("folder", ".claude")]
+    git_wanted: list[tuple[str, str]] = []
+    _git_notes(root, plan, git_wanted, how="is denied with the rest of the vault")
+    special += git_wanted
+    # The vault itself goes to the sandbox as `./`, and the agent may not edit its own settings,
+    # which hold the guard: with that rule it could not switch the guard off by any tool in the canary.
+    plan.deny, plan.deny_read = [EDIT_CLAUDE, *EDIT_PROTECTED], ["./"]
+    wanted: list[tuple[str, str]] = []
+    # The kit's own files are outside the open folders unless one is declared over them: then on the lists.
+    wanted += [(k, r) for k, r in special if _in_open(r.rstrip("*").rstrip("."), opens)]
+    found = _confidential_entries(export, plan, keep=lambda rel: _in_open(rel, opens),
+                                  ancestor_ok=lambda anc: bool(anc) and _below_open(anc, opens),
+                                  pattern_keep=lambda pat: _may_reach(pat, opens))
+    wanted += found
+    _add_entries(plan, wanted)
+    # `.claude` is never re-opened to the shell, nor `.git` without --allow-git, even when declared open.
+    closed = (".claude",) + (() if allow_git else (".git",))
+    allow = sorted({f"./{f}" for d in policy.declared_open_folders for f in _on_disk(root, d)
+                    if not _in_open(f, closed)})
+    allow.append(f"./{kitlib.CONFIG_REL}")         # the agent's own kit runs load the policy, as in deny-list mode
+    if allow_git and (root / ".git").is_dir() and "./.git" not in allow:
+        allow.append("./.git")
+    plan.allow_read = allow
+    # The guard: literal names, matched as the predicate matches (case and Unicode form aside). Taken
+    # from the export, not from `found`: that holds the folder the deny rules climb to for a name they
+    # cannot match, and the guard would then refuse that name's neighbours, which the predicate leaves open.
+    folders = {kitlib._match_form(r.rstrip("/")) for r in export["confidential_folders"] if _in_open(r.rstrip("/"), opens)}
+    folders |= {kitlib._match_form(r.rstrip("/")) for r in export["confidential_files"]
+                if r.endswith("/") and _in_open(r.rstrip("/"), opens)}
+    folders |= {kitlib._match_form(r) for k, r in special if k == "folder"}
+    folders |= set(GUARD_ALWAYS_DENIED)
+    if not allow_git:
+        folders.add(".git")
+    files = {kitlib._match_form(r.rstrip("/")) for r in export["confidential_files"] if _in_open(r.rstrip("/"), opens)}
+    files |= {kitlib._match_form(r) for k, r in special if k == "file"}
+    # Every path rule, whether it reaches an open folder or not: the guard matches them all, so a
+    # pattern the deny lists leave to `./` costs nothing here.
+    pats = {kitlib._glob_regex(s).pattern for p in policy.paths for s in kitlib.path_rule_spellings(p)}
+    pats |= {kitlib._glob_regex(kitlib._match_form(r)).pattern for k, r in special if k == "path"}
+    # --allow-git opens .git to the read tools only: a hook written into .git/hooks would run outside
+    # the sandbox at the next git command. Read-only whether or not .git is also declared open.
+    opened = set(opens) | ({".git"} if allow_git else set())
+    plan.guard = {"open": sorted(opened), "read_only": [".git"], "folders": sorted(folders),
+                  "files": sorted(files), "patterns": sorted(pats)}
+    plan.hook = guard_entry(plan.guard)
     return plan
 
 
@@ -382,6 +652,88 @@ def _merge_list(current: list[str], owned: set[str], wanted: list[str]) -> tuple
     return kept + added, now_owned, added, removed
 
 
+ALLOW_KEY = "sandbox.filesystem.allowRead"
+DENY_WRITE_KEY = "sandbox.filesystem.denyWrite"
+HOOKS_KEY = "hooks.PreToolUse"
+# Settings keys the kit records as created when it adds them, so that --remove and a switch back to
+# the deny list take out a key the kit made and keep one that was there before, empty or not.
+CREATED_KEYS = (ALLOW_KEY, "hooks", HOOKS_KEY)
+GUARD_LABEL = f"{HOOKS_KEY}: the open-folder guard"
+
+
+def _owned_hooks(manifest: Any) -> list[dict] | None:
+    if not isinstance(manifest, dict):
+        return None
+    value = manifest.get(HOOKS_KEY, [])
+    if not isinstance(value, list) or not all(isinstance(x, dict) for x in value):
+        return None
+    return value
+
+
+def _created(manifest: Any) -> set[str]:
+    value = manifest.get("created") if isinstance(manifest, dict) else None
+    return {x for x in value if x in CREATED_KEYS} if isinstance(value, list) else set()
+
+
+def _has(entries: list, entry: Any) -> bool:
+    return any(same_json(e, entry) for e in entries)
+
+
+def _hooks_list(settings: dict, where: str) -> list:
+    """`hooks.PreToolUse` as it is ([] when absent); refused when `hooks` or the list has the wrong type."""
+    hooks = settings.get("hooks")
+    if hooks is None:
+        return []
+    if not isinstance(hooks, dict):
+        raise AgentSettingsError(f"{where}: `hooks` must be an object — fix it by hand first", "`hooks` has the wrong type")
+    pre = hooks.get("PreToolUse")
+    if pre is None:
+        return []
+    if not isinstance(pre, list):
+        raise AgentSettingsError(f"{where}: `{HOOKS_KEY}` must be a list — fix it by hand first",
+                                 f"`{HOOKS_KEY}` has the wrong type")
+    return pre
+
+
+def _place(settings: dict, path: tuple[str, ...], value: list, created: set[str], prefix: str = "") -> set[str]:
+    """Put `value` at `path` (two keys below `settings`, whose own key path is `prefix`), creating
+    what is missing, or take an emptied list out where the kit created it. Returns which of
+    CREATED_KEYS the kit has created and still stand."""
+    parent_key, leaf = path
+    parent_label = prefix + parent_key
+    label = f"{parent_label}.{leaf}"
+    parent = settings.get(parent_key)
+    now = set(created)
+    if value:
+        if not isinstance(parent, dict):
+            parent = settings[parent_key] = {}
+            now.add(parent_label)
+        if leaf not in parent:
+            now.add(label)
+        parent[leaf] = value
+        return now & set(CREATED_KEYS)
+    if isinstance(parent, dict) and leaf in parent:
+        if label in created:
+            del parent[leaf]
+        else:
+            parent[leaf] = value
+    now.discard(label)
+    if isinstance(parent, dict) and not parent and parent_label in created:
+        del settings[parent_key]
+    if parent_key not in settings:
+        now.discard(parent_label)
+    return now & set(CREATED_KEYS)
+
+
+def _merge_hooks(current: list, owned: list[dict], wanted: list[dict]) -> tuple[list, list, list[str], list[str]]:
+    """(new list, entries now owned, added, removed) for `hooks.PreToolUse`, matched by exact content."""
+    stale = [e for e in current if _has(owned, e) and not _has(wanted, e)]
+    kept = [e for e in current if not (_has(owned, e) and not _has(wanted, e))]
+    added = [w for w in wanted if not _has(kept, w)]
+    now_owned = [w for w in wanted if _has(owned, w) or not _has(current, w)]
+    return kept + added, now_owned, [GUARD_LABEL] * len(added), [GUARD_LABEL] * len(stale)
+
+
 def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
     """The settings.json and manifest `--apply` would write, from what is there now. Pure."""
     warnings: list[str] = []
@@ -397,14 +749,28 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
                                      f"`{'.'.join(path)}` has the wrong type")
     current_deny = _list_at(existing, ("permissions", "deny"), SETTINGS_REL)
     current_read = _list_at(existing, ("sandbox", "filesystem", "denyRead"), SETTINGS_REL)
+    current_allow = _list_at(existing, ("sandbox", "filesystem", "allowRead"), SETTINGS_REL)
+    current_write = _list_at(existing, ("sandbox", "filesystem", "denyWrite"), SETTINGS_REL)
     owned_deny = _owned(manifest, "permissions.deny")
     owned_read = _owned(manifest, "sandbox.filesystem.denyRead")
-    if manifest is not None and (owned_deny is None or owned_read is None):
+    owned_allow = _owned(manifest, ALLOW_KEY)
+    owned_write = _owned(manifest, DENY_WRITE_KEY)
+    owned_hooks = _owned_hooks(manifest)
+    created = _created(manifest)
+    if manifest is not None and None in (owned_deny, owned_read, owned_allow, owned_write, owned_hooks):
         warnings.append(f"{MANIFEST_REL} is not a manifest this kit wrote; treating every existing entry as yours "
                         "(entries the kit added before stay until you remove them)")
-        owned_deny = owned_read = None
+        owned_deny = owned_read = owned_allow = owned_write = None
+        owned_hooks = None
+        created = set()
+    wanted_hooks = [plan.hook] if plan.hook is not None else []
+    touch_hooks = bool(wanted_hooks or owned_hooks or created & {"hooks", HOOKS_KEY})
+    current_pre = _hooks_list(existing, SETTINGS_REL) if touch_hooks else []
     deny, own_deny, add_d, rm_d = _merge_list(current_deny, owned_deny or set(), plan.deny)
     read, own_read, add_r, rm_r = _merge_list(current_read, owned_read or set(), plan.deny_read)
+    allow, own_allow, add_a, rm_a = _merge_list(current_allow, owned_allow or set(), plan.allow_read)
+    deny_w, own_write, add_w, rm_w = _merge_list(current_write, owned_write or set(), plan.deny_write)
+    pre, own_hooks, add_h, rm_h = _merge_hooks(current_pre, owned_hooks or [], wanted_hooks)
     settings = copy.deepcopy(existing)
     settings.setdefault("permissions", {})["deny"] = deny
     sandbox = settings.setdefault("sandbox", {})
@@ -418,11 +784,23 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
             overrides.append(f"sandbox.{key}: {json.dumps(sandbox[key])} -> {json.dumps(value)}")
         sandbox[key] = value
     sandbox.setdefault("filesystem", {})["denyRead"] = read
-    new_manifest = {"version": 1, "generated_by": GENERATOR, "allow_git": plan.allow_git,
+    if deny_w or "denyWrite" in sandbox["filesystem"]:
+        sandbox["filesystem"]["denyWrite"] = deny_w
+    now_created = {k for k in _place(sandbox, ("filesystem", "allowRead"), allow, created, "sandbox.") if k == ALLOW_KEY}
+    if touch_hooks:
+        now_created |= {k for k in _place(settings, ("hooks", "PreToolUse"), pre, created) if k != ALLOW_KEY}
+    new_manifest = {"version": 1, "generated_by": GENERATOR, "mode": plan.mode, "allow_git": plan.allow_git,
                     "permissions.deny": own_deny, "sandbox.filesystem.denyRead": own_read,
-                    "sandbox.prior": prior, "sandbox.added": added_keys}
+                    DENY_WRITE_KEY: own_write, "sandbox.prior": prior, "sandbox.added": added_keys}
+    if own_allow:
+        new_manifest[ALLOW_KEY] = own_allow
+    if own_hooks:
+        new_manifest[HOOKS_KEY] = own_hooks
+    if now_created:
+        new_manifest["created"] = sorted(now_created)
     changed = bool(flags_set) or not same_json(settings, existing) or not same_json(new_manifest, manifest)
-    return Merge(settings, new_manifest, add_d + add_r, rm_d + rm_r, flags_set, overrides, warnings, changed)
+    return Merge(settings, new_manifest, add_d + add_r + add_a + add_w + add_h, rm_d + rm_r + rm_a + rm_w + rm_h, flags_set,
+                 overrides, warnings, changed)
 
 
 def _sandbox_record(sandbox: dict, manifest: Any) -> tuple[dict[str, Any], list[str]]:
@@ -526,7 +904,8 @@ class State:
     plan: Plan
     merge: Merge
     raw_settings: str | None
-    local_flags: list[str]
+    local_flags: list[str]       # about settings.json as it is on disk (doctor, --check)
+    after_flags: list[str]       # about what --apply would leave: what its own write does not fix
 
 
 def recorded_allow_git(manifest: Any) -> bool:
@@ -549,8 +928,13 @@ def claude_code_state(root: Path, allow_git: bool | None = None) -> State:
         plan.notes.append("the last --apply used --allow-git; this run denies `.git` again (pass --allow-git to keep it)")
     existing, raw = _read_json(root / SETTINGS_REL, SETTINGS_REL)
     merge = merge_settings(existing, manifest, plan)
-    local = local_override_flags(root, plan, merge.settings)
-    return State(plan, merge, raw, local)
+    if isinstance(manifest, dict) and DENY_WRITE_KEY not in manifest and set(plan.deny_write) & set(merge.added):
+        plan.notes.append(f"this kit version write-protects {kitlib.CONFIG_REL} and {MANIFEST_DIR}/ against the agent's "
+                          "shell and file tools (sandbox denyWrite and Edit deny rules), so the agent cannot widen the "
+                          "policy the bridge reads; the new entries are added once")
+    local = local_override_flags(root, plan, merge.settings, existing)
+    after = local_override_flags(root, plan, merge.settings, merge.settings)
+    return State(plan, merge, raw, local, after)
 
 
 def diff_text(raw: str | None, settings: dict[str, Any] | None) -> str:
@@ -638,7 +1022,10 @@ def removal(existing: Any, manifest: Any) -> Removal:
     cannot say what the kit owns."""
     owned_deny = _owned(manifest, "permissions.deny")
     owned_read = _owned(manifest, "sandbox.filesystem.denyRead")
-    if not isinstance(manifest, dict) or owned_deny is None or owned_read is None:
+    owned_allow = _owned(manifest, ALLOW_KEY)
+    owned_write = _owned(manifest, DENY_WRITE_KEY)
+    owned_hooks = _owned_hooks(manifest)
+    if not isinstance(manifest, dict) or None in (owned_deny, owned_read, owned_allow, owned_write, owned_hooks):
         raise AgentSettingsError(f"{MANIFEST_REL} is not a manifest this kit wrote, so which entries are the kit's "
                                  "cannot be told; remove them by hand, then delete the manifest")
     if existing is None:
@@ -650,6 +1037,18 @@ def removal(existing: Any, manifest: Any) -> Removal:
     removed: list[str] = []
     _drop_owned(settings, ("permissions", "deny"), owned_deny, removed)
     _drop_owned(settings, ("sandbox", "filesystem", "denyRead"), owned_read, removed)
+    _drop_owned(settings, ("sandbox", "filesystem", "denyWrite"), owned_write, removed)
+    created = _created(manifest)
+    allow = _list_at(settings, ("sandbox", "filesystem", "allowRead"), SETTINGS_REL)
+    if allow:
+        removed += [e for e in allow if e in owned_allow]
+        _place(settings["sandbox"], ("filesystem", "allowRead"), [e for e in allow if e not in owned_allow],
+               created, "sandbox.")
+    if owned_hooks or created & {"hooks", HOOKS_KEY}:
+        pre = _hooks_list(settings, SETTINGS_REL)
+        removed += [GUARD_LABEL for e in pre if _has(owned_hooks, e)]
+        if "hooks" in settings:
+            _place(settings, ("hooks", "PreToolUse"), [e for e in pre if not _has(owned_hooks, e)], created)
     prior = manifest.get("sandbox.prior") if isinstance(manifest.get("sandbox.prior"), dict) else {}
     added = manifest.get("sandbox.added") if isinstance(manifest.get("sandbox.added"), list) else []
     restored: list[str] = []
@@ -775,9 +1174,11 @@ def _reopens(root: Path, allow: str, denied: list[str]) -> bool:
     return False
 
 
-def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any]) -> list[str]:
+def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any], current: Any = None) -> list[str]:
     """What weakens the generated settings from elsewhere: the local settings file, or an `allowRead`
-    entry that re-opens a denied path. Short, and naming no vault path, so doctor can print them."""
+    entry that re-opens a denied path; in allow-open mode also a guard that is missing or altered in
+    `current` (settings.json as it is on disk), and `disableAllHooks`. Short, and naming no vault
+    path, so doctor can print them."""
     root = Path(root)
     flags: list[str] = []
     allow: list[str] = []
@@ -799,7 +1200,9 @@ def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any]) -> li
         fs = sandbox.get("filesystem")
         if isinstance(fs, dict) and isinstance(fs.get("allowRead"), list):
             allow += [x for x in fs["allowRead"] if isinstance(x, str)]
-    reopening = sum(1 for a in allow if _reopens(root, a, plan.deny_read))
+    # The kit's own allowRead entries re-open the open folders under `./` by design.
+    own_allow = set(plan.allow_read)
+    reopening = sum(1 for a in allow if a not in own_allow and _reopens(root, a, plan.deny_read))
     if reopening:
         flags.append(f"{reopening} allowRead entr{'y' if reopening == 1 else 'ies'} re-open denied paths")
     # A `Read(!…)` deny is a gitignore negation: it carves out of the rules before it in the same
@@ -810,6 +1213,38 @@ def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any]) -> li
     negations = 0 if first is None else sum(1 for e in deny[first:] if e.replace(" ", "").startswith("Read(!"))
     if negations:
         flags.append(f"{negations} Read(!…) negation(s) after the kit's rules in settings.json")
+    if plan.hook is not None:
+        flags += _guard_flags(plan, current, local)
+    return flags
+
+
+# What a flag about settings.json as it is becomes in a dry run, when --apply's own write fixes it.
+WILL_FIX = {"open-folder guard missing": "the open-folder guard will be added",
+            "open-folder guard altered": "the open-folder guard will be replaced"}
+
+
+def will_fix(flag: str) -> str:
+    return WILL_FIX.get(flag, f"{flag}: --apply fixes it")
+
+
+def _guard_flags(plan: Plan, current: Any, local: Any) -> list[str]:
+    """Allow-open: the guard as settings.json holds it, and the switch that turns every hook off."""
+    flags: list[str] = []
+    hooks = current.get("hooks") if isinstance(current, dict) else None
+    pre = hooks.get("PreToolUse") if isinstance(hooks, dict) else None
+    pre = pre if isinstance(pre, list) else []
+    guards = [e for e in pre if is_guard(e)]
+    if not guards:
+        flags.append("open-folder guard missing")
+    elif any(not same_json(e, plan.hook) for e in guards):
+        # Also when a correct guard stands beside it: the altered one is no longer the kit's to remove.
+        flags.append("open-folder guard altered")
+    if any(isinstance(h, dict) and GUARD_MARKER in str(h.get("command")) and h.get("onFailure") != "block"
+           for e in guards for h in e["hooks"]):
+        flags.append("open-folder guard without onFailure: block")
+    for source, name in ((current, "settings.json"), (local, "settings.local.json")):
+        if isinstance(source, dict) and "disableAllHooks" in source and source["disableAllHooks"] is not False:
+            flags.append(f"{name} sets disableAllHooks, which switches the guard off")
     return flags
 
 
