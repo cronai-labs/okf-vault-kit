@@ -216,14 +216,17 @@ def cmd_doctor(args) -> int:
 
 
 # Paths that stand for "would `git add .` commit this?". They need not exist: the point is to warn
-# before the first commit. The plugin id is made up, so a user who re-includes one real plugin
-# (`!.obsidian/plugins/<id>/data.json`) is not warned about that choice.
+# before the first commit. The plugin id is made up, and no real plugin is probed: a real one that
+# is not ignored is one the user re-included (`!.obsidian/plugins/<id>/data.json`), which
+# docs/vault-guide.md recommends, so it is not warned about.
 _GIT_PROBES = {
     ".kit/": (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/probe.json"),
     "plugin settings": (".obsidian/plugins/okf-kit-probe/data.json",),
 }
-# No glob in the fix: the report's redactor reads `*/data.json` as an absolute path and cuts it.
-_GIT_FIX = "`git rm -r --cached --ignore-unmatch .kit` and `git rm --cached` on each tracked plugin data.json"
+# The fix picks files by the ignore rules, not by folder, so it never untracks a file the user
+# re-included (`!.kit/config.yml`, one plugin's data.json). No glob in it either: the report's
+# redactor reads `*/data.json` as an absolute path and cuts it.
+_GIT_FIX = "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists"
 
 
 def _git(git: str, vault: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess | None:
@@ -248,22 +251,31 @@ def _vault_git_row(vault: Path) -> str | None:
     if inside is None or inside.returncode != 0 or inside.stdout.strip() != "true":
         return None
     tracked = _git(git, vault, "ls-files", "-z", "--", ".kit", ":(glob).obsidian/plugins/*/data.json")
-    # A plugin the user already has is probed by its own path as well as by the made-up one.
-    existing = [p.relative_to(vault).as_posix() for p in sorted((vault / ".obsidian" / "plugins").glob("*/data.json"))]
-    probes = [*(p for group in _GIT_PROBES.values() for p in group), *existing]
-    # --no-index: answer from the ignore rules alone, so a tracked file still says whether a rule covers it.
-    ignored = _git(git, vault, "check-ignore", "--no-index", "--stdin", "-z", stdin="\0".join(probes) + "\0")
-    if tracked is None or tracked.returncode != 0 or ignored is None or ignored.returncode not in (0, 1):
+    if tracked is None or tracked.returncode != 0:
         return "cannot check: git did not answer"
-    n_tracked = len([p for p in tracked.stdout.split("\0") if p])
-    hit = {p for p in ignored.stdout.split("\0") if p}
+    tracked_paths = [p for p in tracked.stdout.split("\0") if p]
+    probes = [p for group in _GIT_PROBES.values() for p in group]
+    # --no-index: answer from the ignore rules alone, so a tracked file still says whether a rule
+    # covers it. -v -n: one record per path, naming the deciding pattern (empty when none matches),
+    # so a re-included path (`!...`) is told apart from one no rule covers.
+    verdict = _git(git, vault, "check-ignore", "--no-index", "-v", "-n", "--stdin", "-z",
+                   stdin="".join(f"{p}\0" for p in (*probes, *tracked_paths)))
+    if verdict is None or verdict.returncode not in (0, 1):
+        return "cannot check: git did not answer"
+    fields = verdict.stdout.split("\0")
+    # Records are source, line, pattern, path; a path given twice keeps its one answer.
+    pattern = {fields[i + 3]: fields[i + 2] for i in range(0, len(fields) - 3, 4)}
+    if any(p not in pattern for p in (*probes, *tracked_paths)):
+        return "cannot check: git did not answer"
+    hit = {p for p, pat in pattern.items() if pat and not pat.startswith("!")}
     exposed = [name for name, group in _GIT_PROBES.items() if any(p not in hit for p in group)]
-    if "plugin settings" not in exposed and any(p not in hit for p in existing):
-        exposed.append("plugin settings")
+    # Tracked and re-included is the user's choice; tracked and ignored, or with no rule, is the leak.
+    n_tracked = len([p for p in tracked_paths if not pattern[p].startswith("!")])
     parts = []
     if n_tracked:
         parts.append(f"WARNING: {n_tracked} file(s) under .kit/ or plugin data.json already tracked — "
-                     f"run {_GIT_FIX} in the vault and commit; if that history was pushed, rewrite it "
+                     + ("add the lines `kit.py init` writes to .gitignore, then " if exposed else "")
+                     + f"run {_GIT_FIX} in the vault and commit; if that history was pushed, rewrite it "
                      "and rotate any key it holds")
     if exposed:
         parts.append(f"warning: not ignored: {', '.join(exposed)} — `git add .` would commit them; "

@@ -1047,7 +1047,8 @@ class DoctorVaultGitRow(unittest.TestCase):
         report = self.tmp / "doctor.txt"
         row = self.row(self.doctor("--report", str(report)))
         self.assertIn("2 file(s)", row)
-        self.assertIn("git rm -r --cached", row)
+        self.assertIn("git rm --cached", row)
+        self.assertIn("git ls-files -ci --exclude-standard", row, "the fix picks files by the rules, not by folder")
         self.assertIn("rotate", row, "a pushed key is in the remote's history; removing it is not enough")
         text = report.read_text(encoding="utf-8")
         import kit
@@ -1080,6 +1081,85 @@ class DoctorVaultGitRow(unittest.TestCase):
         empty.mkdir()
         out = self.doctor(env=git_env(PATH=str(empty)))
         self.assertEqual(self.row(out), "")
+
+    # A vault made by `init`, under git, with `lines` added to its .gitignore and `files` written.
+    def init_vault(self, lines: tuple[str, ...] = (), files: tuple[str, ...] = ()):
+        shutil.rmtree(self.vault)
+        self.assertEqual(run("init", "--target", str(self.vault), "--no-qmd").returncode, 0)
+        self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+        if lines:
+            with (self.vault / ".gitignore").open("a", encoding="utf-8", newline="\n") as fh:
+                fh.write("".join(f"{ln}\n" for ln in lines))
+        for rel in files:
+            p = self.vault / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("{}", encoding="utf-8")
+
+    LINTER = ".obsidian/plugins/obsidian-linter/data.json"
+
+    def test_a_re_included_plugin_is_not_a_warning(self):
+        """docs/vault-guide.md recommends `!.obsidian/plugins/<id>/data.json`; doctor warned about it."""
+        self.init_vault(lines=(f"!{self.LINTER}",), files=(self.LINTER,))
+        row = self.row(self.doctor())
+        self.assertIn("ok", row)
+        self.assertNotIn("warning", row.lower())
+
+    def test_a_committed_re_included_plugin_is_not_counted(self):
+        self.init_vault(lines=(f"!{self.LINTER}",), files=(self.LINTER,))
+        self.assertEqual(git_in(self.vault, "add", self.LINTER).returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("ok", row)
+        self.assertNotIn("warning", row.lower())
+
+    def test_kit_config_kept_in_git_is_not_counted(self):
+        """The issue's alternative, `.kit/*` with `!.kit/config.yml`, keeps the floors in clones.
+        Doctor must not then tell the user to untrack them."""
+        self.init_vault()
+        gi = self.vault / ".gitignore"
+        gi.write_text(gi.read_text(encoding="utf-8").replace(".kit/\n", ".kit/*\n!.kit/config.yml\n"),
+                      encoding="utf-8", newline="\n")
+        self.assertEqual(git_in(self.vault, "add", ".kit/config.yml").returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("ok", row)
+        self.assertNotIn("warning", row.lower())
+
+    def test_only_files_the_rules_cover_are_counted_and_the_fix_lists_just_those(self):
+        hidden = ".obsidian/plugins/hidden-plugin/data.json"
+        self.init_vault(lines=(f"!{self.LINTER}",), files=(self.LINTER, hidden))
+        self.assertEqual(git_in(self.vault, "add", "-f", self.LINTER, hidden).returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("WARNING: 1 file(s)", row)
+        self.assertNotIn("not ignored", row)
+        import kit
+        self.assertIn(kit._GIT_FIX, row)
+        # The fix names its files by the rules, so it leaves the re-included plugin tracked.
+        listed = git_in(self.vault, "ls-files", "-ci", "--exclude-standard")
+        self.assertEqual(listed.stdout.split(), [hidden])
+
+    def test_a_tracked_file_under_an_ignore_rule_is_counted_not_reported_unignored(self):
+        """`git check-ignore` without --no-index answers "not ignored" for any tracked path."""
+        self.init_vault(files=(".kit/graph.json", ".obsidian/plugins/hidden-plugin/data.json"))
+        self.assertEqual(git_in(self.vault, "add", "-f", ".kit/graph.json",
+                                ".obsidian/plugins/hidden-plugin/data.json").returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("WARNING: 2 file(s)", row)
+        self.assertNotIn("not ignored", row)
+
+    def test_git_that_does_not_answer_is_said_so(self):
+        import kit
+        real = kit._git
+        fatal = subprocess.CompletedProcess([], 128, "", "fatal")
+        # Each git call fails on its own, the others answer for real; then git that prints nothing.
+        for verb, broken in (("ls-files", fatal), ("ls-files", None), ("check-ignore", fatal),
+                             ("check-ignore", None),
+                             ("check-ignore", subprocess.CompletedProcess([], 0, "", ""))):
+            def git(g, v, *args, stdin=None, verb=verb, broken=broken):
+                return broken if args[0] == verb else real(g, v, *args, stdin=stdin)
+
+            with self.subTest(verb=verb, broken=broken), mock.patch.object(kit, "_git", side_effect=git), \
+                    mock.patch.dict(os.environ, git_env(GIT_CEILING_DIRECTORIES=str(self.tmp))):
+                self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+                self.assertEqual(kit._vault_git_row(self.vault), "cannot check: git did not answer")
 
 
 class DoctorKeepsDiagnosing(unittest.TestCase):
