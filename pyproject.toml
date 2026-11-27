@@ -10,7 +10,7 @@ dependencies = ["pyyaml>=6.0"]
 # flat layout on purpose: every module is importable from the repo root, and kit.py / the bridge
 # carry PEP 723 headers so they run standalone with `uv run`. Listed explicitly because setuptools
 # cannot guess a flat layout with several top-level modules.
-py-modules = ["kit", "kitlib", "kitgraph", "kitrecon", "kitproviders", "kitagent"]
+py-modules = ["kit", "kitlib", "kitgraph", "kitrecon", "kitproviders", "kitagent", "kitredact"]
 
 [tool.setuptools.dynamic]
 # Read at build time for the metadata only: a flat layout has no package directory to install the

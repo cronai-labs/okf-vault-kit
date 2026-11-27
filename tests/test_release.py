@@ -540,6 +540,44 @@ class WheelLane(unittest.TestCase):
             module = self.load_without_version_file()
         self.assertEqual(module.KIT_VERSION, "0+unknown")
 
+    @staticmethod
+    def kit_modules() -> set[str]:
+        """Every top-level module of this repository that `import kit` loads, kit included."""
+        import ast
+        local = {p.stem for p in ROOT.glob("*.py")}
+        seen, todo = set(), ["kit"]
+        while todo:
+            name = todo.pop()
+            if name in seen:
+                continue
+            seen.add(name)
+            tree = ast.parse((ROOT / f"{name}.py").read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                names = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                         else [node.module] if isinstance(node, ast.ImportFrom) and node.module and not node.level else [])
+                todo += [n.split(".")[0] for n in names if n.split(".")[0] in local]
+        return seen
+
+    def test_every_module_kit_imports_is_in_the_wheel(self):
+        """`kitredact` was missing from py-modules, so an installed wheel could not `import kit` (#114)."""
+        import tomllib
+        listed = set(tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["setuptools"]["py-modules"])
+        needed = self.kit_modules()
+        self.assertIn("kitredact", needed, "the import walk has gone stale")
+        self.assertEqual(needed - listed, set(), "pyproject.toml [tool.setuptools] py-modules")
+
+    def test_every_module_is_byte_compiled_and_scanned(self):
+        """`make lint` byte-compiles on the floor Python and CI runs bandit; both name the modules one by one."""
+        for name in sorted(self.kit_modules()):
+            with self.subTest(module=name):
+                self.assertIn(f" {name}.py", make_target("lint"), "Makefile `lint` compileall line")
+        if not HAVE_WORKFLOW:
+            self.skipTest("no .github/ — running from the release archive, which strips it")
+        bandit = next(l for l in WORKFLOW.read_text(encoding="utf-8").splitlines() if "bandit" in l and " -r " in l)
+        for name in sorted(self.kit_modules()):
+            with self.subTest(module=name):
+                self.assertIn(f" {name}.py", bandit, "ci.yml bandit step")
+
     def test_pyproject_still_reads_the_version_file(self):
         self.assertIn('version = { file = "VERSION" }',
                       (ROOT / "pyproject.toml").read_text(encoding="utf-8"))
