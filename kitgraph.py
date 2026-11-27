@@ -191,7 +191,7 @@ ONTOLOGY_SECTIONS = ("version", "base_iri", "context_file", "classes", "edges", 
 EDGE_KEYS = ("inverse", "transitive")
 CLASS_KEYS = ("props", "extends")
 # What `yaml.safe_load` raises besides YAMLError, each seen from a one-line ontology value.
-_CONSTRUCT_ERRORS = (ValueError, LookupError, AttributeError)
+_CONSTRUCT_ERRORS = kitlib.YAML_CONSTRUCT_ERRORS
 
 
 def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] | None, list[str]]:

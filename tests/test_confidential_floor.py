@@ -343,6 +343,8 @@ BROKEN = {
     "open folder absolute": 'confidentiality:\n  open_folders: ["/etc"]\n',
     "open folder escapes": 'confidentiality:\n  open_folders: ["04-areas/../../x"]\n',
     "open folder not a list": "confidentiality:\n  open_folders: 04-areas\n",
+    # Values PyYAML scans but cannot construct, raised outside yaml.YAMLError: ValueError, KeyError,
+    # IndexError, AttributeError. Anywhere in the file, the block cannot be known either.
     "open folder is a confidential folder": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
                                              '  open_folders: ["05-People"]\n'),
     "open folder under a confidential folder": ('confidentiality:\n  confidential_folders: ["05-people"]\n'
@@ -384,6 +386,58 @@ class HubRowsFollowTheFloor(unittest.TestCase):
         self.assertEqual([c.file for c in changes if c.code == "confidentiality_config"], [kitlib.CONFIG_REL],
                          "the cause is named once, where it is")
         self.assertIn(self.ROW, (self.vault / kitrecon.PROJECT_HUB).read_text(encoding="utf-8"))
+
+
+# What `yaml.safe_load` raises besides YAMLError, one case per exception class seen.
+UNCONSTRUCTABLE = {
+    "impossible date": 'updated: 2026-02-30\nconfidentiality:\n  confidential_folders: ["05-people"]\n',
+    "bool tag": 'confidentiality:\n  confidential_folders: ["05-people"]\nflag: !!bool maybe\n',
+    "empty int tag": 'confidentiality:\n  confidential_folders: ["05-people"]\ncount: !!int ""\n',
+    "timestamp tag": 'confidentiality:\n  confidential_folders: ["05-people"]\nwhen: !!timestamp 20\n',
+}
+BROKEN.update(UNCONSTRUCTABLE)
+
+
+class AnUnconstructableValueFailsClosed(unittest.TestCase):
+    """A value PyYAML cannot construct used to escape `_load_policy` as a bare ValueError, KeyError,
+    IndexError or AttributeError: every reader that asked the predicate died with a traceback."""
+
+    def setUp(self):
+        self.vault = temp_vault()
+        self.addCleanup(shutil.rmtree, self.vault.parent, True)
+
+    def test_the_policy_raises_policy_config_error_naming_the_file(self):
+        for name, text in UNCONSTRUCTABLE.items():
+            with self.subTest(name):
+                set_config(self.vault, text + "#" * len(name))   # a new size each time: the cache keys on it
+                with self.assertRaisesRegex(kitlib.PolicyConfigError, r"^\.kit/config\.yml: not valid YAML"):
+                    kitlib.confidentiality_policy(self.vault)
+                self.assertIsNone(kitlib.confidentiality(self.vault, "07-knowledge/hybrid-search.md"))
+
+    def test_the_bridge_and_the_index_hide_everything(self):
+        for name, text in UNCONSTRUCTABLE.items():
+            with self.subTest(name):
+                set_config(self.vault, text + "#" * len(name))
+                g = guarded(self.vault)
+                self.assertEqual(g.list_files(), [])
+                self.assertEqual(g.search("hybrid search"), [])
+                with self.assertRaises(bp.PolicyError):
+                    g.read_note("07-knowledge/hybrid-search.md")
+                index = kitlib.build_index(self.vault)
+                self.assertNotIn("](07-knowledge/", index)
+                self.assertNotRegex(index, r"(?m)^\* \[")
+                r = run("index", "--vault", str(self.vault))
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(r.returncode, 0, r.stderr)
+                self.assertNotIn("](07-knowledge/", (self.vault / "index.md").read_text(encoding="utf-8"))
+
+    def test_validate_reports_it(self):
+        set_config(self.vault, UNCONSTRUCTABLE["impossible date"])
+        r = run("validate", "--vault", str(self.vault))
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertRegex(r.stdout, r"(?m)^ERROR  \.kit/config\.yml: not valid YAML \(a value cannot be read: "
+                                   r"ValueError: .+\) — until this is fixed every reader treats every note as "
+                                   r"confidential$")
 
 
 class ABrokenConfigHidesEverything(unittest.TestCase):
