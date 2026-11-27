@@ -5,6 +5,8 @@ import sys
 import unittest
 import urllib.parse
 
+import yaml
+
 from tests.helpers import DOCS, ROOT, kitlib
 
 LINK = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)\)")
@@ -114,6 +116,26 @@ class Docs(unittest.TestCase):
         tools = (DOCS / "tools.md").read_text(encoding="utf-8")
         for name in names:
             self.assertIn(f"`{name}`", tools, f"docs/tools.md omits the bridge tool {name}")
+
+    def test_decision_records_carry_parseable_frontmatter(self):
+        """A record whose frontmatter does not parse drops out of the `stale_after` sweep. (#79)
+
+        The records use the OKF frontmatter of the knowledge bundle, so one search finds every claim
+        due for a re-check. markdownlint does not parse frontmatter, so nothing else would notice.
+        """
+        records = sorted((DOCS / "decisions").glob("*.md"))
+        self.assertTrue(records, "no decision records found; this guard has gone stale")
+        for path in records:
+            with self.subTest(record=path.name):
+                m = re.match(r"---\r?\n(.*?)\r?\n---\r?\n", path.read_text(encoding="utf-8"), re.S)
+                self.assertIsNotNone(m, f"{path.name} has no frontmatter block")
+                try:
+                    meta = yaml.safe_load(m.group(1))
+                except yaml.YAMLError as e:
+                    self.fail(f"{path.name}: the frontmatter is not valid YAML: {e}")
+                self.assertIsInstance(meta, dict, f"{path.name}: the frontmatter is not a mapping")
+                for key in ("type", "title", "description", "verified_on", "stale_after"):
+                    self.assertTrue(meta.get(key), f"{path.name}: `{key}` is missing or empty")
 
 
 class Versioning(unittest.TestCase):
