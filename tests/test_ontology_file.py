@@ -176,7 +176,8 @@ class AliasesOntoSensitivityAreRefused(OntologyFileCase):
     The graph read the normalised props, so `sensitivity: hidden` with a value alias
     `hidden → confidential` hid the note from the graph only; `index.md`, the digest, `todos`,
     `llm ask` and the bridge read the raw line and served it. `validate` now refuses such an
-    alias, and the raw `sensitivity:` line stays the only one any reader judges.
+    alias, the graph ignores it (`TheGraphIgnoresAliasesOntoSensitivity`), and the raw
+    `sensitivity:` line stays the only one any reader judges.
     """
 
     NOTE = "---\ntype: concept\ntitle: Hidden probe\ndescription: d\nsensitivity: hidden\n---\nbody\n"
@@ -253,6 +254,94 @@ class AliasesOntoSensitivityAreRefused(OntologyFileCase):
         node = kitgraph.Node(id="n.md", kind="note", type="concept", title="n", path="n.md",
                              props={"sensitivity": "confidential"})
         self.assertTrue(kitgraph.node_confidential(node, lambda _rel: False))
+
+
+class TheGraphIgnoresAliasesOntoSensitivity(OntologyFileCase):
+    """#121, the owner's decision: the ontology reserves `sensitivity`.
+
+    `validate` refused an alias onto it, but the graph applied it until it was removed, so the
+    graph hid `sensitivity: hidden` (with `hidden → confidential`) and `classification:
+    confidential` (with `classification → sensitivity`) while every other reader, judging the raw
+    `sensitivity:` line through kitlib, served them. The graph now drops such entries, so both
+    judge the same line; `validate` still fails and names each entry.
+    """
+
+    ENTRIES = (("value_aliases:\n", "  sensitivity: { hidden: confidential }\n", "`value_aliases.sensitivity`"),
+               ("property_aliases:\n", "  classification: sensitivity\n", "`property_aliases.classification`"),
+               ("property_aliases:\n", "  Sensitivity: sensitivity\n", "`property_aliases.Sensitivity`"))
+    PROBES = {
+        "07-knowledge/value-probe.md": "sensitivity: hidden\n",
+        "07-knowledge/classification-probe.md": "classification: confidential\n",
+        "07-knowledge/case-probe.md": "Sensitivity: confidential\n",
+    }
+
+    def setUp(self):
+        super().setUp()
+        text = self.shipped
+        for section, entry, _needle in self.ENTRIES:
+            text = text.replace(section, section + entry, 1)
+        self.write(text)
+        for rel, line in self.PROBES.items():
+            self.note(rel, f"---\ntype: concept\ntitle: {rel}\ndescription: d\n{line}---\nbody\n")
+
+    def note(self, rel: str, text: str) -> None:
+        path = self.vault / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def test_the_ontology_drops_the_entries(self):
+        onto = kitgraph.load_ontology(self.vault)
+        self.assertNotIn("sensitivity", onto.value_aliases)
+        self.assertNotIn("classification", onto.property_aliases)
+        self.assertNotIn("Sensitivity", onto.property_aliases)
+        self.assertEqual(onto.property_aliases.get("summary"), "description", "the other aliases still apply")
+
+    def test_the_graph_keeps_the_raw_value_and_serves_what_kitlib_serves(self):
+        g = kitgraph.build_graph(self.vault)
+        self.assertEqual(g.nodes["07-knowledge/value-probe.md"].props.get("sensitivity"), "hidden")
+        self.assertNotIn("sensitivity", g.nodes["07-knowledge/classification-probe.md"].props)
+        self.assertNotIn("sensitivity", g.nodes["07-knowledge/case-probe.md"].props)
+        served = kitgraph.redact_vault(g, self.vault).nodes
+        for rel in self.PROBES:
+            with self.subTest(rel):
+                self.assertFalse(kitgraph.kitlib.is_confidential(self.vault, rel))
+                self.assertIn(rel, served)
+
+    def test_plain_validate_fails_naming_each_entry(self):
+        r = validate(self.vault)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        for _section, _entry, needle in self.ENTRIES:
+            with self.subTest(needle):
+                line = next((ln for ln in r.stdout.splitlines() if needle in ln), "")
+                self.assertIn("reserves `sensitivity`", line, r.stdout)
+                self.assertIn("ignored", line)
+
+    def test_every_node_gets_the_answer_kitlib_gives(self):
+        """Parity over the whole vault, with each way a note can be confidential or not."""
+        config = self.vault / kitgraph.kitlib.CONFIG_REL
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('confidentiality:\n  confidential_folders: ["05-people"]\n', encoding="utf-8")
+        self.note("07-knowledge/marked.md", "---\ntype: concept\ntitle: M\ndescription: d\nsensitivity: confidential\n---\n")
+        self.note("07-knowledge/marked-odd.md",
+                  "---\ntype: concept\ntitle: O\ndescription: d\nsensitivity: ' Confidential '\n---\n")
+        self.note("07-knowledge/broken.md", "---\ntype: [concept\ntitle: B\n---\n")
+        self.note("05-people/floored.md", "---\ntype: person\ntitle: F\ndescription: d\nsensitivity: internal\n---\n")
+        g = kitgraph.build_graph(self.vault)
+        served = kitgraph.redact_vault(g, self.vault).nodes
+        notes = {nid: n for nid, n in g.nodes.items() if n.kind == "note"}
+        decisions = {}
+        for nid, n in notes.items():
+            with self.subTest(nid):
+                by_kitlib = kitgraph.kitlib.is_confidential(self.vault, n.path)
+                self.assertEqual(nid not in served, by_kitlib)
+                self.assertEqual(kitgraph.node_confidential(n, lambda rel: kitgraph.kitlib.is_confidential(self.vault, rel)),
+                                 by_kitlib)
+                decisions[nid] = by_kitlib
+        self.assertTrue({True, False} <= set(decisions.values()), "the fixture must hold both outcomes")
+        for rel in ("07-knowledge/marked.md", "07-knowledge/marked-odd.md", "05-people/floored.md",
+                    "07-knowledge/broken.md"):
+            self.assertTrue(decisions.get(rel), rel)
 
 
 if __name__ == "__main__":

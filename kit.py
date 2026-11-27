@@ -564,14 +564,16 @@ def cmd_validate(args) -> int:
     # bundle can be conformant and still be a mess, and only the first is ours to assert. Our own
     # rules are gated by --strict, which is what `make lint` and CI run. One exception: an alias
     # onto `sensitivity` is a confidentiality misconfiguration, not hygiene, and fails either way
-    # (#121, the owner's decision) — the graph applies it and hides a note every other reader serves.
+    # (#121, the owner's decision) — the ontology reserves `sensitivity`, so every reader ignores the
+    # alias and serves the notes it was meant to hide.
     conformance_failed = bool(okf.errors)
     security_failed = bool(onto_file.refused)
     hygiene_failed = (any(r.errors or r.warnings for r in hygiene if r is not onto_file) or bool(okf.warnings)
                       or len(onto_file.errors) > len(onto_file.refused) or bool(onto_file.warnings))
     if security_failed:
-        print(f"\nerror: the alias onto `sensitivity` in {kitgraph.ONTOLOGY_REL} (above) is a confidentiality "
-              "misconfiguration, not a style rule, so it fails `validate` with or without --strict.")
+        print(f"\nerror: the alias onto `sensitivity` in {kitgraph.ONTOLOGY_REL} (above) is ignored, since the "
+              "ontology reserves `sensitivity`: the notes it was meant to hide are served. That is a "
+              "confidentiality misconfiguration, not a style rule, so it fails `validate` with or without --strict.")
     if hygiene_failed and not args.strict:
         print(f"\nnote: the {'other ' if security_failed else ''}findings above outside `OKF conformance` are "
               "this kit's rules, not the spec's — OKF v0.2 §11 forbids rejecting a bundle for them, so they do "

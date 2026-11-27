@@ -64,7 +64,7 @@ A directory with no markdown files at all gets a warning in the first section th
 `index.md` are both on that list. A bundle can be fully conformant and still be a mess — the kit
 reports the mess either way, and only asserts non-conformance when the spec says it may.
 
-The exception is a `property_aliases` or `value_aliases` entry onto `sensitivity`: the graph would apply it and hide a note that every other reader serves, so it is a confidentiality misconfiguration rather than a style rule, and plain `validate` fails on it too ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)).
+The exception is a `property_aliases` or `value_aliases` entry onto `sensitivity`: the ontology reserves `sensitivity`, so every reader ignores the entry and serves the notes it was meant to hide. That is a confidentiality misconfiguration rather than a style rule, and plain `validate` fails on it too, naming each entry; rename those values to `confidential` in the notes ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)).
 
 Use plain `validate` to answer "is this a valid OKF bundle". Use `--strict` for a repo gate:
 it is what `make lint` and CI run, so nothing in this repository slips past on the distinction.

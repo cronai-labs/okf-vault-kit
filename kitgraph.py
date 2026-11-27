@@ -73,10 +73,14 @@ class Ontology:
         self.context_file: str = context_file if isinstance(context_file, str) else "context.jsonld"
         self.classes: dict[str, dict] = {k: _mapping(v) for k, v in _mapping(self.data.get("classes")).items()}
         self.edges: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("edges")).items() if isinstance(v, dict)}
+        # `sensitivity` is reserved (#121): an alias onto it, or of its values, is dropped here, so
+        # `props["sensitivity"]`, when set, is the note's raw line, the one kitlib's shared predicate
+        # judges. (An alias renaming `sensitivity` away is kept; `node_confidential` then answers
+        # from the file check, which reads the raw line.)
         self.property_aliases: dict[str, str] = {k: v for k, v in _mapping(self.data.get("property_aliases")).items()
-                                                 if isinstance(v, str)}
+                                                 if isinstance(v, str) and not _aliases_onto_sensitivity(k, v)}
         self.value_aliases: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("value_aliases")).items()
-                                               if isinstance(v, dict)}
+                                               if isinstance(v, dict) and not _is_sensitivity(k)}
         self.rules: dict[str, bool] = _mapping(self.data.get("rules"))
         self._props_cache: dict[str, dict[str, PropSpec]] = {}
 
@@ -200,8 +204,8 @@ def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] 
     The one reader `load_ontology` and `validate` share, so the file the graph falls back from is
     the file `validate` names. A missing file is no problem; one we cannot decode or parse, or
     whose top level is not a mapping, is unusable; any other problem leaves the data usable.
-    `Ontology` drops an entry of the wrong shape (a property spec is read as text), but keeps an
-    alias onto `sensitivity` that `validate` refuses: the graph applies it until it is removed.
+    `Ontology` drops an entry of the wrong shape (a property spec is read as text) and an alias
+    onto `sensitivity`, which the ontology reserves and `validate` refuses.
     """
     path = Path(path)
     name = label or path.name
@@ -277,35 +281,50 @@ def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
 
 
 def _sensitivity_refusals(data: dict[str, Any], name: str) -> list[str]:
-    """The aliases onto `sensitivity` the file declares (#121): a security finding, not hygiene."""
+    """The aliases onto `sensitivity` the file declares (#121): a security finding, not hygiene.
+
+    Exactly the entries `Ontology` drops, by the same two predicates, so "refused" and "ignored"
+    cannot name different entries.
+    """
     out: list[str] = []
     for alias, target in _mapping(data.get("property_aliases")).items():
-        if isinstance(target, str) and target.strip().lower() == SENSITIVITY and alias != target:
-            # Only the identity entry is harmless. `Sensitivity: sensitivity` is not: the readers
-            # match the exact key `sensitivity`, so the graph alone would see `Sensitivity:`.
+        if _aliases_onto_sensitivity(alias, target):
             out.append(f"{name}: `property_aliases.{alias}` maps onto `sensitivity` and is refused: {_SENSITIVITY_WHY} "
                        f"Rename `{alias}` to `sensitivity` in the notes and drop the alias.")
     for prop in _mapping(data.get("value_aliases")):
-        if str(prop).strip().lower() == SENSITIVITY:
+        if _is_sensitivity(prop):
             out.append(f"{name}: `value_aliases.{prop}` is refused: {_SENSITIVITY_WHY} "
-                       "Write `sensitivity: confidential` in the notes and drop the alias.")
+                       "Rename each value it maps to `confidential` in the notes, write any other value as you mean "
+                       "it, and drop the alias.")
     return out
 
 
-# #121: an alias could make the graph hide a note the other readers serve. The owner's decision
-# is to refuse it rather than teach every reader the ontology.
+# #121, the owner's decision: `sensitivity` is a reserved property. The ontology may not alias any
+# property onto it nor alias its values; such an entry is ignored by every reader and refused by
+# `validate`, so the graph judges the same raw line as kitlib's shared predicate.
 SENSITIVITY = "sensitivity"
-_SENSITIVITY_WHY = ("every reader judges confidentiality by the note's raw `sensitivity:` line only, so an alias "
-                    "would hide a note from the graph and from nothing else.")
+_SENSITIVITY_WHY = ("the ontology reserves `sensitivity`; this entry is ignored. Every reader, the graph included, "
+                    "judges confidentiality by the note's raw `sensitivity:` line only.")
+
+
+def _is_sensitivity(name: Any) -> bool:
+    return str(name).strip().lower() == SENSITIVITY
+
+
+def _aliases_onto_sensitivity(alias: Any, target: Any) -> bool:
+    # Only the identity entry is harmless. `Sensitivity: sensitivity` is not: the readers match the
+    # exact key `sensitivity`, so applying it would make the graph alone see `Sensitivity:`.
+    return isinstance(target, str) and _is_sensitivity(target) and alias != target
 
 
 @dataclass
 class OntologyFileReport(kitlib.Report):
     """`errors` holds every finding; `refused` repeats the aliases onto `sensitivity` among them.
 
-    Those fail `validate` without `--strict` (#121, the owner's decision): an alias there hides a
-    note from the graph and from no other reader, which is a confidentiality misconfiguration,
-    not a matter of style. The file's other findings are this kit's rules, gated by `--strict`.
+    Those fail `validate` without `--strict` (#121, the owner's decision): the ontology reserves
+    `sensitivity`, so the readers ignore such an entry, and a vault that relied on it to hide notes
+    serves them. That is a confidentiality misconfiguration, not a matter of style. The file's
+    other findings are this kit's rules, gated by `--strict`.
     """
 
     refused: list[str] = field(default_factory=list)
@@ -666,7 +685,7 @@ def fix_property_aliases(vault: Path, onto: Ontology | None = None) -> list[Alia
         touched = next((f"{a} → {c}" for a, c in renames if SENSITIVITY in (a.strip().lower(), c.strip().lower())), "")
         if touched:
             # Every reader judges the raw `sensitivity:` line (#121): renaming it away would make
-            # them serve a confidential note, and renaming onto it is an alias `validate` refuses.
+            # them serve a confidential note. An alias onto it never gets here: `Ontology` drops it.
             fix.refused = f"{touched} touches `sensitivity`, which every reader judges as written; rename it by hand"
             continue
         if note.path.is_symlink():
@@ -1006,9 +1025,9 @@ def node_confidential(node: Node, file_confidential: Callable[[str], bool]) -> b
     """Is this graph node a confidential note? `file_confidential` answers for its vault-relative path.
 
     Actors, sources and virtual nodes carry no note frontmatter. The file check is the rule every
-    reader shares: the raw `sensitivity:` line, folder floors and path rules. `validate` refuses an
-    ontology alias onto `sensitivity` (#121), so the normalised props should never say more than
-    the raw line; checking them first is defence in depth for an ontology nobody validated. The
+    reader shares: the raw `sensitivity:` line, folder floors and path rules. The ontology reserves
+    `sensitivity` and `Ontology` drops any alias onto it (#121), so `props["sensitivity"]` is that
+    raw line and checking it first agrees with the file check; it stays as defence in depth. The
     file check also catches a note whose frontmatter did not parse, whose props are therefore empty.
     """
     if getattr(node, "kind", "") != "note":
