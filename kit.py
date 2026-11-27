@@ -969,35 +969,47 @@ def _lines_referencing(path: Path, targets: set[Path], vault: Path) -> list[int]
     return out
 
 
-def _dead_names(samples: list[kitlib.Note]) -> set[str]:
-    """Every spelling by which a frontmatter property can name a note that is about to go."""
-    names: set[str] = set()
-    for n in samples:
-        fm = n.frontmatter or {}
-        names.add(n.path.stem.lower())
-        for key in ("title", "name"):
-            if isinstance(fm.get(key), str):
-                names.add(fm[key].lower())
-        aliases = fm.get("aliases")
-        if isinstance(aliases, list):
-            names.update(str(a).lower() for a in aliases if str(a).strip())
-    return {re.sub(r"\s*\(example\)\s*$", "", name).strip() for name in names if name.strip()}
+def _names_sample(value: Any, resolver: kitgraph.Resolver, ranges: list[str], from_rel: str, samples: set[str]) -> bool:
+    """Does this reference entry point at a sample note, by a name that can only mean that note?
+
+    A link, a wikilink, the file name or the full title. Not an alias or a first name alone: the
+    sample people are `Alex` and `Sam` by alias, and so may be real colleagues, so `people: [Alex]`
+    is a name the user wrote and stays (#114). Left behind, it is an unresolved reference that
+    `validate` reports; pruned, it was a colleague gone from the note without a word.
+    """
+    if not isinstance(value, str):
+        return False
+    tid, method, _ = resolver.resolve(value, ranges, from_rel)
+    if tid not in samples:
+        return False
+    if method in ("link", "wikilink"):
+        return True
+    node = resolver.nodes[tid]
+    raw = value.strip().lower().removesuffix(".md")
+    return kitgraph._norm(value) == kitgraph._norm(node.title) or raw == Path(node.path).stem.lower()
 
 
-def _frontmatter_repairs(note: kitlib.Note, dead: set[str]) -> dict[str, Any]:
-    """List-valued properties with their dead entries dropped.
+def _frontmatter_repairs(note: kitlib.Note, onto: kitgraph.Ontology, resolver: kitgraph.Resolver,
+                         samples: set[str]) -> dict[str, Any]:
+    """The note's reference lists with the entries that name a sample dropped.
 
     The ontology resolves `people: [Alex Example]` by title, so deleting the note leaves the
-    property pointing at nothing and `validate --strict` red — which is the whole failure this
-    command exists to prevent. Only lists are pruned: a scalar reference cannot be removed
-    without deciding whether the key is required, and none of the shipped sample set has one.
+    property pointing at nothing and `validate --strict` red, which is the whole failure this
+    command exists to prevent. Only the properties the ontology declares `type: ref` for the
+    note's class are touched (through `property_aliases`, so an aliased key counts too): tags and
+    every other list are the user's text, not references (#114). Only lists are pruned: a scalar
+    reference cannot be removed without deciding whether the key is required, and none of the
+    shipped sample set has one.
     """
+    fm = note.frontmatter or {}
+    cls = str(fm.get("type") or "")
+    refs = onto.ref_props(cls if onto.has_class(cls) else "node")
     out: dict[str, Any] = {}
-    for key, value in (note.frontmatter or {}).items():
-        if not isinstance(value, list):
+    for key, value in fm.items():
+        spec = refs.get(onto.canonical_key(key))
+        if spec is None or not isinstance(value, list):
             continue
-        kept = [v for v in value
-                if not (isinstance(v, str) and re.sub(r"\s*\(example\)\s*$", "", v).strip().lower() in dead)]
+        kept = [v for v in value if not _names_sample(v, resolver, spec.range, note.rel, samples)]
         if len(kept) != len(value):
             out[key] = kept
     return out
@@ -1013,7 +1025,9 @@ def cmd_examples(args) -> int:
         return 0
     targets = {n.path.resolve() for n in samples}
 
-    dead = _dead_names(samples)
+    onto = kitgraph.load_ontology(vault)
+    resolver = kitgraph.Resolver(kitgraph.build_graph(vault, onto).nodes, onto)
+    sample_ids = {n.rel for n in samples}
     repairs: dict[Path, list[int]] = {}
     fm_repairs: dict[Path, dict[str, Any]] = {}
     for note in kitlib.load_vault(vault):
@@ -1022,7 +1036,7 @@ def cmd_examples(args) -> int:
         hits = _lines_referencing(note.path, targets, vault)
         if hits:
             repairs[note.path] = hits
-        props = _frontmatter_repairs(note, dead)
+        props = _frontmatter_repairs(note, onto, resolver, sample_ids)
         if props:
             fm_repairs[note.path] = props
 

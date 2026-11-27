@@ -21,8 +21,10 @@ is the boundary, and it is the only thing any tool reads. The `(example)` suffix
 as the *human* rendering of the same fact.
 
 Removing the set is `kit.py examples remove`, which deletes those notes **and repairs what
-referred to them** — body lines carrying a link, frontmatter list entries naming them, and the
-regenerated `index.md`.
+referred to them** — body lines carrying a link, the entries of the ontology's reference lists
+that name them by link, file name or full title, and the regenerated `index.md`. Tags and other
+lists are left alone, and so is an entry that matches a sample only by alias: `Alex` may be a real
+colleague (#114).
 
 ## Why
 
