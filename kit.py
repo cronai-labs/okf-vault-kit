@@ -224,9 +224,12 @@ _GIT_PROBES = {
     "plugin settings": (".obsidian/plugins/okf-kit-probe/data.json",),
 }
 # The fix picks files by the ignore rules, not by folder, so it never untracks a file the user
-# re-included (`!.kit/config.yml`, one plugin's data.json). No glob in it either: the report's
-# redactor reads `*/data.json` as an absolute path and cuts it.
-_GIT_FIX = "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists"
+# re-included (one plugin's data.json). `.kit/config.yml` is named: a vault from before the
+# `.kit/*` rule ignores it, so `ls-files -ci` lists it there, and it holds the floors a clone needs.
+# No glob in it either: the report's redactor reads `*/data.json` as an absolute path and cuts it.
+_GIT_FIX = "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists, except .kit/config.yml"
+# Kept in git whatever rule covers it: the confidentiality floors and open folders (#54).
+_GIT_KEPT = kitproviders.CONFIG_REL.as_posix()
 
 
 def _git(git: str, vault: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess | None:
@@ -270,7 +273,8 @@ def _vault_git_row(vault: Path) -> str | None:
     hit = {p for p, pat in pattern.items() if pat and not pat.startswith("!")}
     exposed = [name for name, group in _GIT_PROBES.items() if any(p not in hit for p in group)]
     # Tracked and re-included is the user's choice; tracked and ignored, or with no rule, is the leak.
-    n_tracked = len([p for p in tracked_paths if not pattern[p].startswith("!")])
+    # The config is neither: it belongs in git, under any rule.
+    n_tracked = len([p for p in tracked_paths if p != _GIT_KEPT and not pattern[p].startswith("!")])
     parts = []
     if n_tracked:
         parts.append(f"WARNING: {n_tracked} file(s) under .kit/ or plugin data.json already tracked — "
@@ -280,7 +284,7 @@ def _vault_git_row(vault: Path) -> str | None:
     if exposed:
         parts.append(f"warning: not ignored: {', '.join(exposed)} — `git add .` would commit them; "
                      "add the lines `kit.py init` writes to .gitignore (docs/vault-guide.md)")
-    return "; ".join(parts) or "ok — .kit/ and plugin settings are ignored"
+    return "; ".join(parts) or "ok — .kit/ state and plugin settings are ignored"
 
 
 # The redactor lives in kitredact so `testkit/` can share it without importing this module or
@@ -328,8 +332,10 @@ TEMPLATE_STATE = (".kit", "workspace*.json", "cache")
 # template file would replace a user's own .gitignore under `init --force`, and the repository's
 # root .gitignore must stay the rule that ignores the checkout's generated paths (tests/test_release.py).
 VAULT_GITIGNORE = """\
-# per-machine kit state: graph, bridge audit log, proposals, config
-.kit/
+# per-machine kit state: graph, bridge audit log, proposals, agent settings
+.kit/*
+# except the kit config: confidential folders, path rules and open folders must reach every clone
+!.kit/config.yml
 # Obsidian window layout: changes with every window, conflicts across machines
 .obsidian/workspace*.json
 # Obsidian cache: rebuilt on each machine
@@ -346,7 +352,8 @@ def _write_vault_gitignore(target: Path) -> None:
         print("kept the existing .gitignore — the lines a vault needs are in docs/vault-guide.md (Sync and safety)")
         return
     gi.write_text(VAULT_GITIGNORE, encoding="utf-8", newline="\n")
-    print("wrote .gitignore — keeps .kit/, Obsidian's workspace and cache, and plugin settings out of git")
+    print("wrote .gitignore — keeps .kit/ state (all but config.yml), Obsidian's workspace and cache, "
+          "and plugin settings out of git")
 
 
 def cmd_init(args) -> int:
