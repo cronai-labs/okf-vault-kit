@@ -398,6 +398,24 @@ class KitCliGraphAndRecon(unittest.TestCase):
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
 
+    def test_minutes_refuses_a_date_that_does_not_exist_as_an_argument_error(self):
+        """`--date 2026-02-30` ended in a ValueError traceback from date.fromisoformat (#114)."""
+        v = temp_vault()
+        try:
+            recap = v.parent / "recap.txt"; recap.write_text("Decision: ship\n", encoding="utf-8")
+            for bad in ("2026-02-30", "tomorrow"):
+                with self.subTest(bad):
+                    r = run("minutes", str(recap), "--title", "Ship sync", "--date", bad, "--vault", str(v),
+                            stdin=subprocess.DEVNULL)
+                    self.assertNotIn("Traceback", r.stderr)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn("--date", r.stderr)
+                    self.assertIn(bad, r.stderr)
+                    self.assertIn("YYYY-MM-DD", r.stderr)
+            self.assertFalse(list((v / "02-meetings").glob("*ship-sync.md")), "nothing is filed on a bad date")
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
     def test_llm_ask_graph_dry_run(self):
         r = run("llm", "ask", "who owns the search relaunch", "--vault", str(VAULT), "--graph", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)

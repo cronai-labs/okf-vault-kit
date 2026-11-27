@@ -878,13 +878,25 @@ def _decode_recap(data: bytes, source: str) -> str:
         sys.exit(f"{source} is not UTF-8 or UTF-16 text (byte 0x{data[exc.start]:02x} at offset {exc.start}); re-save it as UTF-8")
 
 
+def _iso_date(value: str) -> dt.date:
+    """An argparse type: a calendar date as YYYY-MM-DD, or a usage error naming the value.
+
+    `date.fromisoformat` raised straight out of `minutes` for `--date 2026-02-30` (#114). As a
+    `type=`, the refusal comes before the vault is resolved or the recap is read.
+    """
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a date that exists, as YYYY-MM-DD: {value!r} ({exc})") from exc
+
+
 def cmd_minutes(args) -> int:
     vault = _vault(args.vault, write=not args.dry_run)
     if args.file == "-":
         text = _decode_recap(sys.stdin.buffer.read(), "the recap on stdin")
     else:
         text = _decode_recap(Path(args.file).read_bytes(), args.file)
-    date = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
+    date = args.date or dt.date.today()
     people = [p.strip() for p in args.people.split(",")] if args.people else None
     extra = None
     if args.llm:
@@ -1373,7 +1385,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--owner", help="only tasks with this owner — filters the summary and --json alike"); p.add_argument("--digest", nargs="?", const="", help="write the digest page (default 00-home/todo-digest.md)"); p.add_argument("--sync-done", action="store_true", help="tick open copies of tasks already ticked in another note")
     p.add_argument("--show-confidential", action="store_true",
                    help="list tasks in notes with sensitivity: confidential (left out by default, as on the bridge)"); p.set_defaults(fn=cmd_todos)
-    p = sub.add_parser("minutes", help="file a recap as a meeting note"); p.add_argument("file", help="text file or - for stdin"); p.add_argument("--title", required=True); p.add_argument("--vault"); p.add_argument("--date"); p.add_argument("--project"); p.add_argument("--people", help="comma-separated names")
+    p = sub.add_parser("minutes", help="file a recap as a meeting note"); p.add_argument("file", help="text file or - for stdin"); p.add_argument("--title", required=True); p.add_argument("--vault"); p.add_argument("--date", type=_iso_date, help="YYYY-MM-DD (default: today)"); p.add_argument("--project"); p.add_argument("--people", help="comma-separated names")
     p.add_argument("--kind", default="project"); p.add_argument("--llm", action="store_true", help="also ask the local model to structure the recap"); p.add_argument("--base-url"); p.add_argument("--model"); p.add_argument("--daily", action="store_true", help="link the note from today's daily note")
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--force", action="store_true")
     p.add_argument("--keep-open", action="store_true",
