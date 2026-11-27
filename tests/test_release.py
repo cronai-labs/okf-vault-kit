@@ -282,7 +282,77 @@ class Workflow(unittest.TestCase):
         self.assertIn("commits scanned", run, "the step must require a positive commit count")
         self.assertRegex(run, r"-gt 0", "the step must require a positive commit count")
         self.assertIn(" ERR ", run, "the step must fail on any ERR line")
-        self.assertGreaterEqual(run.count("::error::"), 4, "each failure names its cause in an ::error::")
+        self.assertRegex(run, r'\[ "\$shallow" = false \]\s*\\?\s*\|\|\s*\{[^}]*::error::[^}]*exit 1; \}',
+                         "the step must refuse a shallow checkout, not just ask git whether it is one")
+        self.assertGreaterEqual(run.count("::error::"), 5, "each failure names its cause in an ::error::")
+
+    # A stand-in for gitleaks: prints $STUB_OUT and exits 0, or, with STUB_LEAK set, exits with
+    # the code the step passed in --exit-code, as gitleaks does when it finds a leak.
+    STUB_GITLEAKS = ('#!/bin/sh\ncode=0\nwhile [ $# -gt 0 ]; do [ "$1" = --exit-code ] && code=$2; shift; done\n'
+                     'printf \'%s\\n\' "$STUB_OUT"\n[ -n "$STUB_LEAK" ] && exit "$code"\nexit 0\n')
+
+    def run_secret_scan(self, repo: Path, runner_temp: Path, out: str, leak: bool = False):
+        """Run the scan step's own script the way Actions runs `shell: bash`, against the stub."""
+        step = next(s for s in self.jobs["security"]["steps"] if re.search(r'gitleaks"?\s+git\b', s.get("run", "")))
+        script = runner_temp / "step.sh"
+        script.write_text(step["run"], encoding="utf-8")
+        env = {**os.environ, "RUNNER_TEMP": str(runner_temp), "STUB_OUT": out,
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CEILING_DIRECTORIES": str(runner_temp.parent)}  # no repository above the temp dir counts
+        env.pop("STUB_LEAK", None)
+        if leak:
+            env["STUB_LEAK"] = "1"
+        return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=repo,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+                              timeout=60, check=False)
+
+    @unittest.skipIf(os.name == "nt" or not (shutil.which("bash") and shutil.which("git")),
+                     "needs bash and git, as the ubuntu runner has; native Windows' bash may be WSL's")
+    def test_the_secret_scan_fails_closed_when_run(self):
+        """The step's script, run: each way gitleaks can pass without scanning the history fails it. (#53)
+
+        String checks on the step miss a check that is present but disarmed (an `exit 0` at the end,
+        a dropped `fail=1`, `--exit-code 0`); running the script does not.
+        """
+        with tempfile.TemporaryDirectory(prefix="okf-gitleaks-") as tmp:
+            tmp = Path(tmp)
+            temp, full, shallow, bare = tmp / "runner", tmp / "full", tmp / "shallow", tmp / "not-a-repo"
+            for d in (temp, full, bare):
+                d.mkdir()
+            stub = temp / "gitleaks"
+            stub.write_text(self.STUB_GITLEAKS, encoding="utf-8")
+            stub.chmod(0o755)
+            git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                       "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+
+            def git(*args, cwd=full):
+                subprocess.run(["git", *args], cwd=cwd, env=git_env, check=True, capture_output=True)
+            git("init", "-q")
+            for n in (1, 2):
+                (full / "note.md").write_text(f"{n}\n", encoding="utf-8")
+                git("add", "note.md")
+                git("commit", "-q", "-m", str(n))
+            git("clone", "-q", "--depth", "1", full.resolve().as_uri(), str(shallow), cwd=tmp)
+
+            clean = "4:50PM INF 2 commits scanned.\n4:50PM INF no leaks found"
+            r = self.run_secret_scan(full, temp, clean)
+            self.assertEqual(r.returncode, 0, f"a clean full scan must pass:\n{r.stdout}{r.stderr}")
+            failing = {
+                "a leak": (full, clean.replace("no leaks found", "leaks found: 1"), True, "exited non-zero"),
+                "an ERR line": (full, "4:50PM ERR failed to read a commit\n4:50PM INF 1 commits scanned.",
+                                False, "logged an error"),
+                "0 commits scanned": (full, "4:50PM INF 0 commits scanned.", False, "scanned 0 commits"),
+                "no count at all": (full, "4:50PM INF no leaks found", False, "scanned no commits"),
+                "a shallow checkout": (shallow, clean, False, "shallow checkout"),
+                "no repository": (bare, clean, False, "git cannot read"),
+            }
+            for case, (repo, out, leak, why) in failing.items():
+                with self.subTest(case):
+                    r = self.run_secret_scan(repo, temp, out, leak)
+                    self.assertNotEqual(r.returncode, 0, f"{case} must fail the step:\n{r.stdout}{r.stderr}")
+                    self.assertIn("::error::", r.stdout)
+                    self.assertIn(why, r.stdout, f"the ::error:: line must say why ({case})")
 
     def test_qmd_is_pinned_and_the_pin_is_documented(self):
         """An unpinned qmd turns the e2e lane red or green with no change here. (#91)"""

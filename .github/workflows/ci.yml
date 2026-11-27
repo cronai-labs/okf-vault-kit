@@ -194,7 +194,7 @@ jobs:
       # fetched commits. So the step refuses a shallow checkout and reads the log for a positive
       # count and no ERR line. `shell: bash` runs with pipefail, so a leak's exit code survives
       # the tee; --no-color keeps ANSI codes out of what the checks match. tests/test_release.py
-      # asserts this shape.
+      # asserts this shape and runs this script against a stand-in gitleaks, one case per check.
       - name: secrets, over the whole history
         shell: bash
         run: |
