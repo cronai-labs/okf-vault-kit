@@ -96,4 +96,8 @@ On Linux, make bubblewrap usable first: on Ubuntu 24.04 its AppArmor restriction
 
 ## CI
 
-`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.14, and on ubuntu also with 3.12 and 3.13, through `astral-sh/setup-uv`. A `qmd-e2e` job installs qmd via `oven-sh/setup-bun` and runs `test_e2e_qmd.py` (keyword tier only — no model downloads); only its install step is advisory, and the job is one of the checks `ci-required` waits for. Endpoint tests never run in CI.
+`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.14, and on ubuntu also with 3.12 and 3.13, through `astral-sh/setup-uv`. A `qmd-e2e` job installs qmd at a pinned version, `bun install -g @tobilu/qmd@2.9.0`, via `oven-sh/setup-bun`, and runs `test_e2e_qmd.py` (keyword tier only — no model downloads). The install fails closed: `test_e2e_qmd.py` skips itself without qmd, so a job that carried on without it would report green having tested nothing. The job is one of the checks `ci-required` waits for. Endpoint tests never run in CI.
+
+The qmd pin is the version the lane last passed with, and it moves in its own PR, never on a whim: an unpinned qmd turned the lane red or green with no change in this repository. `test_release.py` checks that this page names the version `ci.yml` installs.
+
+Running the qmd lane locally: qmd's native `better-sqlite3` module is built for the Node that was first on PATH when qmd was installed. On a machine with two Nodes (Homebrew's and nvm's, say), the lane then fails with a `NODE_MODULE_VERSION` error until qmd is reinstalled under the Node that runs it.

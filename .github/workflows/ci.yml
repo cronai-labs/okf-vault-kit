@@ -78,9 +78,12 @@ jobs:
       # Fails closed: if qmd cannot be installed, the job fails. test_e2e_qmd.py skips itself
       # when qmd is not on PATH, so a lane that carried on without it would report green
       # having tested nothing. `qmd doctor` proves it is on PATH before the tests run.
+      # Pinned (#91): unpinned, a qmd release turned this lane red or green with no change here.
+      # The pin is the version the lane last passed with; bump it in its own PR, together with
+      # the version docs/testing.md names, which tests/test_release.py holds to this line.
       - name: install qmd
         run: |
-          bun install -g @tobilu/qmd
+          bun install -g @tobilu/qmd@2.9.0
           qmd doctor
       - run: make test-qmd PY=3.12
 

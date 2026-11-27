@@ -283,6 +283,15 @@ class Workflow(unittest.TestCase):
         self.assertIn(" ERR ", run, "the step must fail on any ERR line")
         self.assertGreaterEqual(run.count("::error::"), 4, "each failure names its cause in an ::error::")
 
+    def test_qmd_is_pinned_and_the_pin_is_documented(self):
+        """An unpinned qmd turns the e2e lane red or green with no change here. (#91)"""
+        install = next((s for s in self.jobs["qmd-e2e"]["steps"] if "@tobilu/qmd" in s.get("run", "")), None)
+        self.assertIsNotNone(install, "the qmd-e2e job no longer installs qmd")
+        pin = re.search(r"bun install -g @tobilu/qmd@(\d+\.\d+\.\d+)(?=\s|$)", install["run"])
+        self.assertIsNotNone(pin, "qmd must be installed at an exact version, bumped in its own PR")
+        testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+        self.assertIn(f"@tobilu/qmd@{pin.group(1)}", testing, "docs/testing.md must name the version CI pins")
+
 
 class LintGate(unittest.TestCase):
     """Ruff is the Python gate, and it hangs off `make lint` — so CI picks it up with no job of its own."""
