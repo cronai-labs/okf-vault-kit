@@ -184,7 +184,9 @@ class Plan(_Vault):
                           (f"Read(./{CSV_REL})", f"./{CSV_REL}")):
             self.assertIn(perm, plan.deny)
             self.assertIn(sbx, plan.deny_read)
-        self.assertEqual(len(plan.deny), len(plan.deny_read))
+        # One sandbox entry per Read rule; the Edit rules pair with denyWrite instead.
+        self.assertEqual(len([e for e in plan.deny if e.startswith("Read(")]), len(plan.deny_read))
+        self.assertEqual([e for e in plan.deny if not e.startswith("Read(")], list(kitagent.EDIT_PROTECTED))
         self.assertNotIn("Read(./.kit/config.yml)", plan.deny)   # the agent's own kit runs need it
 
     def test_files_the_kit_derives_are_always_denied(self):

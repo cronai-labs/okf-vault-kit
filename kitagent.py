@@ -13,7 +13,9 @@ Two layers, both pure functions of the vault so the CLI, `--check` and `doctor` 
                   allow-open instead: `./` denied to the sandbox, the open folders in `allowRead`, what is
                   confidential inside them denied one by one, edits to `.claude/` denied, and a
                   PreToolUse guard (GUARD_CODE) inline in settings.json for the Read, Grep and Glob tools,
-                  which the sandbox does not govern.
+                  which the sandbox does not govern. In both modes the config and the manifest are
+                  write-protected (`Edit(...)` deny rules and `sandbox.filesystem.denyWrite`): the
+                  bridge reads the config live, so an agent that could edit it could widen the policy.
 
 Standard library only, apart from what kitlib needs.
 """
@@ -66,6 +68,12 @@ GUARD_MARKER = "okf-vault-kit open-folder guard"
 # says: the agent's own settings (which hold the guard), and git's object store unless --allow-git.
 GUARD_ALWAYS_DENIED = (".claude",)
 EDIT_CLAUDE = "Edit(./.claude/**)"
+# Write-protected in both modes, against the shell (sandbox denyWrite) and the file tools (Edit
+# rules): the policy the bridge reads live, and the manifest that says which entries are the kit's.
+# A canary on Claude Code 2.1.330 appended to the config from the agent's shell without them.
+WRITE_PROTECTED = (kitlib.CONFIG_REL, MANIFEST_DIR)
+EDIT_PROTECTED = (f"Edit(./{kitlib.CONFIG_REL})", f"Edit(./{MANIFEST_DIR}/**)")
+DENY_WRITE = [f"./{rel}" for rel in WRITE_PROTECTED]
 # The guard itself. Standard library only, and old-Python safe (no walrus, no removeprefix): it runs
 # under whatever `python3` is on PATH. `__DATA__` becomes a string literal holding the JSON of the
 # open and denied lists, so the guard reads no file at run time: a canary showed that a hook whose
@@ -369,6 +377,7 @@ def _derived(rel: str) -> bool:
 class Plan:
     deny: list[str] = field(default_factory=list)          # permissions.deny entries the kit wants
     deny_read: list[str] = field(default_factory=list)     # sandbox.filesystem.denyRead entries
+    deny_write: list[str] = field(default_factory=list)    # sandbox.filesystem.denyWrite entries
     notes: list[str] = field(default_factory=list)         # preview lines: escalations, skips, git
     flags: list[str] = field(default_factory=list)         # short doctor-safe flags, no vault paths
     allow_git: bool = False
@@ -520,7 +529,7 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     policy = kitlib.confidentiality_policy(root)
     if policy.open_folders:
         return _allow_open_plan(root, export, policy, allow_git)
-    plan = Plan(allow_git=allow_git)
+    plan = Plan(allow_git=allow_git, deny=list(EDIT_PROTECTED), deny_write=list(DENY_WRITE))
     wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED]
     _git_notes(root, plan, wanted)
     wanted += _confidential_entries(export, plan, keep=lambda rel: True, ancestor_ok=bool,
@@ -540,7 +549,7 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     --allow-git, which opens `.git` to the read tools only.
     """
     opens = policy.open_folders
-    plan = Plan(allow_git=allow_git, mode=ALLOW_OPEN)
+    plan = Plan(allow_git=allow_git, mode=ALLOW_OPEN, deny_write=list(DENY_WRITE))
     plan.notes.append("allow-open: the vault is denied to the agent and only the open folders "
                       f"({len(policy.declared_open_folders)}) are allowed; its file tools can read and write "
                       "only inside them, and a PreToolUse guard refuses every other path")
@@ -550,7 +559,7 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     special += git_wanted
     # The vault itself goes to the sandbox as `./`, and the agent may not edit its own settings,
     # which hold the guard: with that rule it could not switch the guard off by any tool in the canary.
-    plan.deny, plan.deny_read = [EDIT_CLAUDE], ["./"]
+    plan.deny, plan.deny_read = [EDIT_CLAUDE, *EDIT_PROTECTED], ["./"]
     wanted: list[tuple[str, str]] = []
     # The kit's own files are outside the open folders unless one is declared over them: then on the lists.
     wanted += [(k, r) for k, r in special if _in_open(r.rstrip("*").rstrip("."), opens)]
@@ -644,6 +653,7 @@ def _merge_list(current: list[str], owned: set[str], wanted: list[str]) -> tuple
 
 
 ALLOW_KEY = "sandbox.filesystem.allowRead"
+DENY_WRITE_KEY = "sandbox.filesystem.denyWrite"
 HOOKS_KEY = "hooks.PreToolUse"
 # Settings keys the kit records as created when it adds them, so that --remove and a switch back to
 # the deny list take out a key the kit made and keep one that was there before, empty or not.
@@ -740,15 +750,17 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
     current_deny = _list_at(existing, ("permissions", "deny"), SETTINGS_REL)
     current_read = _list_at(existing, ("sandbox", "filesystem", "denyRead"), SETTINGS_REL)
     current_allow = _list_at(existing, ("sandbox", "filesystem", "allowRead"), SETTINGS_REL)
+    current_write = _list_at(existing, ("sandbox", "filesystem", "denyWrite"), SETTINGS_REL)
     owned_deny = _owned(manifest, "permissions.deny")
     owned_read = _owned(manifest, "sandbox.filesystem.denyRead")
     owned_allow = _owned(manifest, ALLOW_KEY)
+    owned_write = _owned(manifest, DENY_WRITE_KEY)
     owned_hooks = _owned_hooks(manifest)
     created = _created(manifest)
-    if manifest is not None and None in (owned_deny, owned_read, owned_allow, owned_hooks):
+    if manifest is not None and None in (owned_deny, owned_read, owned_allow, owned_write, owned_hooks):
         warnings.append(f"{MANIFEST_REL} is not a manifest this kit wrote; treating every existing entry as yours "
                         "(entries the kit added before stay until you remove them)")
-        owned_deny = owned_read = owned_allow = None
+        owned_deny = owned_read = owned_allow = owned_write = None
         owned_hooks = None
         created = set()
     wanted_hooks = [plan.hook] if plan.hook is not None else []
@@ -757,6 +769,7 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
     deny, own_deny, add_d, rm_d = _merge_list(current_deny, owned_deny or set(), plan.deny)
     read, own_read, add_r, rm_r = _merge_list(current_read, owned_read or set(), plan.deny_read)
     allow, own_allow, add_a, rm_a = _merge_list(current_allow, owned_allow or set(), plan.allow_read)
+    deny_w, own_write, add_w, rm_w = _merge_list(current_write, owned_write or set(), plan.deny_write)
     pre, own_hooks, add_h, rm_h = _merge_hooks(current_pre, owned_hooks or [], wanted_hooks)
     settings = copy.deepcopy(existing)
     settings.setdefault("permissions", {})["deny"] = deny
@@ -771,12 +784,14 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
             overrides.append(f"sandbox.{key}: {json.dumps(sandbox[key])} -> {json.dumps(value)}")
         sandbox[key] = value
     sandbox.setdefault("filesystem", {})["denyRead"] = read
+    if deny_w or "denyWrite" in sandbox["filesystem"]:
+        sandbox["filesystem"]["denyWrite"] = deny_w
     now_created = {k for k in _place(sandbox, ("filesystem", "allowRead"), allow, created, "sandbox.") if k == ALLOW_KEY}
     if touch_hooks:
         now_created |= {k for k in _place(settings, ("hooks", "PreToolUse"), pre, created) if k != ALLOW_KEY}
     new_manifest = {"version": 1, "generated_by": GENERATOR, "mode": plan.mode, "allow_git": plan.allow_git,
                     "permissions.deny": own_deny, "sandbox.filesystem.denyRead": own_read,
-                    "sandbox.prior": prior, "sandbox.added": added_keys}
+                    DENY_WRITE_KEY: own_write, "sandbox.prior": prior, "sandbox.added": added_keys}
     if own_allow:
         new_manifest[ALLOW_KEY] = own_allow
     if own_hooks:
@@ -784,7 +799,7 @@ def merge_settings(existing: Any, manifest: Any, plan: Plan) -> Merge:
     if now_created:
         new_manifest["created"] = sorted(now_created)
     changed = bool(flags_set) or not same_json(settings, existing) or not same_json(new_manifest, manifest)
-    return Merge(settings, new_manifest, add_d + add_r + add_a + add_h, rm_d + rm_r + rm_a + rm_h, flags_set,
+    return Merge(settings, new_manifest, add_d + add_r + add_a + add_w + add_h, rm_d + rm_r + rm_a + rm_w + rm_h, flags_set,
                  overrides, warnings, changed)
 
 
@@ -889,7 +904,8 @@ class State:
     plan: Plan
     merge: Merge
     raw_settings: str | None
-    local_flags: list[str]
+    local_flags: list[str]       # about settings.json as it is on disk (doctor, --check)
+    after_flags: list[str]       # about what --apply would leave: what its own write does not fix
 
 
 def recorded_allow_git(manifest: Any) -> bool:
@@ -912,8 +928,13 @@ def claude_code_state(root: Path, allow_git: bool | None = None) -> State:
         plan.notes.append("the last --apply used --allow-git; this run denies `.git` again (pass --allow-git to keep it)")
     existing, raw = _read_json(root / SETTINGS_REL, SETTINGS_REL)
     merge = merge_settings(existing, manifest, plan)
+    if isinstance(manifest, dict) and DENY_WRITE_KEY not in manifest and set(plan.deny_write) & set(merge.added):
+        plan.notes.append(f"this kit version write-protects {kitlib.CONFIG_REL} and {MANIFEST_DIR}/ against the agent's "
+                          "shell and file tools (sandbox denyWrite and Edit deny rules), so the agent cannot widen the "
+                          "policy the bridge reads; the new entries are added once")
     local = local_override_flags(root, plan, merge.settings, existing)
-    return State(plan, merge, raw, local)
+    after = local_override_flags(root, plan, merge.settings, merge.settings)
+    return State(plan, merge, raw, local, after)
 
 
 def diff_text(raw: str | None, settings: dict[str, Any] | None) -> str:
@@ -1002,8 +1023,9 @@ def removal(existing: Any, manifest: Any) -> Removal:
     owned_deny = _owned(manifest, "permissions.deny")
     owned_read = _owned(manifest, "sandbox.filesystem.denyRead")
     owned_allow = _owned(manifest, ALLOW_KEY)
+    owned_write = _owned(manifest, DENY_WRITE_KEY)
     owned_hooks = _owned_hooks(manifest)
-    if not isinstance(manifest, dict) or None in (owned_deny, owned_read, owned_allow, owned_hooks):
+    if not isinstance(manifest, dict) or None in (owned_deny, owned_read, owned_allow, owned_write, owned_hooks):
         raise AgentSettingsError(f"{MANIFEST_REL} is not a manifest this kit wrote, so which entries are the kit's "
                                  "cannot be told; remove them by hand, then delete the manifest")
     if existing is None:
@@ -1015,6 +1037,7 @@ def removal(existing: Any, manifest: Any) -> Removal:
     removed: list[str] = []
     _drop_owned(settings, ("permissions", "deny"), owned_deny, removed)
     _drop_owned(settings, ("sandbox", "filesystem", "denyRead"), owned_read, removed)
+    _drop_owned(settings, ("sandbox", "filesystem", "denyWrite"), owned_write, removed)
     created = _created(manifest)
     allow = _list_at(settings, ("sandbox", "filesystem", "allowRead"), SETTINGS_REL)
     if allow:
@@ -1193,6 +1216,14 @@ def local_override_flags(root: Path, plan: Plan, settings: dict[str, Any], curre
     if plan.hook is not None:
         flags += _guard_flags(plan, current, local)
     return flags
+
+
+# What a flag about settings.json as it is becomes in a dry run, when --apply's own write fixes it.
+WILL_FIX = {"open-folder guard missing": "the open-folder guard will be added"}
+
+
+def will_fix(flag: str) -> str:
+    return WILL_FIX.get(flag, f"{flag}: --apply fixes it")
 
 
 def _guard_flags(plan: Plan, current: Any, local: Any) -> list[str]:

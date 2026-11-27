@@ -263,7 +263,8 @@ class AllowOpenPlan(_Open):
                           (f"Read(./{RAISED_REL})", f"./{RAISED_REL}")):
             self.assertIn(perm, plan.deny)
             self.assertIn(sbx, plan.deny_read)
-        for entry in plan.deny + plan.deny_read:            # `./` covers everything outside
+        reads = [e for e in plan.deny if e.startswith("Read(")]      # the Edit rules protect .kit from writes
+        for entry in reads + plan.deny_read:                # `./` covers everything outside
             for outside in ("index.md", "log.md", "05-people", ".trash", "_drafts", ".kit", "00-home"):
                 self.assertNotIn(outside, entry)
         self.assertFalse(any("not denied: .kit/config.yml" in n for n in plan.notes))
@@ -415,6 +416,123 @@ class AllowOpenMerge(_Open):
         self.assertEqual(agent(self.v, "--apply").returncode, 0)
         self.assertNotIn("Read(./05-people/**)", read_settings(self.v)["permissions"]["deny"])
         self.assertEqual(agent(self.v, "--remove", "--apply").returncode, 0)
+
+
+CONFIG_WRITE = ("Edit(./.kit/config.yml)", "Edit(./.kit/agent-settings/**)")
+DENY_WRITE = ["./.kit/config.yml", "./.kit/agent-settings"]
+
+
+class WriteProtection(_Vault):
+    """The config and the kit's manifest are write-protected against the agent's shell and file
+    tools, in both modes: a canary on Claude Code 2.1.330 appended to `.kit/config.yml` from the
+    shell, and the bridge reads that config live."""
+
+    MODES = (CONFIG, OPEN_CONFIG)
+
+    def deny_write(self) -> list:
+        return read_settings(self.v)["sandbox"]["filesystem"].get("denyWrite", [])
+
+    def test_both_modes_plan_and_write_the_protection_and_a_second_run_changes_nothing(self):
+        for config in self.MODES:
+            set_config(self.v, config)
+            plan = kitagent.claude_code_plan(self.v, self.export())
+            for entry in CONFIG_WRITE:
+                self.assertIn(entry, plan.deny, config)
+            self.assertEqual(plan.deny_write, DENY_WRITE, config)
+            self.assertEqual(agent(self.v, "--apply").returncode, 0, config)
+            s = read_settings(self.v)
+            for entry in CONFIG_WRITE:
+                self.assertIn(entry, s["permissions"]["deny"], config)
+            self.assertEqual(self.deny_write(), DENY_WRITE, config)
+            m = json.loads((self.v / MANIFEST).read_text(encoding="utf-8"))
+            self.assertEqual(m["sandbox.filesystem.denyWrite"], DENY_WRITE, config)
+            self.assertIn("nothing to do", agent(self.v, "--apply").stdout, config)
+            self.assertEqual(agent(self.v, "--check").returncode, 0, config)
+            self.assertEqual(kitagent.doctor_row(self.v)[1], "ok", config)
+
+    def test_the_users_own_deny_write_entries_stay_and_remove_takes_out_only_the_kits(self):
+        for config in self.MODES:
+            set_config(self.v, config)
+            mine = {"sandbox": {"filesystem": {"denyWrite": ["./mine", "./.kit/config.yml"]}}}
+            write(self.v, SETTINGS, json.dumps(mine))
+            self.assertEqual(agent(self.v, "--apply").returncode, 0, config)
+            self.assertEqual(self.deny_write(), ["./mine", "./.kit/config.yml", "./.kit/agent-settings"], config)
+            m = json.loads((self.v / MANIFEST).read_text(encoding="utf-8"))
+            self.assertEqual(m["sandbox.filesystem.denyWrite"], ["./.kit/agent-settings"], "the user's entry stays theirs")
+            self.assertEqual(agent(self.v, "--remove", "--apply").returncode, 0, config)
+            self.assertEqual(read_settings(self.v), mine, config)
+
+    def test_a_wrong_shape_is_refused(self):
+        bad = {"sandbox": {"filesystem": {"denyWrite": "./x"}}}
+        write(self.v, SETTINGS, json.dumps(bad))
+        r = agent(self.v, "--apply")
+        self.assertEqual(r.returncode, 2, r.stdout)
+        self.assertEqual(read_settings(self.v), bad)
+
+    def test_a_removed_protection_is_drift(self):
+        for config in self.MODES:
+            set_config(self.v, config)
+            for drop in (lambda s: s["sandbox"]["filesystem"]["denyWrite"].remove("./.kit/config.yml"),
+                         lambda s: s["permissions"]["deny"].remove("Edit(./.kit/config.yml)"),
+                         lambda s: s["permissions"]["deny"].remove("Edit(./.kit/agent-settings/**)"),
+                         lambda s: s["sandbox"]["filesystem"].pop("denyWrite")):
+                self.assertEqual(agent(self.v, "--apply").returncode, 0, config)
+                s = read_settings(self.v)
+                drop(s)
+                write(self.v, SETTINGS, json.dumps(s))
+                r = agent(self.v, "--check")
+                self.assertEqual(r.returncode, 1, (config, r.stdout))
+                self.assertTrue(kitagent.doctor_row(self.v)[1].startswith("drift:"), config)
+
+    def test_a_manifest_from_before_the_protection_is_brought_up_once_and_says_so(self):
+        for config in self.MODES:
+            set_config(self.v, config)
+            agent(self.v, "--apply")
+            # What a kit before the protection wrote: no denyWrite, no Edit entries for the config.
+            s, m = read_settings(self.v), json.loads((self.v / MANIFEST).read_text(encoding="utf-8"))
+            del s["sandbox"]["filesystem"]["denyWrite"], m["sandbox.filesystem.denyWrite"]
+            for entry in CONFIG_WRITE:
+                s["permissions"]["deny"].remove(entry)
+                m["permissions.deny"].remove(entry)
+            write(self.v, SETTINGS, json.dumps(s, indent=2) + "\n")
+            write(self.v, MANIFEST, json.dumps(m, indent=2) + "\n")
+            r = agent(self.v, "--check")
+            self.assertEqual(r.returncode, 1, config)
+            self.assertIn("4 entries to add, 0 stale", r.stdout, config)
+            r = agent(self.v)
+            self.assertIn("write-protects", r.stdout, config)
+            r = agent(self.v, "--apply")
+            self.assertIn("write-protects", r.stdout, config)
+            self.assertEqual(agent(self.v, "--check").returncode, 0, config)
+            self.assertNotIn("write-protects", agent(self.v).stdout, "said once, not on every run")
+
+
+class ApplyWarnings(_Open):
+    """--apply warns only about what stays weak after its own write; the dry run says what it adds."""
+
+    def test_a_first_apply_does_not_warn_about_the_guard_it_writes(self):
+        r = agent(self.v)
+        self.assertNotIn("guard missing", r.stdout + r.stderr)
+        self.assertIn("open-folder guard will be added", r.stdout)
+        r = agent(self.v, "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("guard missing", r.stdout + r.stderr)
+        self.assertNotIn("will be added", r.stdout)
+
+    def test_apply_still_warns_about_what_its_write_leaves(self):
+        write(self.v, kitagent.LOCAL_SETTINGS_REL, json.dumps({"disableAllHooks": True}))
+        r = agent(self.v, "--apply")
+        self.assertIn("settings.local.json sets disableAllHooks", r.stdout)
+        self.assertNotIn("guard missing", r.stdout + r.stderr)
+
+    def test_check_reports_the_guard_missing_on_disk(self):
+        agent(self.v, "--apply")
+        s = read_settings(self.v)
+        s["hooks"]["PreToolUse"] = []
+        write(self.v, SETTINGS, json.dumps(s))
+        r = agent(self.v, "--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("open-folder guard missing", r.stderr)
 
 
 class AllowOpenDoctor(_Open):

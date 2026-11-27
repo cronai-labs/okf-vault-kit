@@ -591,16 +591,18 @@ def cmd_agent_settings(args) -> int:
             return _refuse(str(exc))
     for line in m.warnings:
         print(f"warning: {line}", file=sys.stderr)
-    local = [f"warning: {flag} — it overrides what this command writes (docs/security.md §5)" for flag in state.local_flags]
+    def overriding(flags: list[str]) -> list[str]:
+        return [f"warning: {flag} — it overrides what this command writes (docs/security.md §5)" for flag in flags]
     plan = state.plan
-    wanted = f"{len(plan.deny)} deny rule(s) and {len(plan.deny_read)} sandbox denyRead entries"
+    wanted = (f"{len(plan.deny)} deny rule(s), {len(plan.deny_read)} sandbox denyRead and "
+              f"{len(plan.deny_write)} denyWrite entries")
     if plan.mode == kitagent.ALLOW_OPEN:
         wanted = (f"allow-open: {wanted}, {len(plan.allow_read)} allowRead entries and the open-folder guard")
     summary = f"{wanted} wanted; {len(m.added)} entries to add, {len(m.removed)} stale"
     if args.check:
         for flag in state.plan.flags:
             print(f"warning: {flag} (docs/security.md §5)", file=sys.stderr)
-        for line in local:
+        for line in overriding(state.local_flags):
             print(line, file=sys.stderr)
         if not m.changed:
             print(f"ok: {kitagent.SETTINGS_REL} matches the vault ({summary})")
@@ -614,8 +616,13 @@ def cmd_agent_settings(args) -> int:
         print(f"note: {note}")
     for line in m.overrides:
         print(f"overrides your value: {line}")
-    for line in local:
+    # Flags about what --apply leaves, not about the file before it: a guard this run writes is no warning.
+    for line in overriding(state.after_flags):
         print(line)
+    if not args.apply:
+        for flag in state.local_flags:
+            if flag not in state.after_flags:
+                print(f"note: {kitagent.will_fix(flag)}")
     if not m.changed:
         print(f"nothing to do: {kitagent.SETTINGS_REL} already matches the vault ({summary})")
         return 0
