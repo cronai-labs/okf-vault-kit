@@ -344,5 +344,47 @@ class TheGraphIgnoresAliasesOntoSensitivity(OntologyFileCase):
             self.assertTrue(decisions.get(rel), rel)
 
 
+class TheGraphIgnoresAnAliasRenamingSensitivityAway(OntologyFileCase):
+    """#121: reserved both ways. `sensitivity: classification` under `property_aliases` renamed the
+    raw line to another key in the graph, so `props["sensitivity"]` was no longer what kitlib
+    judges; the loader now drops it and plain `validate` refuses it, by the same check."""
+
+    def setUp(self):
+        super().setUp()
+        self.insert_after("property_aliases:\n", "  sensitivity: classification\n")
+        for name, value in (("marked", "confidential"), ("open", "internal")):
+            (self.vault / "07-knowledge" / f"{name}-probe.md").write_text(
+                f"---\ntype: concept\ntitle: {name}\ndescription: d\nsensitivity: {value}\n---\nbody\n",
+                encoding="utf-8")
+
+    def test_the_ontology_drops_it(self):
+        self.assertNotIn("sensitivity", kitgraph.load_ontology(self.vault).property_aliases)
+
+    def test_the_graph_keeps_the_raw_value_and_agrees_with_kitlib(self):
+        g = kitgraph.build_graph(self.vault)
+        self.assertEqual(g.nodes["07-knowledge/marked-probe.md"].props.get("sensitivity"), "confidential")
+        self.assertEqual(g.nodes["07-knowledge/open-probe.md"].props.get("sensitivity"), "internal")
+        self.assertNotIn("classification", g.nodes["07-knowledge/marked-probe.md"].props)
+        served = kitgraph.redact_vault(g, self.vault).nodes
+        decisions = {}
+        for nid, n in g.nodes.items():
+            if n.kind != "note":
+                continue
+            with self.subTest(nid):
+                by_kitlib = kitgraph.kitlib.is_confidential(self.vault, n.path)
+                self.assertEqual(nid not in served, by_kitlib)
+                decisions[nid] = by_kitlib
+        self.assertTrue(decisions["07-knowledge/marked-probe.md"])
+        self.assertFalse(decisions["07-knowledge/open-probe.md"])
+
+    def test_plain_validate_fails_naming_it(self):
+        r = validate(self.vault)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout)
+        line = next((ln for ln in r.stdout.splitlines() if "`property_aliases.sensitivity`" in ln), "")
+        self.assertIn("reserves `sensitivity`", line, r.stdout)
+        self.assertIn("ignored", line)
+
+
 if __name__ == "__main__":
     unittest.main()

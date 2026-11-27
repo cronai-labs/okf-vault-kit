@@ -73,12 +73,11 @@ class Ontology:
         self.context_file: str = context_file if isinstance(context_file, str) else "context.jsonld"
         self.classes: dict[str, dict] = {k: _mapping(v) for k, v in _mapping(self.data.get("classes")).items()}
         self.edges: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("edges")).items() if isinstance(v, dict)}
-        # `sensitivity` is reserved (#121): an alias onto it, or of its values, is dropped here, so
-        # `props["sensitivity"]`, when set, is the note's raw line, the one kitlib's shared predicate
-        # judges. (An alias renaming `sensitivity` away is kept; `node_confidential` then answers
-        # from the file check, which reads the raw line.)
+        # `sensitivity` is reserved (#121): an alias onto it or away from it, or of its values, is
+        # dropped here, so `props["sensitivity"]` is the note's raw line, the one kitlib's shared
+        # predicate judges.
         self.property_aliases: dict[str, str] = {k: v for k, v in _mapping(self.data.get("property_aliases")).items()
-                                                 if isinstance(v, str) and not _aliases_onto_sensitivity(k, v)}
+                                                 if isinstance(v, str) and not _aliases_sensitivity(k, v)}
         self.value_aliases: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("value_aliases")).items()
                                                if isinstance(v, dict) and not _is_sensitivity(k)}
         self.rules: dict[str, bool] = _mapping(self.data.get("rules"))
@@ -205,7 +204,7 @@ def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] 
     the file `validate` names. A missing file is no problem; one we cannot decode or parse, or
     whose top level is not a mapping, is unusable; any other problem leaves the data usable.
     `Ontology` drops an entry of the wrong shape (a property spec is read as text) and an alias
-    onto `sensitivity`, which the ontology reserves and `validate` refuses.
+    onto or away from `sensitivity`, which the ontology reserves and `validate` refuses.
     """
     path = Path(path)
     name = label or path.name
@@ -281,16 +280,21 @@ def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
 
 
 def _sensitivity_refusals(data: dict[str, Any], name: str) -> list[str]:
-    """The aliases onto `sensitivity` the file declares (#121): a security finding, not hygiene.
+    """The aliases onto or away from `sensitivity` the file declares (#121): a security finding, not hygiene.
 
     Exactly the entries `Ontology` drops, by the same two predicates, so "refused" and "ignored"
     cannot name different entries.
     """
     out: list[str] = []
     for alias, target in _mapping(data.get("property_aliases")).items():
-        if _aliases_onto_sensitivity(alias, target):
+        if not _aliases_sensitivity(alias, target):
+            continue
+        if _is_sensitivity(target):
             out.append(f"{name}: `property_aliases.{alias}` maps onto `sensitivity` and is refused: {_SENSITIVITY_WHY} "
                        f"Rename `{alias}` to `sensitivity` in the notes and drop the alias.")
+        else:
+            out.append(f"{name}: `property_aliases.{alias}` maps `sensitivity` onto `{target}` and is refused: "
+                       f"{_SENSITIVITY_WHY} Keep `sensitivity` in the notes and drop the alias.")
     for prop in _mapping(data.get("value_aliases")):
         if _is_sensitivity(prop):
             out.append(f"{name}: `value_aliases.{prop}` is refused: {_SENSITIVITY_WHY} "
@@ -300,7 +304,7 @@ def _sensitivity_refusals(data: dict[str, Any], name: str) -> list[str]:
 
 
 # #121, the owner's decision: `sensitivity` is a reserved property. The ontology may not alias any
-# property onto it nor alias its values; such an entry is ignored by every reader and refused by
+# property onto it, alias it onto another name, nor alias its values; such an entry is ignored by every reader and refused by
 # `validate`, so the graph judges the same raw line as kitlib's shared predicate.
 SENSITIVITY = "sensitivity"
 _SENSITIVITY_WHY = ("the ontology reserves `sensitivity`; this entry is ignored. Every reader, the graph included, "
@@ -311,10 +315,15 @@ def _is_sensitivity(name: Any) -> bool:
     return str(name).strip().lower() == SENSITIVITY
 
 
-def _aliases_onto_sensitivity(alias: Any, target: Any) -> bool:
-    # Only the identity entry is harmless. `Sensitivity: sensitivity` is not: the readers match the
-    # exact key `sensitivity`, so applying it would make the graph alone see `Sensitivity:`.
-    return isinstance(target, str) and _is_sensitivity(target) and alias != target
+def _aliases_sensitivity(alias: Any, target: Any) -> bool:
+    """A `property_aliases` entry onto `sensitivity` or away from it; the one check `Ontology`
+    (which drops it) and `validate` (which refuses it) share.
+
+    Only the identity entry is harmless. `Sensitivity: sensitivity` is not: the readers match the
+    exact key `sensitivity`, so applying it would make the graph alone see `Sensitivity:`. And
+    `sensitivity: classification` would move the raw line to another key in the graph.
+    """
+    return isinstance(target, str) and alias != target and (_is_sensitivity(target) or _is_sensitivity(alias))
 
 
 @dataclass
@@ -684,8 +693,8 @@ def fix_property_aliases(vault: Path, onto: Ontology | None = None) -> list[Alia
             continue
         touched = next((f"{a} → {c}" for a, c in renames if SENSITIVITY in (a.strip().lower(), c.strip().lower())), "")
         if touched:
-            # Every reader judges the raw `sensitivity:` line (#121): renaming it away would make
-            # them serve a confidential note. An alias onto it never gets here: `Ontology` drops it.
+            # Every reader judges the raw `sensitivity:` line (#121). An alias onto or away from it
+            # never gets here, since `Ontology` drops it; this guards an `Ontology` built otherwise.
             fix.refused = f"{touched} touches `sensitivity`, which every reader judges as written; rename it by hand"
             continue
         if note.path.is_symlink():

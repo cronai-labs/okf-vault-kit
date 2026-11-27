@@ -11,6 +11,7 @@ import subprocess
 import sys
 import unittest
 
+import kitgraph
 from tests.helpers import ROOT, temp_vault
 
 KIT = [sys.executable, str(ROOT / "kit.py")]
@@ -152,17 +153,27 @@ class FixAliases(Case):
         self.assertNotIn("Traceback", r.stderr)
 
     def test_it_never_renames_sensitivity_away(self):
-        """Renaming the raw `sensitivity:` line would make every reader serve the note."""
+        """Renaming the raw `sensitivity:` line would make every reader serve the note. The ontology
+        reserves `sensitivity` (#121), so the alias is dropped before `--fix-aliases` sees it."""
         onto = self.vault / "99-system" / "ontology.yml"
         onto.write_text(onto.read_text(encoding="utf-8").replace(
             "property_aliases:\n", "property_aliases:\n  sensitivity: classification\n", 1), encoding="utf-8")
         path = self.note("hidden.md", "---\ntype: concept\ntitle: H\ndescription: d\nsensitivity: confidential\n---\n")
         before = path.read_bytes()
         r = self.fix("--apply")
-        self.assertEqual(r.returncode, 1, r.stdout)
-        self.assertIn("02-meetings/hidden.md", r.stdout)
-        self.assertIn("`sensitivity`", r.stdout)
+        self.assertEqual(r.returncode, 0, r.stdout)
+        self.assertNotIn("02-meetings/hidden.md", r.stdout)
         self.assertEqual(path.read_bytes(), before)
+
+    def test_the_guard_holds_for_an_ontology_that_still_aliases_sensitivity_away(self):
+        """Defence in depth: an `Ontology` whose table was changed after loading is still refused."""
+        path = self.note("hidden.md", "---\ntype: concept\ntitle: H\ndescription: d\nsensitivity: confidential\n---\n")
+        onto = kitgraph.load_ontology(self.vault)
+        onto.property_aliases["sensitivity"] = "classification"
+        fix = next(f for f in kitgraph.fix_property_aliases(self.vault, onto) if f.rel == "02-meetings/hidden.md")
+        self.assertIn("`sensitivity`", fix.refused)
+        self.assertEqual(fix.text, "")
+        self.assertTrue(path.exists())
 
     def test_a_symlinked_note_is_refused_not_replaced_by_a_copy(self):
         target = self.note("alias-probe.md", MEETING)

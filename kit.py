@@ -571,8 +571,8 @@ def cmd_validate(args) -> int:
     hygiene_failed = (any(r.errors or r.warnings for r in hygiene if r is not onto_file) or bool(okf.warnings)
                       or len(onto_file.errors) > len(onto_file.refused) or bool(onto_file.warnings))
     if security_failed:
-        print(f"\nerror: the alias onto `sensitivity` in {kitgraph.ONTOLOGY_REL} (above) is ignored, since the "
-              "ontology reserves `sensitivity`: the notes it was meant to hide are served. That is a "
+        print(f"\nerror: the alias of `sensitivity` in {kitgraph.ONTOLOGY_REL} (above) is ignored, since the "
+              "ontology reserves `sensitivity`: every reader judges the note's raw `sensitivity:` line instead. That is a "
               "confidentiality misconfiguration, not a style rule, so it fails `validate` with or without --strict.")
     if hygiene_failed and not args.strict:
         print(f"\nnote: the {'other ' if security_failed else ''}findings above outside `OKF conformance` are "
@@ -1580,7 +1580,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("index", help="regenerate index.md"); p.add_argument("--vault"); p.set_defaults(fn=cmd_index)
     # allow_abbrev=False: `--app` must not stand in for `--apply` on a command that writes.
     vp = p = sub.add_parser("validate", help="OKF conformance, links, ontology", allow_abbrev=False); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance "
-                        "and an ontology alias onto `sensitivity`, which fail either way")
+                        "and an ontology alias onto or away from `sensitivity`, which fail either way")
     p.add_argument("--ontology", action="store_true", help="force the ontology checks (default: on when 99-system/ontology.yml exists)"); p.add_argument("--no-ontology", action="store_true")
     p.add_argument("--fix-aliases", action="store_true",
                    help="instead of validating, list each note whose frontmatter uses a property alias from the ontology "
