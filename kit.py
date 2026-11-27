@@ -481,6 +481,12 @@ def _fix_aliases(vault: Path, apply: bool) -> int:
     A dry run unless `apply`. Each file is written whole and atomically, and only when it changes,
     so a second run finds nothing and touches nothing. A refused note fails the run: exit 1.
     """
+    data, problems = kitgraph.read_ontology(vault / kitgraph.ONTOLOGY_REL, kitgraph.ONTOLOGY_REL)
+    if data is None and problems:
+        # The readers fall back to the kit's own ontology; its alias table is not the one this
+        # vault declared, so nothing is renamed on it.
+        print(f"refused: {problems[0]}", file=sys.stderr)
+        return 1
     fixes = kitgraph.fix_property_aliases(vault)
     todo = [f for f in fixes if not f.refused]
     refused = [f for f in fixes if f.refused]

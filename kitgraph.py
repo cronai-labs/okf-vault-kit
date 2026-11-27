@@ -606,6 +606,17 @@ def fix_property_aliases(vault: Path, onto: Ontology | None = None) -> list[Alia
         if clash:
             fix.refused = f"{clash}; merge them by hand"
             continue
+        touched = next((f"{a} → {c}" for a, c in renames if SENSITIVITY in (a.strip().lower(), c.strip().lower())), "")
+        if touched:
+            # Every reader judges the raw `sensitivity:` line (#121): renaming it away would make
+            # them serve a confidential note, and renaming onto it is an alias `validate` refuses.
+            fix.refused = f"{touched} touches `sensitivity`, which every reader judges as written; rename it by hand"
+            continue
+        if note.path.is_symlink():
+            # The atomic write replaces the path it is given: a link would become a plain copy,
+            # outside whatever folder floor covers the file it points to.
+            fix.refused = "is a symbolic link; rename the key in the file it points to"
+            continue
         try:
             text = note.path.read_bytes().decode("utf-8")
         except (OSError, UnicodeDecodeError) as exc:

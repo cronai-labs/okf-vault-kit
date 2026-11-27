@@ -128,6 +128,42 @@ class FixAliases(Case):
         self.assertIn("--fix-aliases", r.stderr)
         self.assertNotIn("Traceback", r.stderr)
 
+    def test_it_never_renames_sensitivity_away(self):
+        """Renaming the raw `sensitivity:` line would make every reader serve the note."""
+        onto = self.vault / "99-system" / "ontology.yml"
+        onto.write_text(onto.read_text(encoding="utf-8").replace(
+            "property_aliases:\n", "property_aliases:\n  sensitivity: classification\n", 1), encoding="utf-8")
+        path = self.note("hidden.md", "---\ntype: concept\ntitle: H\ndescription: d\nsensitivity: confidential\n---\n")
+        before = path.read_bytes()
+        r = self.fix("--apply")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertIn("02-meetings/hidden.md", r.stdout)
+        self.assertIn("`sensitivity`", r.stdout)
+        self.assertEqual(path.read_bytes(), before)
+
+    def test_a_symlinked_note_is_refused_not_replaced_by_a_copy(self):
+        target = self.note("alias-probe.md", MEETING)
+        link = self.vault / "07-knowledge" / "linked-probe.md"
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlinks unavailable here")
+        r = self.fix("--apply")
+        self.assertEqual(r.returncode, 1, r.stdout)
+        self.assertTrue(link.is_symlink(), "the link was replaced by a regular file")
+        self.assertIn("07-knowledge/linked-probe.md", r.stdout)
+        self.assertIn("\npeople: [Alex", target.read_text(encoding="utf-8"), "the file itself is still fixed")
+
+    def test_it_refuses_while_the_vault_ontology_is_unusable(self):
+        """The fallback is the kit's own alias table, not the one this vault declared."""
+        (self.vault / "99-system" / "ontology.yml").write_text("property_aliases: [\n", encoding="utf-8")
+        path = self.note("alias-probe.md", MEETING)
+        before = path.read_bytes()
+        r = self.fix("--apply")
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("99-system/ontology.yml", r.stdout + r.stderr)
+        self.assertEqual(path.read_bytes(), before)
+
     def test_a_shortened_flag_is_refused(self):
         path = self.note("alias-probe.md", MEETING)
         before = path.read_bytes()
