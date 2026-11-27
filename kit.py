@@ -1203,7 +1203,10 @@ def cmd_llm_smoke(args) -> int:
 def _confidential(vault: Path, rel: str) -> bool:
     """True when the note is confidential — by its own `sensitivity`, or by a folder floor or path
     rule in `.kit/config.yml` — the line the MCP bridge enforces."""
-    if not rel or kitlib.is_external_link(rel):
+    # Only the two schemes a search provider can hand back as a hit. Not the link rule
+    # (`kitlib.is_external_link`): `Re: plan.md` is a note name on macOS and Linux, and a
+    # scheme-shaped name must not exempt a note from the check (#114).
+    if not rel or rel.startswith(("http://", "https://")):
         return False
     # The shared predicate fails closed like the bridge: an unreadable note, a YAML error or a
     # block a BOM hid counts as confidential. A path to no file stays False, as in the bridge.
