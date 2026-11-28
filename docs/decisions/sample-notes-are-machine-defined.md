@@ -1,6 +1,6 @@
 ---
 type: decision
-title: The sample set is defined by `example: true`, not by the title suffix
+title: "The sample set is defined by `example: true`, not by the title suffix"
 description: Frontmatter marks which notes ship as demonstration and `kit.py examples remove` deletes and repairs them; revisit if a sample ever needs to survive removal, or if Obsidian gains a native way to mark fixtures.
 tags: [vault, samples, onboarding]
 sources:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+import os
 import re
 import shutil
 import subprocess
@@ -255,6 +256,113 @@ class Workflow(unittest.TestCase):
         self.assertTrue(called <= targets, f"CI calls targets the Makefile lacks: {called - targets}")
         self.assertIn("check", called, "the Makefile claims CI runs `check`; it must")
 
+    def test_the_secret_scan_fails_closed(self):
+        """gitleaks exits 0 when git cannot read the history, and a shallow checkout hides it. (#53)
+
+        Its exit code covers leaks only, so the step has to check the rest itself: a full checkout,
+        a positive commit count and no `ERR` line, with the exit code surviving the `tee`.
+        """
+        steps = self.jobs["security"]["steps"]
+        checkout = next(s for s in steps if str(s.get("uses", "")).startswith("actions/checkout@"))
+        self.assertEqual((checkout.get("with") or {}).get("fetch-depth"), 0,
+                         "a shallow checkout scans only the fetched commits")
+        install = next((s for s in steps if "gitleaks" in str(s.get("name", "")).lower()
+                        and "install" in str(s.get("name", "")).lower()), None)
+        self.assertIsNotNone(install, "the security job no longer installs gitleaks")
+        self.assertIn("sha256sum -c", install["run"], "the gitleaks archive is no longer checksum-verified")
+        scans = [s for s in steps if re.search(r'gitleaks"?\s+git\b', s.get("run", ""))]
+        self.assertEqual(len(scans), 1, "exactly one step runs `gitleaks git`")
+        scan, run = scans[0], scans[0]["run"]
+        self.assertNotRegex(run, r'gitleaks"?\s+detect\b', "`detect` is deprecated; use `gitleaks git`")
+        self.assertTrue(scan.get("shell") == "bash" or "pipefail" in run,
+                        "without pipefail the `tee` swallows gitleaks' exit code, and a leak passes")
+        self.assertIn("tee", run, "the scan's log is what the count and ERR checks read")
+        self.assertIn("--no-color", run, "ANSI codes hide the count and the ERR level from the checks")
+        self.assertIn("--is-shallow-repository", run, "the step must refuse a shallow checkout")
+        self.assertIn("commits scanned", run, "the step must require a positive commit count")
+        self.assertRegex(run, r"-gt 0", "the step must require a positive commit count")
+        self.assertIn(" ERR ", run, "the step must fail on any ERR line")
+        self.assertRegex(run, r'\[ "\$shallow" = false \]\s*\\?\s*\|\|\s*\{[^}]*::error::[^}]*exit 1; \}',
+                         "the step must refuse a shallow checkout, not just ask git whether it is one")
+        self.assertGreaterEqual(run.count("::error::"), 5, "each failure names its cause in an ::error::")
+
+    # A stand-in for gitleaks: prints $STUB_OUT and exits 0, or, with STUB_LEAK set, exits with
+    # the code the step passed in --exit-code, as gitleaks does when it finds a leak.
+    STUB_GITLEAKS = ('#!/bin/sh\ncode=0\nwhile [ $# -gt 0 ]; do [ "$1" = --exit-code ] && code=$2; shift; done\n'
+                     'printf \'%s\\n\' "$STUB_OUT"\n[ -n "$STUB_LEAK" ] && exit "$code"\nexit 0\n')
+
+    def run_secret_scan(self, repo: Path, runner_temp: Path, out: str, leak: bool = False):
+        """Run the scan step's own script the way Actions runs `shell: bash`, against the stub."""
+        step = next(s for s in self.jobs["security"]["steps"] if re.search(r'gitleaks"?\s+git\b', s.get("run", "")))
+        script = runner_temp / "step.sh"
+        script.write_text(step["run"], encoding="utf-8")
+        env = {**os.environ, "RUNNER_TEMP": str(runner_temp), "STUB_OUT": out,
+               "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+               "GIT_CEILING_DIRECTORIES": str(runner_temp.parent)}  # no repository above the temp dir counts
+        env.pop("STUB_LEAK", None)
+        if leak:
+            env["STUB_LEAK"] = "1"
+        return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=repo,
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", env=env,
+                              timeout=60, check=False)
+
+    @unittest.skipIf(os.name == "nt" or not (shutil.which("bash") and shutil.which("git")),
+                     "needs bash and git, as the ubuntu runner has; native Windows' bash may be WSL's")
+    def test_the_secret_scan_fails_closed_when_run(self):
+        """The step's script, run: each way gitleaks can pass without scanning the history fails it. (#53)
+
+        String checks on the step miss a check that is present but disarmed (an `exit 0` at the end,
+        a dropped `fail=1`, `--exit-code 0`); running the script does not.
+        """
+        with tempfile.TemporaryDirectory(prefix="okf-gitleaks-") as tmp:
+            tmp = Path(tmp)
+            temp, full, shallow, bare = tmp / "runner", tmp / "full", tmp / "shallow", tmp / "not-a-repo"
+            for d in (temp, full, bare):
+                d.mkdir()
+            stub = temp / "gitleaks"
+            stub.write_text(self.STUB_GITLEAKS, encoding="utf-8")
+            stub.chmod(0o755)
+            git_env = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                       "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+
+            def git(*args, cwd=full):
+                subprocess.run(["git", *args], cwd=cwd, env=git_env, check=True, capture_output=True)
+            git("init", "-q")
+            for n in (1, 2):
+                (full / "note.md").write_text(f"{n}\n", encoding="utf-8")
+                git("add", "note.md")
+                git("commit", "-q", "-m", str(n))
+            git("clone", "-q", "--depth", "1", full.resolve().as_uri(), str(shallow), cwd=tmp)
+
+            clean = "4:50PM INF 2 commits scanned.\n4:50PM INF no leaks found"
+            r = self.run_secret_scan(full, temp, clean)
+            self.assertEqual(r.returncode, 0, f"a clean full scan must pass:\n{r.stdout}{r.stderr}")
+            failing = {
+                "a leak": (full, clean.replace("no leaks found", "leaks found: 1"), True, "exited non-zero"),
+                "an ERR line": (full, "4:50PM ERR failed to read a commit\n4:50PM INF 1 commits scanned.",
+                                False, "logged an error"),
+                "0 commits scanned": (full, "4:50PM INF 0 commits scanned.", False, "scanned 0 commits"),
+                "no count at all": (full, "4:50PM INF no leaks found", False, "scanned no commits"),
+                "a shallow checkout": (shallow, clean, False, "shallow checkout"),
+                "no repository": (bare, clean, False, "git cannot read"),
+            }
+            for case, (repo, out, leak, why) in failing.items():
+                with self.subTest(case):
+                    r = self.run_secret_scan(repo, temp, out, leak)
+                    self.assertNotEqual(r.returncode, 0, f"{case} must fail the step:\n{r.stdout}{r.stderr}")
+                    self.assertIn("::error::", r.stdout)
+                    self.assertIn(why, r.stdout, f"the ::error:: line must say why ({case})")
+
+    def test_qmd_is_pinned_and_the_pin_is_documented(self):
+        """An unpinned qmd turns the e2e lane red or green with no change here. (#91)"""
+        install = next((s for s in self.jobs["qmd-e2e"]["steps"] if "@tobilu/qmd" in s.get("run", "")), None)
+        self.assertIsNotNone(install, "the qmd-e2e job no longer installs qmd")
+        pin = re.search(r"bun install -g @tobilu/qmd@(\d+\.\d+\.\d+)(?=\s|$)", install["run"])
+        self.assertIsNotNone(pin, "qmd must be installed at an exact version, bumped in its own PR")
+        testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
+        self.assertIn(f"@tobilu/qmd@{pin.group(1)}", testing, "docs/testing.md must name the version CI pins")
+
 
 class LintGate(unittest.TestCase):
     """Ruff is the Python gate, and it hangs off `make lint` — so CI picks it up with no job of its own."""
@@ -310,6 +418,97 @@ class SuiteBootstrap(unittest.TestCase):
                 self.assertLess(inserted.start(), imported.start(),
                                 f"{path.name} imports the bridge before the sys.path insert that makes it importable")
         self.assertTrue(checked, "no test module imports the bridge; this guard has gone stale")
+
+
+class SuiteTimeout(unittest.TestCase):
+    """A hung test fails the run and names itself, rather than holding CI until the job times out. (#94)
+
+    `make check` runs the suite through `kit.py test`, which is unittest, so pytest-timeout does not
+    reach it; the runner arms its own limit, for each test and for the class and module fixtures.
+    """
+
+    HANGS = ("import time\nimport unittest\n\n\nclass Hangs(unittest.TestCase):\n"
+             "    def test_blocks_forever(self):\n        time.sleep(600)\n")
+
+    def test_a_hung_test_is_stopped_with_a_traceback_that_names_it(self):
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "test_hangs.py").write_text(self.HANGS, encoding="utf-8")
+            env = {**os.environ, "KIT_TEST_TIMEOUT": "2", "PYTHONIOENCODING": "utf-8"}
+            try:
+                r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+            except subprocess.TimeoutExpired:
+                self.fail("the runner let a hung test run past its limit")
+        self.assertNotEqual(r.returncode, 0, "a hung test must fail the run")
+        self.assertIn("test_blocks_forever", r.stderr, "the output must name the test that hung")
+        self.assertIn("Timeout", r.stderr, "the traceback dump says the limit was hit")
+
+    # unittest runs class and module fixtures outside startTest/stopTest, so a limit armed only
+    # there let a hung setUpClass (where test_e2e_qmd.py indexes with qmd) run unbounded.
+    FIXTURE_HANGS = {
+        "setUpModule": "def setUpModule():\n    time.sleep(8)\n\n\n",
+        "setUpClass": "",
+        "tearDownClass": "",
+    }
+
+    def fixture_module(self, where: str) -> str:
+        body = "import time\nimport unittest\n\n\n" + self.FIXTURE_HANGS[where]
+        body += "class Fixture(unittest.TestCase):\n"
+        if where in ("setUpClass", "tearDownClass"):
+            body += f"    @classmethod\n    def {where}(cls):\n        time.sleep(8)\n\n"
+        return body + "    def test_passes(self):\n        pass\n"
+
+    def test_a_hung_class_or_module_fixture_is_stopped_too(self):
+        import kit
+        for where in self.FIXTURE_HANGS:
+            with self.subTest(fixture=where), tempfile.TemporaryDirectory() as tmp:
+                Path(tmp, "test_fixture_hangs.py").write_text(self.fixture_module(where), encoding="utf-8")
+                env = {**os.environ, "KIT_TEST_TIMEOUT": "1", "PYTHONIOENCODING": "utf-8"}
+                r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+                self.assertNotEqual(r.returncode, 0, f"a hung {where} must fail the run:\n{r.stderr}")
+                self.assertIn("Timeout", r.stderr, "the traceback dump says the limit was hit")
+                self.assertIn(where, r.stderr, "the traceback names the fixture that hung")
+
+    def test_a_limit_the_runner_cannot_arm_is_refused(self):
+        """`nan` switched the limit off without a word; `inf` and 1e10 crashed the first test. (#94)"""
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "test_quick.py").write_text(
+                "import unittest\n\n\nclass Quick(unittest.TestCase):\n    def test_passes(self):\n        pass\n",
+                encoding="utf-8")
+            for value in ("nan", "inf", "-inf", "1e10", "-1", "soon"):
+                with self.subTest(KIT_TEST_TIMEOUT=value):
+                    env = {**os.environ, "KIT_TEST_TIMEOUT": value, "PYTHONIOENCODING": "utf-8"}
+                    r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                                       encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+                    self.assertNotEqual(r.returncode, 0, f"KIT_TEST_TIMEOUT={value} must be refused")
+                    self.assertIn("KIT_TEST_TIMEOUT", r.stderr, "the refusal names the setting")
+                    self.assertNotIn("Traceback", r.stderr, "a refusal, not a crash")
+
+    def test_the_limit_can_be_switched_off(self):
+        import kit
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "test_quick.py").write_text(
+                "import unittest\n\n\nclass Quick(unittest.TestCase):\n    def test_passes(self):\n        pass\n",
+                encoding="utf-8")
+            env = {**os.environ, "KIT_TEST_TIMEOUT": "0", "PYTHONIOENCODING": "utf-8"}
+            r = subprocess.run(kit.test_command(Path(tmp), Path(tmp)), capture_output=True, text=True,
+                               encoding="utf-8", errors="replace", env=env, timeout=90, check=False)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Ran 1 test", r.stderr)
+
+    def test_pytest_runs_under_the_same_limit(self):
+        """`python -m pytest` is the documented alternative; it gets pytest-timeout at the runner's limit."""
+        import tomllib
+
+        from tests import runner
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        extra = project["project"]["optional-dependencies"]["test"]
+        self.assertTrue(any(re.match(r"pytest-timeout\b", dep) for dep in extra),
+                        "pytest-timeout belongs in the test extra, or the ini timeout below means nothing")
+        self.assertEqual(float(project["tool"]["pytest"]["ini_options"]["timeout"]), runner.DEFAULT_LIMIT)
 
 
 class WheelLane(unittest.TestCase):

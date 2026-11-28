@@ -20,10 +20,13 @@ version = { file = "VERSION" }
 
 [project.optional-dependencies]
 mcp = ["mcp>=2,<3"]  # the bridge targets the 2.x server API; a new major renames it again
-test = ["pytest>=8"]
+test = ["pytest>=8", "pytest-timeout>=2"]  # the timeout below; `kit.py test` has its own (tests/runner.py)
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Per test, in seconds, so a hang fails and names the test (#94). The same limit as tests/runner.py, which
+# `kit.py test` and CI use; test_release.py holds the two together. `--timeout=0` switches it off.
+timeout = 300
 
 [tool.ruff]
 # The modules are dense on purpose: a guard clause and its consequence share a line. This width is

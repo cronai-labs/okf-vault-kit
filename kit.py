@@ -1278,10 +1278,16 @@ def cmd_llm_ask(args) -> int:
 
 # ---------------------------------------------------------------- test
 
+def test_command(start: Path, top: Path, pattern: str | None = None) -> list[str]:
+    """unittest discovery through tests/runner.py, which stops a test that hangs (KIT_TEST_TIMEOUT)."""
+    cmd = [sys.executable, str(ROOT / "tests" / "runner.py"), "discover", "-s", str(start), "-t", str(top), "-v"]
+    if pattern:
+        cmd += ["-p", pattern]
+    return cmd
+
+
 def cmd_test(args) -> int:
-    cmd = [sys.executable, "-m", "unittest", "discover", "-s", str(ROOT / "tests"), "-t", str(ROOT), "-v"]
-    if args.pattern:
-        cmd += ["-p", args.pattern]
+    cmd = test_command(ROOT / "tests", ROOT, args.pattern)
     return subprocess.call(cmd, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
 
 

@@ -78,9 +78,12 @@ jobs:
       # Fails closed: if qmd cannot be installed, the job fails. test_e2e_qmd.py skips itself
       # when qmd is not on PATH, so a lane that carried on without it would report green
       # having tested nothing. `qmd doctor` proves it is on PATH before the tests run.
+      # Pinned (#91): unpinned, a qmd release turned this lane red or green with no change here.
+      # The pin is the version the lane last passed with; bump it in its own PR, together with
+      # the version docs/testing.md names, which tests/test_release.py holds to this line.
       - name: install qmd
         run: |
-          bun install -g @tobilu/qmd
+          bun install -g @tobilu/qmd@2.9.0
           qmd doctor
       - run: make test-qmd PY=3.12
 
@@ -186,8 +189,29 @@ jobs:
             "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
           echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
           tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+      # Fails closed (#53). gitleaks' exit code covers leaks only: when git cannot read the history
+      # it logs ERR, reports 0 commits scanned and exits 0, and a shallow checkout scans only the
+      # fetched commits. So the step refuses a shallow checkout and reads the log for a positive
+      # count and no ERR line. `shell: bash` runs with pipefail, so a leak's exit code survives
+      # the tee; --no-color keeps ANSI codes out of what the checks match. tests/test_release.py
+      # asserts this shape and runs this script against a stand-in gitleaks, one case per check.
       - name: secrets, over the whole history
-        run: '"$RUNNER_TEMP/gitleaks" detect --redact --no-banner --exit-code 1'
+        shell: bash
+        run: |
+          shallow=$(git rev-parse --is-shallow-repository) \
+            || { echo "::error::git cannot read this checkout, so gitleaks could not scan it"; exit 1; }
+          [ "$shallow" = false ] \
+            || { echo "::error::shallow checkout: gitleaks would scan only the fetched commits; keep fetch-depth: 0"; exit 1; }
+          log="$RUNNER_TEMP/gitleaks.log"
+          fail=0
+          "$RUNNER_TEMP/gitleaks" git --redact --no-banner --no-color --exit-code 1 . 2>&1 | tee "$log" \
+            || { echo "::error::gitleaks exited non-zero: leaks found, or the scan failed (see above)"; fail=1; }
+          n=$(sed -n 's/.* \([0-9][0-9]*\) commits scanned.*/\1/p' "$log" | tail -n 1)
+          [ "${n:-0}" -gt 0 ] || { echo "::error::gitleaks scanned ${n:-no} commits"; fail=1; }
+          if grep -q ' ERR ' "$log"; then
+            echo "::error::gitleaks logged an error: the history was not fully read"; fail=1
+          fi
+          exit "$fail"
       - name: python SAST
         run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py kitagent.py mcp -ll
 

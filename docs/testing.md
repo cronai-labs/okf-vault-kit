@@ -5,8 +5,10 @@ The suite is plain `unittest` (runs with `pytest` too). Offline tests always run
 ```bash
 uv run --with 'mcp>=2,<3' kit.py test           # everything, verbose (the SDK enables the real MCP session test)
 uv run kit.py test -p "test_bridge.py"          # one module
-python -m pytest tests -q                       # if you prefer pytest (needs pyyaml installed)
+python -m pytest tests -q                       # if you prefer pytest (needs pyyaml and pytest-timeout installed)
 ```
+
+Every test, and every class or module fixture (`setUpClass`, `setUpModule` and their teardowns), runs under a time limit, 300 seconds by default, so a hang fails the run and says where instead of holding CI until the job's `timeout-minutes`. `kit.py test` (and so `make check` and CI) runs the suite through `tests/runner.py`, which keeps a `faulthandler` watchdog armed for the whole run and restarts it whenever a test starts or stops: past the limit it prints every thread's traceback and exits 1. A hung test is named by the line the verbose runner printed last; a hung fixture by its frame in the traceback. `KIT_TEST_TIMEOUT` changes the limit; a value that is not a finite, non-negative number the platform's timer can hold is refused. Under pytest the same limit comes from `pytest-timeout` in the `test` extra and `timeout` in `pyproject.toml`; `--timeout=0` switches it off there. Without the plugin installed, pytest warns `Unknown config option: timeout` and runs with no limit.
 
 ## Layers
 
@@ -25,7 +27,7 @@ python -m pytest tests -q                       # if you prefer pytest (needs py
 | `test_graph.py` | ontology loading/inheritance/aliases; template graph is clean; injected faults produce the right findings; resolver methods; derived facts (trust, stale → at-risk propagation, transitive supersedes, state conflicts); JSON determinism; N-Triples well-formedness and vocabulary mapping; JSON-LD shape; SQLite views and recursive CTEs; artifacts on disk | nothing |
 | `test_reconcile.py` | hub drift/missing rows detected and applied (free text and escaped pipes preserved, newest-first register, rows with spaces in the filename round-trip); superseded state written back without reformatting the rest of the frontmatter; back-dated log entries stay newest-first; task parsing; duplicates, done/open conflicts, `--sync-done` owner and recurring guards; digest validity; entity detection; minutes extraction and end-to-end filing (frontmatter, sections, log, daily link, no overwrite) | nothing |
 | `test_security.py` | policy layer (deny/allow lists, read-only tool surface, confidential hiding across read/search/list/todos/graph, size and rate limits, propose mode, audit log); `proposals` CLI list/apply/reject; bearer-token check and ASGI middleware | nothing |
-| `test_docs.py` | docs exist, relative links resolve, H1 present, README indexes docs, CLI commands mentioned exist, every declared and documented `mcp` pin matches `pyproject.toml`, `tools.md` lists every tool the bridge registers | nothing |
+| `test_docs.py` | docs exist, relative links resolve, H1 present, README indexes docs, CLI commands mentioned exist, every declared and documented `mcp` pin matches `pyproject.toml`, `tools.md` lists every tool the bridge registers, every decision record's frontmatter parses and carries `type`, `title`, `description`, `verified_on` and `stale_after` | nothing |
 | `test_e2e_qmd.py` | qmd indexes a temp copy of the vault with `XDG_CONFIG_HOME`/`XDG_CACHE_HOME` redirected into a temp directory, so your own collections and index database are never touched (the GGUF models are symlinked from the real cache rather than downloaded again); keyword search finds the concept note, `get` works; the bridge searching through qmd and still hiding a confidential note qmd returns (needs qmd's models in the cache, so CI skips it); vector/hybrid query and `bench` behind flags | `qmd` on PATH |
 | `test_e2e_llm.py` | endpoint lists models, follows a one-line instruction, answers a grounded question from a decision note, `kit.py llm smoke`; behind `KIT_E2E_TOOLS=1`: tool-call emission, and the model driving the real bridge (its own `list_tools` schemas over stdio, the calls it emits run against the bridge, then a text answer) | a running OpenAI-compatible endpoint |
 
@@ -40,8 +42,9 @@ Last real-model run, 2026-11-25, `minicpm5-2b` in LM Studio on macOS with `KIT_E
 | `KIT_LLM_BASE_URL` | endpoint (default `http://localhost:1234/v1`); Ollama: `http://localhost:11434/v1` |
 | `KIT_LLM_MODEL` | model id to use (default: first listed) |
 | `KIT_LLM_API_KEY` | bearer token if the server requires one |
-| `KIT_E2E_EMBED=1` | run `qmd embed` + vector + hybrid queries (downloads models once, minutes on CPU) |
-| `KIT_E2E_BENCH=1` | run `qmd bench` with `tests/fixtures/qmd-bench.json` |
+| `KIT_E2E_EMBED=1` | run `qmd embed` + vector + hybrid queries (downloads models once, minutes on CPU; raise `KIT_TEST_TIMEOUT` or set it to 0) |
+| `KIT_E2E_BENCH=1` | run `qmd bench` with `tests/fixtures/qmd-bench.json` (also embeds first; the same note on `KIT_TEST_TIMEOUT`) |
+| `KIT_TEST_TIMEOUT` | limit in seconds for each test and each class or module fixture under `kit.py test` (default 300; 0 switches it off). Raise it for the embed and bench tiers, and for `test_e2e_llm.py` on a slow local model: one model call may take 180 s and `llm smoke` 300 s |
 | `KIT_E2E_TOOLS=1` | assert the model emits an OpenAI-style tool call, and that it can drive the bridge's real tools to an answer |
 | `KIT_VAULT` | default vault path for `kit.py` commands |
 
@@ -96,4 +99,8 @@ On Linux, make bubblewrap usable first: on Ubuntu 24.04 its AppArmor restriction
 
 ## CI
 
-`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.14, and on ubuntu also with 3.12 and 3.13, through `astral-sh/setup-uv`. A `qmd-e2e` job installs qmd via `oven-sh/setup-bun` and runs `test_e2e_qmd.py` (keyword tier only — no model downloads); only its install step is advisory, and the job is one of the checks `ci-required` waits for. Endpoint tests never run in CI.
+`.github/workflows/ci.yml` runs the offline suite on ubuntu, macos and windows with Python 3.11 and 3.14, and on ubuntu also with 3.12 and 3.13, through `astral-sh/setup-uv`. A `qmd-e2e` job installs qmd at a pinned version, `bun install -g @tobilu/qmd@2.9.0`, via `oven-sh/setup-bun`, and runs `test_e2e_qmd.py` (keyword tier only — no model downloads). The install fails closed: `test_e2e_qmd.py` skips itself without qmd, so a job that carried on without it would report green having tested nothing. The job is one of the checks `ci-required` waits for. Endpoint tests never run in CI.
+
+The qmd pin is the version the lane last passed with, and it moves in its own PR, never on a whim: an unpinned qmd turned the lane red or green with no change in this repository. `test_release.py` checks that this page names the version `ci.yml` installs.
+
+Running the qmd lane locally: qmd's native `better-sqlite3` module is built for the Node that was first on PATH when qmd was installed. On a machine with two Nodes (Homebrew's and nvm's, say), the lane then fails with a `NODE_MODULE_VERSION` error until qmd is reinstalled under the Node that runs it.
