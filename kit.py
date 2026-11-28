@@ -1036,9 +1036,12 @@ def cmd_config_migrate(args) -> int:
     if move or drop_copy or set_aside:
         # A kit up to 0.3 reads only the old file, and with it gone applies no floors: not on a machine
         # still on that kit, a clone the push reaches, nor in a bridge started before the upgrade.
-        lines.append(f"{'before --apply' if not args.apply else 'before you push this'}: upgrade the kit on every "
-                     f"machine and restart any running bridge — a kit up to 0.3 reads only {kitlib.LEGACY_CONFIG_REL} "
-                     "and applies no confidentiality floors once it is gone")
+        why = f"a kit up to 0.3 reads only {kitlib.LEGACY_CONFIG_REL} and applies no confidentiality floors once it is gone"
+        if args.apply:
+            lines.append(f"now: restart any running bridge, which serves without floors until it reloads — {why}")
+            lines.append(f"before you push this: upgrade the kit on every machine and clone — {why}")
+        else:
+            lines.append(f"before --apply: upgrade the kit on every machine and restart any running bridge — {why}")
     if not args.apply:
         print("\n".join(lines))
         print("dry run: nothing written; add --apply to make these changes")

@@ -337,10 +337,14 @@ class Migrate(_Vault):
     def test_it_says_to_upgrade_every_machine_before_the_old_file_goes(self):
         """A kit before #135 reads only `.kit/config.yml`, and a missing one means no floors: a
         bridge started before the upgrade, or a clone on an older kit, would apply none."""
-        for flags in ((), ("--apply",)):
-            r = migrate(self.v, *flags)
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("upgrade the kit on every machine and restart any running bridge", r.stdout)
+        r = migrate(self.v)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("before --apply: upgrade the kit on every machine and restart any running bridge", r.stdout)
+        r = migrate(self.v, "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # The old file is gone by then: a bridge started before the upgrade already serves without floors.
+        self.assertIn("now: restart any running bridge", r.stdout)
+        self.assertIn("before you push this: upgrade the kit on every machine", r.stdout)
         self.assertNotIn("restart any running bridge", migrate(self.v).stdout, "nothing to do: nothing to say")
 
     def test_the_sample_vault_is_refused_without_vault(self):
@@ -466,6 +470,26 @@ class AgentSettings(_Vault):
         self.assertIn("Edit(./.okf-vault-kit.yaml)", plan.deny)
         self.assertIn("./.okf-vault-kit.yaml", plan.deny_write)
         self.assertTrue(any("kit.py config migrate --apply" in n for n in plan.notes))
+
+    def test_a_config_in_force_at_the_old_place_stays_readable_to_the_agent_s_shell(self):
+        """`.kit/` is denied whole, and a denied path can read as missing (bubblewrap): the agent's own
+        kit runs would then find no config and apply no floors. While the old file is the config in
+        force it is re-opened to the shell, the setup the Linux run tested before #135; the file tools
+        stay denied. Once it is moved, the entry goes."""
+        for config in (CONFIG, OPEN_CONFIG):
+            with self.subTest(open_folders="open_folders" in config):
+                for f in (NEW, kitlib.LEGACY_CONFIG_REL):
+                    (self.v / f).unlink(missing_ok=True)
+                write(self.v, NEW, config)
+                to_old_place(self.v)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    plan = self.plan()
+                self.assertIn("./.kit/config.yml", plan.allow_read)
+                self.assertNotIn("./.kit", plan.allow_read, "only the file, never the folder")
+                self.assertIn("./.kit/config.yml", plan.deny_write)
+                self.assertEqual(migrate(self.v, "--apply").returncode, 0)
+                plan = self.plan()
+                self.assertNotIn("./.kit/config.yml", plan.allow_read)
 
 
 class TheBridge(_Vault):

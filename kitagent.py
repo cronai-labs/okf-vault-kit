@@ -378,16 +378,20 @@ def _kit_state(rel: str) -> bool:
 
 def _legacy_config(root: Path, plan: Plan) -> None:
     """A vault whose config is still at `.kit/config.yml` (#135): protect that file against writes as
-    well, since it is the policy in force, and say that `.kit/` is now denied whole, so the agent's
-    own kit runs cannot read it there and hide everything (fail closed) until it is moved."""
+    well, since it is the policy in force, keep it readable to the agent's shell inside the denied
+    `.kit/`, and flag it until it is moved."""
     if not kitlib._present(root / kitlib.LEGACY_CONFIG_REL):
         return
     plan.deny.append(f"Edit(./{kitlib.LEGACY_CONFIG_REL})")
     plan.deny_write.append(f"./{kitlib.LEGACY_CONFIG_REL}")
     if kitlib.config_rel(root) == kitlib.LEGACY_CONFIG_REL:
+        # `.kit/` is denied whole, and a denied path can read as missing rather than refused (bubblewrap):
+        # the agent's own kit runs would then find no config and apply no floors. So the file in force is
+        # re-opened to the shell alone, the setup the Linux run tested before #135; the file tools stay denied.
+        plan.allow_read.append(f"./{kitlib.LEGACY_CONFIG_REL}")
         plan.notes.append(f"the config is still at {kitlib.LEGACY_CONFIG_REL}, inside {KIT_STATE}/, which is denied "
-                          "whole: the agent's own kit runs cannot read the policy there and hide everything from it. "
-                          f"Move it with `{kitlib.CONFIG_MIGRATE} --apply`, then run this again")
+                          "whole: that one file stays readable to the agent's shell so its own kit runs keep the "
+                          f"floors. Move it with `{kitlib.CONFIG_MIGRATE} --apply`, then run this again")
         plan.flags.append(f"config still at {kitlib.LEGACY_CONFIG_REL}: run `{kitlib.CONFIG_MIGRATE}`")
 
 
@@ -599,7 +603,7 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     allow.append(f"./{kitlib.CONFIG_REL}")
     if allow_git and (root / ".git").is_dir() and "./.git" not in allow:
         allow.append("./.git")
-    plan.allow_read = allow
+    plan.allow_read = allow + [a for a in plan.allow_read if a not in allow]
     # The guard: literal names, matched as the predicate matches (case and Unicode form aside). Taken
     # from the export, not from `found`: that holds the folder the deny rules climb to for a name they
     # cannot match, and the guard would then refuse that name's neighbours, which the predicate leaves open.
