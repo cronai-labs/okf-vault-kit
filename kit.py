@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import datetime as dt
+import fnmatch
 import importlib.metadata
 import json
 import os
@@ -198,6 +199,10 @@ def cmd_doctor(args) -> int:
         # and cannot answer the one question it exists for: is my own vault healthy?
         sample = " — the kit's sample; pass --vault or set KIT_VAULT to describe yours" if vault == TEMPLATE_VAULT.resolve() else ""
         rows.append(("vault", str(vault), f"{rep.checked} notes, {len(rep.errors)} OKF error(s), {len(rep.warnings)} warning(s){sample}"))
+        # The sample lives in the kit's own checkout, whose git rules are the kit's, not a vault's.
+        git_row = None if vault.resolve() == TEMPLATE_VAULT.resolve() else _vault_git_row(vault)
+        if git_row:
+            rows.append(("vault git", "-", git_row))
     else:
         rows.append(("vault", str(vault), "not found — run `kit.py init`"))
     w = max(len(r[0]) for r in rows)
@@ -209,6 +214,78 @@ def cmd_doctor(args) -> int:
         out.write_text(_report(rows, vault), encoding="utf-8", newline="\n")
         print(f"\nreport written: {out}  — no note content in it; safe to send")
     return 0 if py_ok else 1
+
+
+# Paths that stand for "would `git add .` commit this?". They need not exist: the point is to warn
+# before the first commit. The plugin id is made up, and no real plugin is probed: a real one that
+# is not ignored is one the user re-included (`!.obsidian/plugins/<id>/data.json`), which
+# docs/vault-guide.md recommends, so it is not warned about.
+_GIT_PROBES = {
+    ".kit/": (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/probe.json"),
+    "plugin settings": (".obsidian/plugins/okf-kit-probe/data.json",),
+}
+# The fix picks files by the ignore rules, not by folder, so it never untracks a file the user
+# re-included (one plugin's data.json). `.kit/config.yml` is named: a vault from before the
+# `.kit/*` rule ignores it, so `ls-files -ci` lists it there, and it holds the floors a clone needs.
+# No glob in it either: the report's redactor reads `*/data.json` as an absolute path and cuts it.
+_GIT_FIX = "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists in the vault, except .kit/config.yml"
+# Kept in git whatever rule covers it: the confidentiality floors and open folders (#54).
+_GIT_KEPT = kitproviders.CONFIG_REL.as_posix()
+
+
+def _git(git: str, vault: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run([git, "-C", str(vault), *args], input=stdin, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", check=False, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _vault_git_row(vault: Path) -> str | None:
+    """Would the vault's git take in `.kit/` state or plugin settings? Counts only (#54).
+
+    None (no row) without git on PATH or outside a git work tree. Nothing here names a path from
+    inside the vault: the row goes into the doctor report. Informational; doctor's exit code
+    ignores it.
+    """
+    git = _which("git")     # spawned by its resolved path, as `_qmd` explains for Windows shims
+    if not git:
+        return None
+    inside = _git(git, vault, "rev-parse", "--is-inside-work-tree")
+    if inside is None or inside.returncode != 0 or inside.stdout.strip() != "true":
+        return None
+    tracked = _git(git, vault, "ls-files", "-z", "--", ".kit", ":(glob).obsidian/plugins/*/data.json")
+    if tracked is None or tracked.returncode != 0:
+        return "cannot check: git did not answer"
+    tracked_paths = [p for p in tracked.stdout.split("\0") if p]
+    probes = [p for group in _GIT_PROBES.values() for p in group]
+    # --no-index: answer from the ignore rules alone, so a tracked file still says whether a rule
+    # covers it. -v -n: one record per path, naming the deciding pattern (empty when none matches),
+    # so a re-included path (`!...`) is told apart from one no rule covers.
+    verdict = _git(git, vault, "check-ignore", "--no-index", "-v", "-n", "--stdin", "-z",
+                   stdin="".join(f"{p}\0" for p in (*probes, *tracked_paths)))
+    if verdict is None or verdict.returncode not in (0, 1):
+        return "cannot check: git did not answer"
+    fields = verdict.stdout.split("\0")
+    # Records are source, line, pattern, path; a path given twice keeps its one answer.
+    pattern = {fields[i + 3]: fields[i + 2] for i in range(0, len(fields) - 3, 4)}
+    if any(p not in pattern for p in (*probes, *tracked_paths)):
+        return "cannot check: git did not answer"
+    hit = {p for p, pat in pattern.items() if pat and not pat.startswith("!")}
+    exposed = [name for name, group in _GIT_PROBES.items() if any(p not in hit for p in group)]
+    # Tracked and re-included is the user's choice; tracked and ignored, or with no rule, is the leak.
+    # The config is neither: it belongs in git, under any rule.
+    n_tracked = len([p for p in tracked_paths if p != _GIT_KEPT and not pattern[p].startswith("!")])
+    parts = []
+    if n_tracked:
+        parts.append(f"WARNING: {n_tracked} file(s) under .kit/ or plugin data.json already tracked — "
+                     + ("add the lines `kit.py init` writes to .gitignore, then " if exposed else "")
+                     + f"run {_GIT_FIX}, and commit; if that history was pushed, rewrite it "
+                     "and rotate any key it holds")
+    if exposed:
+        parts.append(f"warning: not ignored: {', '.join(exposed)} — `git add .` would commit them; "
+                     "add the lines `kit.py init` writes to .gitignore (docs/vault-guide.md)")
+    return "; ".join(parts) or "ok — .kit/ state and plugin settings are ignored"
 
 
 # The redactor lives in kitredact so `testkit/` can share it without importing this module or
@@ -248,11 +325,73 @@ def _report(rows: list[tuple[str, str, str]], vault: Path) -> str:
 
 # ---------------------------------------------------------------- init
 
+# What `init` leaves out of the copy: per-machine state the template vault picks up in a checkout.
+# After a plain `graph build` there, `vault/.kit/` holds the sample's graph, audit log and proposals.
+# Paths from the template root, one glob per segment: matched at every depth, they dropped a notes
+# folder named `cache` or a note's `workspace-plan.json`. The template's `.kit/config.yml` is
+# copied on its own, after the copy (`_copy_template_config`).
+TEMPLATE_STATE = (".kit", ".obsidian/workspace*.json", ".obsidian/cache")
+
+
+def _template_state(root: Path):
+    """A `copytree` ignore callable that leaves out TEMPLATE_STATE under `root`, and only there."""
+    patterns = [tuple(pat.split("/")) for pat in TEMPLATE_STATE]
+
+    def ignore(src: str, names: list[str]) -> set[str]:
+        here = Path(src).relative_to(root).parts
+        return {name for name in names for pat in patterns
+                if len(pat) == len(here) + 1
+                and all(fnmatch.fnmatch(part, glob) for part, glob in zip((*here, name), pat, strict=True))}
+    return ignore
+
+
+def _copy_template_config(target: Path) -> None:
+    """Copy the template's `.kit/config.yml`, the one file under `.kit/` that is not machine state.
+
+    Never over the vault's own: under `init --force` that would swap its confidential folders for
+    the template's, and open what it hid without a word.
+    """
+    src = TEMPLATE_VAULT / kitproviders.CONFIG_REL
+    dst = target / kitproviders.CONFIG_REL
+    if src.is_file() and not (dst.exists() or dst.is_symlink()):
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(src, dst)
+
+# Written from code, not shipped as `vault/.gitignore`: `copytree` overwrites what it copies, so a
+# template file would replace a user's own .gitignore under `init --force`, and the repository's
+# root .gitignore must stay the rule that ignores the checkout's generated paths (tests/test_release.py).
+VAULT_GITIGNORE = """\
+# per-machine kit state: graph, bridge audit log, proposals, agent settings
+.kit/*
+# except the kit config: confidential folders, path rules and open folders must reach every clone
+!.kit/config.yml
+# Obsidian window layout: changes with every window, conflicts across machines
+.obsidian/workspace*.json
+# Obsidian cache: rebuilt on each machine
+.obsidian/cache
+# plugin settings; some hold credentials (Local REST API's key) - re-include one with !.obsidian/plugins/<id>/data.json
+.obsidian/plugins/*/data.json
+"""
+
+
+def _write_vault_gitignore(target: Path) -> None:
+    """Give a new vault the ignore file it needs before its first `git add .`; never touch an existing one."""
+    gi = target / ".gitignore"
+    if gi.exists() or gi.is_symlink():
+        print("kept the existing .gitignore — the lines a vault needs are in docs/vault-guide.md (Sync and safety)")
+        return
+    gi.write_text(VAULT_GITIGNORE, encoding="utf-8", newline="\n")
+    print("wrote .gitignore — keeps .kit/ state (all but config.yml), Obsidian's workspace and cache, "
+          "and plugin settings out of git")
+
+
 def cmd_init(args) -> int:
     target = Path(args.target).expanduser().resolve()
     if target.exists() and any(target.iterdir()) and not args.force:
         sys.exit(f"{target} exists and is not empty (use --force to overwrite files)")
-    shutil.copytree(TEMPLATE_VAULT, target, dirs_exist_ok=True)
+    shutil.copytree(TEMPLATE_VAULT, target, dirs_exist_ok=True, ignore=_template_state(TEMPLATE_VAULT))
+    _copy_template_config(target)
+    _write_vault_gitignore(target)
     actor = args.actor
     if actor:
         if not kitlib.ACTOR.match(actor) or not actor.startswith("human:"):

@@ -66,7 +66,22 @@ Daily (5 min) · after key meetings (5 min) · Friday weekly review (25 min, the
 ## Sync and safety
 
 - One machine at a time on synced folders (OneDrive, iCloud, Nextcloud); conflict copies appear as `… (conflicted copy).md`.
-- Git works well for engineers (`.obsidian/workspace.json` in `.gitignore`); OKF explicitly recommends git as the bundle distribution form.
+- Git works well for engineers; OKF explicitly recommends git as the bundle distribution form. `kit.py init` writes the vault's `.gitignore`, so `git add .` leaves out what is per-machine:
+
+  ```gitignore
+  # per-machine kit state: graph, bridge audit log, proposals, agent settings
+  .kit/*
+  # except the kit config: confidential folders, path rules and open folders must reach every clone
+  !.kit/config.yml
+  # Obsidian window layout: changes with every window, conflicts across machines
+  .obsidian/workspace*.json
+  # Obsidian cache: rebuilt on each machine
+  .obsidian/cache
+  # plugin settings; some hold credentials (Local REST API's key) - re-include one with !.obsidian/plugins/<id>/data.json
+  .obsidian/plugins/*/data.json
+  ```
+
+  `init` writes it only when the vault has none; under `--force` an existing `.gitignore` is left byte for byte, so add these lines yourself to a vault that predates them. Plugin settings then stay on each machine; re-include one plugin's settings, such as the Linter's, with `!.obsidian/plugins/<id>/data.json`. `init` also leaves the template's own `.kit/` state, workspace files and cache (`.obsidian/workspace*.json`, `.obsidian/cache`) out of the copy; a template `.kit/config.yml` is copied, but never over a vault's own under `--force`. `.kit/config.yml` is the one file under `.kit/` that git keeps: it holds the [confidential folders and path rules](security.md#scoped-hiding-confidential-folders-and-path-rules) and the open folders, so a clone enforces the same floors as the machine it came from. It also carries what else the file declares, the qmd collection name and provider choices, into the history and every clone. The kit reads no credential from it; keep it that way, since git keeps whatever you write there. The rule is `.kit/*` and not `.kit/`, because git cannot re-include a file below a folder it excludes. A vault whose `.gitignore` still says `.kit/` keeps its config out of git: replace that line with the two above, then `git add .kit/config.yml`. In a vault inside a git work tree, `kit.py doctor` has a `vault git` row: a warning when `.kit/` or plugin settings are not ignored, before the first commit, and the count of such files already tracked with the fix: `git rm --cached` on each file `git ls-files -ci --exclude-standard` lists, except `.kit/config.yml` (a pushed history also needs rewriting, and any key in it rotating). A file you re-included with a `!` line is your choice: it is neither warned about nor counted, and the fix leaves it tracked. A tracked `.kit/config.yml` is never counted, whatever rule covers it. It names no path and does not change doctor's exit code; it is not shown for the kit's own sample vault.
 - `sensitivity: confidential` notes (people) should never be attached to a cloud model. With its default policy the bridge hides them from the model, and the kit leaves their titles, descriptions, paths and tasks out of the files it generates. A coding agent's own file and shell tools are not the bridge: started in the vault or above it, the agent reads every note unless its settings deny the folder — [security.md §5](security.md#5-coding-agents-and-other-direct-readers).
 - No credentials in any note, at any sensitivity: passwords, API keys, tokens, recovery codes, and links that grant access to whoever holds them. Write where the secret is kept, never the secret — the model reads every note that is not confidential through the bridge, a coding agent's own tools can read every note, and git keeps whatever was committed.
 - Obsidian's *File recovery* core plugin keeps snapshots; `09-archive` is excluded from views, and the qmd example config ignores it.

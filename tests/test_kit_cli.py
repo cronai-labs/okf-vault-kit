@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -920,6 +921,326 @@ class InitRecordsItsChoices(unittest.TestCase):
             self.assertIn("qmd collection add", r.stdout, "the manual command must name the vault")
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+
+# What a vault kept in git must leave out (#54). The lines are the contract with the docs.
+VAULT_IGNORES = (".kit/*", "!.kit/config.yml", ".obsidian/workspace*.json", ".obsidian/cache", ".obsidian/plugins/*/data.json")
+
+
+def git_env(**extra) -> dict:
+    """An environment where neither the developer's global or system git config nor git's default
+    excludes file (`$XDG_CONFIG_HOME/git/ignore`, read even with no config) can change what
+    `git check-ignore` answers: one that ignores `.kit/` would hide the bug."""
+    env = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_COUNT="1",
+               GIT_CONFIG_KEY_0="core.excludesFile", GIT_CONFIG_VALUE_0=os.devnull, **extra)
+    for var in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+        env.pop(var, None)
+    return env
+
+
+def git_in(where: Path, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=where, capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", check=False, env=git_env())
+
+
+class InitKeepsMachineStateOutOfGit(unittest.TestCase):
+    """`init` gave new vaults no .gitignore, so `git add .` committed `.kit/` and plugin credentials."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="okf-init-git-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+
+    def test_init_writes_a_gitignore_with_one_comment_per_line(self):
+        target = self.tmp / "v"
+        r = run("init", "--target", str(target), "--no-qmd")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        gi = target / ".gitignore"
+        self.assertTrue(gi.is_file(), "init must write <vault>/.gitignore")
+        lines = gi.read_text(encoding="utf-8").splitlines()
+        patterns = [ln for ln in lines if ln and not ln.startswith("#")]
+        self.assertEqual(tuple(patterns), VAULT_IGNORES)
+        for ln in patterns:
+            above = lines[lines.index(ln) - 1]
+            self.assertTrue(above.startswith("# "), f"{ln!r} needs its own comment saying why")
+        guide = (ROOT / "docs" / "vault-guide.md").read_text(encoding="utf-8")
+        for ln in lines:
+            self.assertIn(ln, guide, "docs/vault-guide.md shows the file init writes; keep them the same")
+
+    @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+    def test_the_written_gitignore_ignores_what_it_says(self):
+        target = self.tmp / "v"
+        self.assertEqual(run("init", "--target", str(target), "--no-qmd").returncode, 0)
+        self.assertEqual(git_in(target, "init", "-q").returncode, 0)
+        for path in (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/x.json",
+                     ".kit/agent-settings/claude-code.json", ".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/cache",
+                     ".obsidian/plugins/obsidian-local-rest-api/data.json"):
+            with self.subTest(path=path):
+                self.assertEqual(git_in(target, "check-ignore", "-q", "--no-index", path).returncode, 0,
+                                 f"{path} would be committed")
+        for path in ("index.md", ".kit/config.yml", ".obsidian/app.json",
+                     ".obsidian/plugins/obsidian-linter/main.js"):
+            with self.subTest(path=path):
+                self.assertEqual(git_in(target, "check-ignore", "-q", "--no-index", path).returncode, 1,
+                                 f"{path} belongs in the vault's history")
+
+    @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+    def test_git_add_keeps_the_kit_config_and_leaves_the_rest_of_kit_out(self):
+        """The config holds the confidentiality floors and open folders: a clone needs it (#54).
+        git cannot re-include a file below an excluded folder, so the rule must be `.kit/*`."""
+        target = self.tmp / "v"
+        self.assertEqual(run("init", "--target", str(target), "--no-qmd").returncode, 0)
+        for rel in (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/hidden-draft.json",
+                    ".kit/agent-settings/claude-code.json"):
+            p = target / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("{}", encoding="utf-8")
+        self.assertEqual(git_in(target, "init", "-q").returncode, 0)
+        self.assertEqual(git_in(target, "add", ".").returncode, 0)
+        self.assertEqual(git_in(target, "ls-files", ".kit").stdout.split(), [".kit/config.yml"])
+
+    def test_force_leaves_an_existing_gitignore_byte_identical(self):
+        target = self.tmp / "v"
+        target.mkdir()
+        mine = b"# my own rules\r\n*.pdf\r\nprivate/"          # CRLF, no trailing newline
+        (target / ".gitignore").write_bytes(mine)
+        r = run("init", "--target", str(target), "--no-qmd", "--force")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual((target / ".gitignore").read_bytes(), mine)
+
+    def test_a_populated_checkout_does_not_seed_the_new_vault(self):
+        """After a plain `graph build` in the checkout, `init` copied the sample's `.kit/` state."""
+        import kit
+        template = self.tmp / "template"
+        shutil.copytree(VAULT, template, ignore=shutil.ignore_patterns(".kit"))
+        for rel in (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/hidden-draft.json",
+                    ".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/cache/state"):
+            p = template / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("{}", encoding="utf-8")
+        target = self.tmp / "v"
+        with mock.patch.object(kit, "TEMPLATE_VAULT", template), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(kit.main(["init", "--target", str(target), "--no-qmd"]), 0)
+        self.assertEqual(sorted(p.name for p in (target / ".kit").iterdir()), ["config.yml"])
+        for rel in (".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/cache"):
+            self.assertFalse((target / rel).exists(), f"{rel} is per-machine state of the checkout")
+        self.assertTrue((target / ".obsidian" / "app.json").is_file(), "the settings themselves still travel")
+
+    def init_from(self, template: Path, target: Path, *extra: str) -> None:
+        import kit
+        with mock.patch.object(kit, "TEMPLATE_VAULT", template), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(kit.main(["init", "--target", str(target), "--no-qmd", *extra]), 0)
+
+    def template_with(self, files: dict[str, str]) -> Path:
+        template = self.tmp / "template"
+        shutil.copytree(VAULT, template, ignore=shutil.ignore_patterns(".kit"))
+        for rel, text in files.items():
+            p = template / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text, encoding="utf-8")
+        return template
+
+    def test_only_the_template_root_s_state_is_left_out(self):
+        """The patterns matched at every depth: a notes folder named `cache`, or a note's
+        `workspace-plan.json`, was dropped from the copy."""
+        notes = ("07-knowledge/cache/hidden-note.md", "03-projects/.kit/hidden.md",
+                 "03-projects/workspace-plan.json", "03-projects/cache")
+        template = self.template_with({rel: "kept" for rel in notes})
+        target = self.tmp / "v"
+        self.init_from(template, target)
+        for rel in notes:
+            with self.subTest(rel=rel):
+                self.assertTrue((target / rel).is_file(), f"{rel} is the user's content, not machine state")
+
+    def test_the_template_s_kit_config_is_copied_and_its_state_is_not(self):
+        """The config holds the floors and open folders; the rest of `.kit/` is per-machine."""
+        config = "# the template's floors\nconfidential_folders: [05-people]\ncollection: \"tpl\"\n"
+        template = self.template_with({".kit/config.yml": config, ".kit/graph.json": "{}",
+                                       ".kit/proposals/hidden-draft.json": "{}"})
+        target = self.tmp / "v"
+        self.init_from(template, target)
+        self.assertEqual(sorted(p.name for p in (target / ".kit").iterdir()), ["config.yml"])
+        self.assertEqual((target / ".kit" / "config.yml").read_text(encoding="utf-8"), config)
+
+    def test_force_keeps_the_vault_s_own_kit_config(self):
+        """`copytree` overwrites: under `--force` the template's config would replace the
+        vault's own floors, and its confidential folders would go open without a word."""
+        template = self.template_with({".kit/config.yml": "collection: \"tpl\"\n"})
+        target = self.tmp / "v"
+        mine = b"confidential_folders: [hidden-folder]\r\ncollection: \"mine\"\r\n"
+        (target / ".kit").mkdir(parents=True)
+        (target / ".kit" / "config.yml").write_bytes(mine)
+        self.init_from(template, target, "--force")
+        self.assertEqual((target / ".kit" / "config.yml").read_bytes(), mine)
+
+
+@unittest.skipUnless(shutil.which("git"), "git not on PATH")
+class DoctorVaultGitRow(unittest.TestCase):
+    """Doctor warns before the first commit that `.kit/` or plugin settings would go into git."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="okf-doctor-git-"))
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.vault = self.tmp / "vault"
+        shutil.copytree(VAULT, self.vault, ignore=shutil.ignore_patterns(".kit"))
+
+    def doctor(self, *extra, env=None):
+        r = run("doctor", "--vault", str(self.vault), "--base-url", "http://127.0.0.1:9", *extra,
+                env=env or git_env(GIT_CEILING_DIRECTORIES=str(self.tmp)))
+        self.assertEqual(r.returncode, 0, "the row is informational; doctor's exit code must not change\n"
+                         + r.stdout + r.stderr)
+        return r.stdout
+
+    @staticmethod
+    def row(out: str) -> str:
+        return next((ln for ln in out.splitlines() if ln.startswith("vault git")), "")
+
+    def test_an_unignored_kit_folder_is_a_warning_before_the_first_commit(self):
+        self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("warning", row)
+        self.assertIn(".kit/", row)
+        self.assertIn("plugin", row)
+
+    def test_a_tracked_kit_file_is_counted_with_the_fix(self):
+        self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+        for rel in (".kit/hidden-state.json", ".obsidian/plugins/hidden-plugin/data.json"):
+            p = self.vault / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("{}", encoding="utf-8")
+        self.assertEqual(git_in(self.vault, "add", "-f", ".kit", ".obsidian").returncode, 0)
+        report = self.tmp / "doctor.txt"
+        row = self.row(self.doctor("--report", str(report)))
+        self.assertIn("2 file(s)", row)
+        self.assertIn("git rm --cached", row)
+        self.assertIn("git ls-files -ci --exclude-standard", row, "the fix picks files by the rules, not by folder")
+        self.assertIn("rotate", row, "a pushed key is in the remote's history; removing it is not enough")
+        text = report.read_text(encoding="utf-8")
+        import kit
+        self.assertIn(kit._GIT_FIX, text, "the report must carry the fix unmangled")
+        for leak in ("hidden-state", "hidden-plugin", str(self.vault)):
+            self.assertNotIn(leak, text, "the report carries no path from inside the vault")
+
+    def test_a_vault_made_by_init_is_ok(self):
+        shutil.rmtree(self.vault)
+        self.assertEqual(run("init", "--target", str(self.vault), "--no-qmd").returncode, 0)
+        self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+        row = self.row(self.doctor())
+        self.assertTrue(row, "inside a work tree the row is there")
+        self.assertNotIn("warning", row.lower())
+
+    def test_no_row_outside_a_work_tree(self):
+        out = self.doctor()
+        self.assertEqual(self.row(out), "")
+        self.assertIn("vault", out)
+
+    def test_no_row_for_the_kit_s_own_sample(self):
+        """The sample sits in the kit's checkout: its git rules are the kit's, not a vault's."""
+        r = run("doctor", "--vault", str(VAULT), "--base-url", "http://127.0.0.1:9", env=git_env())
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.row(r.stdout), "")
+
+    def test_no_row_and_no_failure_without_git(self):
+        self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+        empty = self.tmp / "empty-path"
+        empty.mkdir()
+        out = self.doctor(env=git_env(PATH=str(empty)))
+        self.assertEqual(self.row(out), "")
+
+    # A vault made by `init`, under git, with `lines` added to its .gitignore and `files` written.
+    def init_vault(self, lines: tuple[str, ...] = (), files: tuple[str, ...] = ()):
+        # Git writes its object files read-only; on Windows that makes rmtree fail with
+        # "Access is denied" when a test builds a second vault in the same place.
+        for d, _, names in os.walk(self.vault):
+            for n in names:
+                os.chmod(os.path.join(d, n), stat.S_IWRITE | stat.S_IREAD)
+        shutil.rmtree(self.vault)
+        self.assertEqual(run("init", "--target", str(self.vault), "--no-qmd").returncode, 0)
+        self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+        if lines:
+            with (self.vault / ".gitignore").open("a", encoding="utf-8", newline="\n") as fh:
+                fh.write("".join(f"{ln}\n" for ln in lines))
+        for rel in files:
+            p = self.vault / rel
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("{}", encoding="utf-8")
+
+    LINTER = ".obsidian/plugins/obsidian-linter/data.json"
+
+    def test_a_re_included_plugin_is_not_a_warning(self):
+        """docs/vault-guide.md recommends `!.obsidian/plugins/<id>/data.json`; doctor warned about it."""
+        self.init_vault(lines=(f"!{self.LINTER}",), files=(self.LINTER,))
+        row = self.row(self.doctor())
+        self.assertIn("ok", row)
+        self.assertNotIn("warning", row.lower())
+
+    def test_a_committed_re_included_plugin_is_not_counted(self):
+        self.init_vault(lines=(f"!{self.LINTER}",), files=(self.LINTER,))
+        self.assertEqual(git_in(self.vault, "add", self.LINTER).returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("ok", row)
+        self.assertNotIn("warning", row.lower())
+
+    def test_kit_config_kept_in_git_is_not_counted(self):
+        """The ignore file init writes keeps `.kit/config.yml`, the floors and open folders, in
+        git. Doctor must not then tell the user to untrack it."""
+        self.init_vault()
+        self.assertEqual(git_in(self.vault, "add", ".").returncode, 0)
+        self.assertIn(".kit/config.yml", git_in(self.vault, "ls-files", ".kit").stdout.split())
+        row = self.row(self.doctor())
+        self.assertIn("ok", row)
+        self.assertNotIn("warning", row.lower())
+
+    def test_a_tracked_kit_config_is_never_counted(self):
+        """Whatever rule covers it, a tracked `.kit/config.yml` is where it belongs (#54). A vault
+        with no rule for `.kit`, or one from before the `.kit/*` rule that force-added it, gets the
+        count of the other files only."""
+        for lines in ((), (".kit/",)):
+            with self.subTest(lines=lines):
+                self.init_vault(files=(".kit/graph.json",))
+                gi = self.vault / ".gitignore"
+                kept = [ln for ln in gi.read_text(encoding="utf-8").splitlines() if not ln.startswith((".kit", "!.kit"))]
+                gi.write_text("".join(f"{ln}\n" for ln in (*kept, *lines)), encoding="utf-8", newline="\n")
+                self.assertEqual(git_in(self.vault, "add", "-f", ".kit/config.yml", ".kit/graph.json").returncode, 0)
+                row = self.row(self.doctor())
+                self.assertIn("WARNING: 1 file(s)", row)
+
+    def test_only_files_the_rules_cover_are_counted_and_the_fix_lists_just_those(self):
+        hidden = ".obsidian/plugins/hidden-plugin/data.json"
+        self.init_vault(lines=(f"!{self.LINTER}",), files=(self.LINTER, hidden))
+        self.assertEqual(git_in(self.vault, "add", "-f", self.LINTER, hidden).returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("WARNING: 1 file(s)", row)
+        self.assertNotIn("not ignored", row)
+        import kit
+        self.assertIn(kit._GIT_FIX, row)
+        # The fix names its files by the rules, so it leaves the re-included plugin tracked.
+        listed = git_in(self.vault, "ls-files", "-ci", "--exclude-standard")
+        self.assertEqual(listed.stdout.split(), [hidden])
+
+    def test_a_tracked_file_under_an_ignore_rule_is_counted_not_reported_unignored(self):
+        """`git check-ignore` without --no-index answers "not ignored" for any tracked path."""
+        self.init_vault(files=(".kit/graph.json", ".obsidian/plugins/hidden-plugin/data.json"))
+        self.assertEqual(git_in(self.vault, "add", "-f", ".kit/graph.json",
+                                ".obsidian/plugins/hidden-plugin/data.json").returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("WARNING: 2 file(s)", row)
+        self.assertNotIn("not ignored", row)
+
+    def test_git_that_does_not_answer_is_said_so(self):
+        import kit
+        real = kit._git
+        fatal = subprocess.CompletedProcess([], 128, "", "fatal")
+        # Each git call fails on its own, the others answer for real; then git that prints nothing.
+        for verb, broken in (("ls-files", fatal), ("ls-files", None), ("check-ignore", fatal),
+                             ("check-ignore", None),
+                             ("check-ignore", subprocess.CompletedProcess([], 0, "", ""))):
+            def git(g, v, *args, stdin=None, verb=verb, broken=broken):
+                return broken if args[0] == verb else real(g, v, *args, stdin=stdin)
+
+            with self.subTest(verb=verb, broken=broken), mock.patch.object(kit, "_git", side_effect=git), \
+                    mock.patch.dict(os.environ, git_env(GIT_CEILING_DIRECTORIES=str(self.tmp))):
+                self.assertEqual(git_in(self.vault, "init", "-q").returncode, 0)
+                self.assertEqual(kit._vault_git_row(self.vault), "cannot check: git did not answer")
 
 
 class DoctorKeepsDiagnosing(unittest.TestCase):
