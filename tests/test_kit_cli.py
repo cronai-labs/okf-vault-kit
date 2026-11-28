@@ -1008,6 +1008,27 @@ class InitKeepsMachineStateOutOfGit(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual((target / ".gitignore").read_bytes(), mine)
 
+    @unittest.skipUnless(shutil.which("git"), "git not on PATH")
+    def test_force_on_a_vault_with_the_old_config_and_no_gitignore_keeps_that_config_in_git(self):
+        """The plain `.kit/` rule would ignore a `.kit/config.yml` still in force, and `git add .`
+        would leave the floors out. Such a vault gets the block a kit before #135 wrote, which
+        `config migrate` turns into `.kit/` when it moves the file."""
+        target = self.tmp / "v"
+        (target / ".kit").mkdir(parents=True)
+        (target / ".kit" / "config.yml").write_text("confidential_folders: [hidden-folder]\n", encoding="utf-8")
+        r = run("init", "--target", str(target), "--no-qmd", "--force")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertNotIn(".okf-vault-kit.yaml stays in", r.stdout)
+        self.assertIn(".kit/config.yml stays in", r.stdout)
+        (target / ".kit" / "graph.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(git_in(target, "init", "-q").returncode, 0)
+        self.assertEqual(git_in(target, "add", ".").returncode, 0)
+        self.assertEqual(git_in(target, "ls-files", ".kit").stdout.split(), [".kit/config.yml"])
+        m = run("config", "migrate", "--vault", str(target), "--apply")
+        self.assertEqual(m.returncode, 0, m.stdout + m.stderr)
+        lines = (target / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertEqual(tuple(ln for ln in lines if ln and not ln.startswith("#")), VAULT_IGNORES)
+
     def test_a_populated_checkout_does_not_seed_the_new_vault(self):
         """After a plain `graph build` in the checkout, `init` copied the sample's `.kit/` state."""
         import kit
@@ -1221,6 +1242,20 @@ class DoctorVaultGitRow(unittest.TestCase):
                 self.assertIn("WARNING: .okf-vault-kit.yaml is ignored by git", self.row(self.doctor()))
         self.init_vault(lines=(".*", "!.okf-vault-kit.yaml"))
         self.assertNotIn(".okf-vault-kit.yaml", self.row(self.doctor()), "re-included: kept")
+
+    def test_an_ignored_old_config_in_force_is_a_warning(self):
+        """A vault still on `.kit/config.yml` under the plain `.kit/` rule: `git add .` leaves the
+        floors out, and a clone has none. The row said ok, since it asked about the new name only."""
+        self.init_vault()
+        (self.vault / ".kit").mkdir(exist_ok=True)
+        (self.vault / ".okf-vault-kit.yaml").replace(self.vault / ".kit" / "config.yml")
+        row = self.row(self.doctor())
+        self.assertIn("WARNING: .kit/config.yml is ignored by git", row)
+        self.assertIn("kit.py config migrate --apply", row)
+        self.assertNotIn("WARNING: .okf-vault-kit.yaml", row)
+        with (self.vault / ".gitignore").open("a", encoding="utf-8", newline="\n") as fh:
+            fh.write("!.kit/\n.kit/*\n!.kit/config.yml\n")
+        self.assertNotIn(".kit/config.yml is ignored", self.row(self.doctor()), "re-included: kept")
 
     def test_a_tracked_old_config_is_counted_and_the_fix_moves_it_first(self):
         """The config is no longer named by the row (#135): an old `.kit/config.yml` tracked under a

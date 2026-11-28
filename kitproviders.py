@@ -107,9 +107,11 @@ def read_config(vault: Path | None) -> dict[str, Any]:
     if not vault:
         return {}
     path = kitlib.config_path(Path(vault))
-    if not path.exists():
-        return {}
     try:
+        # Inside the guard: before Python 3.14 `exists()` raises on a folder that may not be read,
+        # such as a `.kit/` an agent's sandbox denies while the config is still in it (#135).
+        if not path.exists():
+            return {}
         import yaml
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
     except Exception:  # noqa: BLE001 — a broken config must not stop the CLI working

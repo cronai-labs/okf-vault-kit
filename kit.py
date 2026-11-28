@@ -280,21 +280,28 @@ def _vault_git_row(vault: Path) -> str | None:
     # covers it. -v -n: one record per path, naming the deciding pattern (empty when none matches),
     # so a re-included path (`!...`) is told apart from one no rule covers.
     # The config is asked about whether it exists or not: a rule that ignores it drops the floors from
-    # every clone, and from the first commit once the file is written.
+    # every clone, and from the first commit once the file is written. A config still at its old place
+    # is asked about too: the plain `.kit/` rule ignores it, and it is the file in force (#135).
+    legacy = kitlib.config_rel(vault) == kitlib.LEGACY_CONFIG_REL
+    configs = (kitlib.CONFIG_REL, kitlib.LEGACY_CONFIG_REL) if legacy else (kitlib.CONFIG_REL,)
     verdict = _git(git, vault, "check-ignore", "--no-index", "-v", "-n", "--stdin", "-z",
-                   stdin="".join(f"{p}\0" for p in (*probes, *tracked_paths, kitlib.CONFIG_REL)))
+                   stdin="".join(f"{p}\0" for p in (*probes, *tracked_paths, *configs)))
     if verdict is None or verdict.returncode not in (0, 1):
         return "cannot check: git did not answer"
     fields = verdict.stdout.split("\0")
     # Records are source, line, pattern, path; a path given twice keeps its one answer.
     pattern = {fields[i + 3]: fields[i + 2] for i in range(0, len(fields) - 3, 4)}
-    if any(p not in pattern for p in (*probes, *tracked_paths, kitlib.CONFIG_REL)):
+    if any(p not in pattern for p in (*probes, *tracked_paths, *configs)):
         return "cannot check: git did not answer"
     hit = {p for p, pat in pattern.items() if pat and not pat.startswith("!")}
     exposed = [name for name, group in _GIT_PROBES.items() if any(p not in hit for p in group)]
     # Tracked and re-included is the user's choice; tracked and ignored, or with no rule, is the leak.
     n_tracked = len([p for p in tracked_paths if not pattern[p].startswith("!")])
     parts = []
+    if legacy and kitlib.LEGACY_CONFIG_REL in hit:
+        parts.append(f"WARNING: {kitlib.LEGACY_CONFIG_REL} is ignored by git and is the config in force — a clone "
+                     "would lose the confidentiality floors, path rules and open folders it declares; move it out "
+                     f"of .kit/ with `{kitlib.CONFIG_MIGRATE} --apply`")
     if kitlib.CONFIG_REL in hit:
         parts.append(f"WARNING: {kitlib.CONFIG_REL} is ignored by git — a clone would lose the confidentiality "
                      "floors, path rules and open folders it declares; remove the rule that ignores it "
@@ -396,14 +403,22 @@ VAULT_GITIGNORE = """\
 
 
 def _write_vault_gitignore(target: Path) -> None:
-    """Give a new vault the ignore file it needs before its first `git add .`; never touch an existing one."""
+    """Give a new vault the ignore file it needs before its first `git add .`; never touch an existing one.
+
+    A vault whose config is still at `.kit/config.yml` (`init --force` over a vault from before #135)
+    gets the block a kit before #135 wrote, which keeps that file in git: the plain `.kit/` rule would
+    ignore it and drop its floors from every clone. `config migrate` turns that block into `.kit/`.
+    """
     gi = target / ".gitignore"
     if gi.exists() or gi.is_symlink():
         print("kept the existing .gitignore — the lines a vault needs are in docs/vault-guide.md (Sync and safety)")
         return
-    gi.write_text(VAULT_GITIGNORE, encoding="utf-8", newline="\n")
+    config, text = kitlib.config_rel(target), VAULT_GITIGNORE
+    if config == kitlib.LEGACY_CONFIG_REL:
+        text = text.replace(f"\n{_NEW_KIT_RULE}\n", f"\n{_OLD_KIT_RULE}\n{_OLD_KEEP_COMMENT}\n{_OLD_KEEP_RULE}\n", 1)
+    gi.write_text(text, encoding="utf-8", newline="\n")
     print("wrote .gitignore — keeps .kit/ state, Obsidian's workspace and cache, and plugin settings out of git; "
-          f"{kitlib.CONFIG_REL} stays in")
+          f"{config} stays in" + (f" until `{kitlib.CONFIG_MIGRATE} --apply` moves it" if config != kitlib.CONFIG_REL else ""))
 
 
 def cmd_init(args) -> int:
@@ -978,18 +993,27 @@ def cmd_config_migrate(args) -> int:
             set_aside = True
     gi = vault / ".gitignore"
     gi_text = gi_note = None
-    if _OLD_KEEP_RULE in _read_quietly(gi):
-        by_hand = f"replace `{_OLD_KIT_RULE}` and `{_OLD_KEEP_RULE}` with `{_NEW_KIT_RULE}` by hand"
+    # Any rule that re-includes the old file, in whatever shape; only init's exact block is rewritten.
+    keep = [b.strip() for b in _read_quietly(gi).splitlines()
+            if b.strip().startswith("!") and b.strip().rstrip("/").endswith(kitlib.LEGACY_CONFIG_REL)]
+    if keep:
+        by_hand = (f"replace {' and '.join(f'`{k}`' for k in keep)} and the rule above it that ignores what is in "
+                   f".kit/ with one `{_NEW_KIT_RULE}` by hand")
         try:
-            gi_text = None if gi.is_symlink() else _migrated_gitignore(gi.read_bytes().decode("utf-8"))
             if gi.is_symlink():
                 gi_note = f"kept .gitignore: it is a link, which a write would replace with a file; {by_hand}"
+            else:
+                gi_text = _migrated_gitignore(gi.read_bytes().decode("utf-8"))
+                if gi_text is None:
+                    gi_note = f"kept .gitignore: its rules for .kit/ are not the block `init` wrote; {by_hand}"
         except (OSError, UnicodeDecodeError):
             gi_note = f"kept .gitignore: it cannot be read as UTF-8; {by_hand}"
     if not (move or set_aside or drop_copy or gi_text is not None):
         where = (f"the config is at {kitlib.CONFIG_REL}" if has_new else f"this vault has no {kitlib.CONFIG_REL}")
-        print(f"nothing to do: {where}, and no old {kitlib.LEGACY_CONFIG_REL} or .gitignore rule for it is left"
-              + (f" ({gi_note})" if gi_note else ""))
+        if gi_note:
+            print(f"nothing to move: {where}, and no old {kitlib.LEGACY_CONFIG_REL} is left; {gi_note}")
+        else:
+            print(f"nothing to do: {where}, and no old {kitlib.LEGACY_CONFIG_REL} or .gitignore rule for it is left")
         return 0
     verb = (lambda done, todo: done) if args.apply else (lambda done, todo: f"would {todo}")
     lines = []
@@ -1006,6 +1030,12 @@ def cmd_config_migrate(args) -> int:
                      f"`{_NEW_KIT_RULE}`, the rest is unchanged")
     if gi_note:
         lines.append(gi_note)
+    if move or drop_copy or set_aside:
+        # A kit up to 0.3 reads only the old file, and with it gone applies no floors: not on a machine
+        # still on that kit, a clone the push reaches, nor in a bridge started before the upgrade.
+        lines.append(f"{'before --apply' if not args.apply else 'before you push this'}: upgrade the kit on every "
+                     f"machine and restart any running bridge — a kit up to 0.3 reads only {kitlib.LEGACY_CONFIG_REL} "
+                     "and applies no confidentiality floors once it is gone")
     if not args.apply:
         print("\n".join(lines))
         print("dry run: nothing written; add --apply to make these changes")
@@ -1852,7 +1882,10 @@ def main(argv: list[str] | None = None) -> int:
                                     f"`{_OLD_KIT_RULE}` and `{_OLD_KEEP_RULE}` rules `init` wrote into .gitignore into "
                                     f"one `{_NEW_KIT_RULE}`. A dry run unless --apply is given. When both files exist, "
                                     f"{kitlib.CONFIG_REL} is in force and this refuses unless --force, which sets the "
-                                    f"old file aside as {_SET_ASIDE}. A second run says there is nothing to do.")
+                                    f"old file aside as {_SET_ASIDE}; an old file with the same bytes as the new one "
+                                    "(what a run stopped halfway leaves) is removed without it. A second run says "
+                                    "there is nothing to do. Upgrade the kit on every machine and restart any running "
+                                    "bridge first: a kit up to 0.3 applies no floors once the old file is gone.")
     p.add_argument("--vault")
     p.add_argument("--apply", action="store_true", help="make the changes (default: show them)")
     p.add_argument("--force", action="store_true",

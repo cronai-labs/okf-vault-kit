@@ -163,6 +163,20 @@ class TheResolver(_Vault):
                         kitlib.confidentiality_policy(self.v)
                     self.assertIsNone(kitlib.confidentiality(self.v, OPEN_REL))
 
+    @unittest.skipIf(os.name == "nt" or (hasattr(os, "geteuid") and os.geteuid() == 0),
+                     "needs POSIX modes that bind the user")
+    def test_an_old_config_in_a_folder_that_cannot_be_read_is_no_crash(self):
+        """agent-settings denies `.kit/` whole now, so a vault still on `.kit/config.yml` meets a
+        folder its own kit runs may not look into. Before Python 3.14 `Path.exists()` raised there,
+        outside the reader's guard, and the CLI stopped with a traceback; the floors fail closed."""
+        to_old_place(self.v)
+        os.chmod(self.v / ".kit", 0)
+        self.addCleanup(os.chmod, self.v / ".kit", 0o755)
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(kitproviders.read_config(self.v), {})
+            self.assertEqual(kitproviders.load_config(self.v), {})
+            self.assertIsNone(kitlib.confidentiality(self.v, OPEN_REL), "the floors fail closed")
+
     def test_a_new_path_that_is_no_file_is_never_passed_over(self):
         write(self.v, OLD, CONFIG)
         (self.v / NEW).unlink()
@@ -296,6 +310,39 @@ class Migrate(_Vault):
         self.assertIn("removed .kit/config.yml: it holds the same bytes", r.stdout)
         self.assertEqual(self.state()[:3], (self.bytes, None, None))
 
+    def test_a_gitignore_rule_it_cannot_rewrite_is_named_not_called_gone(self):
+        """Only init's exact block is rewritten. A keep rule in any other shape, or a .gitignore that
+        is a link, is left for the user, and the output says so rather than "no rule is left"."""
+        (self.v / OLD).replace(self.v / NEW)
+        for keep in ("!.kit/config.yml", "!/.kit/config.yml"):
+            rules = f"/.kit/*\n{keep}\n"
+            with self.subTest(keep=keep):
+                (self.v / ".gitignore").write_text(rules, encoding="utf-8", newline="")
+                for flags in ((), ("--apply",)):
+                    r = migrate(self.v, *flags)
+                    self.assertEqual(r.returncode, 0, r.stderr)
+                    self.assertNotIn("rule for it is left", r.stdout)
+                    self.assertIn("by hand", r.stdout)
+                    self.assertIn(f"`{keep}`", r.stdout)
+                self.assertEqual((self.v / ".gitignore").read_text(encoding="utf-8"), rules)
+        (self.v / ".gitignore").unlink()
+        (self.v / "elsewhere").write_text(self.gitignore, encoding="utf-8", newline="")
+        symlink(self, self.v / ".gitignore", "elsewhere")
+        r = migrate(self.v, "--apply")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertNotIn("rule for it is left", r.stdout)
+        self.assertIn("it is a link", r.stdout)
+        self.assertEqual((self.v / "elsewhere").read_bytes(), self.gitignore.encode())
+
+    def test_it_says_to_upgrade_every_machine_before_the_old_file_goes(self):
+        """A kit before #135 reads only `.kit/config.yml`, and a missing one means no floors: a
+        bridge started before the upgrade, or a clone on an older kit, would apply none."""
+        for flags in ((), ("--apply",)):
+            r = migrate(self.v, *flags)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertIn("upgrade the kit on every machine and restart any running bridge", r.stdout)
+        self.assertNotIn("restart any running bridge", migrate(self.v).stdout, "nothing to do: nothing to say")
+
     def test_the_sample_vault_is_refused_without_vault(self):
         r = run("config", "migrate", "--apply")
         self.assertEqual(r.returncode, 2, r.stdout)
@@ -407,6 +454,18 @@ class AgentSettings(_Vault):
         self.assertEqual(agent(self.v, "--apply").returncode, 0)
         self.assertEqual(kitagent.doctor_row(self.v)[1], "ok")
         self.assertNotIn("./.kit/config.yml", json.dumps(read_settings(self.v)))
+
+
+    def test_a_config_at_the_old_place_stays_write_protected_in_allow_open_mode_too(self):
+        write(self.v, NEW, OPEN_CONFIG)
+        to_old_place(self.v)
+        with contextlib.redirect_stderr(io.StringIO()):
+            plan = self.plan()
+        self.assertIn("Edit(./.kit/config.yml)", plan.deny)
+        self.assertIn("./.kit/config.yml", plan.deny_write)
+        self.assertIn("Edit(./.okf-vault-kit.yaml)", plan.deny)
+        self.assertIn("./.okf-vault-kit.yaml", plan.deny_write)
+        self.assertTrue(any("kit.py config migrate --apply" in n for n in plan.notes))
 
 
 class TheBridge(_Vault):
