@@ -1266,6 +1266,8 @@ class DoctorVaultGitRow(unittest.TestCase):
         row = self.row(self.doctor())
         self.assertIn("WARNING: 2 file(s)", row)
         self.assertIn("kit.py config migrate --apply` if the config is still at .kit/config.yml, then", row)
+        self.assertIn(".kit/config.yml is ignored by git but tracked", row, "a clone has it while it is tracked")
+        self.assertIn("once untracked", row)
 
     def test_only_files_the_rules_cover_are_counted_and_the_fix_lists_just_those(self):
         hidden = ".obsidian/plugins/hidden-plugin/data.json"

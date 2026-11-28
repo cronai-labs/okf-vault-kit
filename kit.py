@@ -299,9 +299,12 @@ def _vault_git_row(vault: Path) -> str | None:
     n_tracked = len([p for p in tracked_paths if not pattern[p].startswith("!")])
     parts = []
     if legacy and kitlib.LEGACY_CONFIG_REL in hit:
-        parts.append(f"WARNING: {kitlib.LEGACY_CONFIG_REL} is ignored by git and is the config in force — a clone "
-                     "would lose the confidentiality floors, path rules and open folders it declares; move it out "
-                     f"of .kit/ with `{kitlib.CONFIG_MIGRATE} --apply`")
+        # Tracked, a clone still has it, until the `git rm --cached` fix below untracks it.
+        held = ("but tracked, and is the config in force — once untracked, as the fix for .kit/ files does, a "
+                "clone would lose" if kitlib.LEGACY_CONFIG_REL in tracked_paths else
+                "and is the config in force — a clone would lose")
+        parts.append(f"WARNING: {kitlib.LEGACY_CONFIG_REL} is ignored by git {held} the confidentiality floors, path "
+                     f"rules and open folders it declares; move it out of .kit/ with `{kitlib.CONFIG_MIGRATE} --apply`")
     if kitlib.CONFIG_REL in hit:
         parts.append(f"WARNING: {kitlib.CONFIG_REL} is ignored by git — a clone would lose the confidentiality "
                      "floors, path rules and open folders it declares; remove the rule that ignores it "
