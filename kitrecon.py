@@ -7,7 +7,7 @@ Three concerns, all deterministic, all dry-run by default:
              note is the source of truth; hub rows are views. --apply rewrites hub cells, adds missing rows, sets
              derived states; it never touches free-text cells, and the only row it deletes is one that links to a
              note whose frontmatter says `sensitivity: confidential`, or that a folder or path rule in
-             `.kit/config.yml` covers (#52, #120).
+             `.okf-vault-kit.yaml` covers (#52, #120).
   todos      every `- [ ]` / `- [x]` in the vault with owner and due parsed from `— owner, due YYYY-MM-DD`;
              overdue / due-soon / duplicates / done-in-one-place-open-in-another; digest page; --sync-done.
   minutes    file a pasted recap as a meeting note: entities resolved through the graph, actions and decisions
@@ -194,7 +194,7 @@ def reconcile(vault: Path, apply: bool = False, g: kitgraph.Graph | None = None,
     if broken:
         # Every note reads as "could not tell", so every hub row is kept and reported unverifiable;
         # this line says where the cause is, since the row findings point at the notes (#120).
-        changes.append(Change("confidentiality_config", kitlib.CONFIG_REL,
+        changes.append(Change("confidentiality_config", kitlib.config_rel(vault),
                               f"{broken} — every note counts as confidential and no hub row is added or removed until it is fixed"))
     changes += _reconcile_superseded(vault, g, apply)       # derived states first …
     if apply and any(c.applied for c in changes):
@@ -766,7 +766,7 @@ def file_minutes(vault: Path, text: str, title: str, date: dt.date | None = None
     path, and a confidential project is neither linked nor stored. Names in `people:` that are not
     linked are also in `unresolved`.
 
-    Raises kitlib.PolicyConfigError in "raise" mode while `.kit/config.yml` is broken: every note
+    Raises kitlib.PolicyConfigError in "raise" mode while the kit config is broken: every note
     then reads as confidential, and the label this mode writes would outlive the fix (#120).
     """
     if mode not in MINUTES_MODES:

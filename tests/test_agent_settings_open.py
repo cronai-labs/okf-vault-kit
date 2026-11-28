@@ -162,10 +162,10 @@ class Guard(_Open):
         self.assertEqual(self.code("Read", {"file_path": ".git/HEAD"}, plan=plan), 2)
         self.assertIn("Read(./.claude/**)", plan.deny)
         self.assertIn("Read(./.git/**)", plan.deny)
-        self.assertEqual(plan.allow_read, ["./04-areas", "./.kit/config.yml"], "never re-opened to the shell")
+        self.assertEqual(plan.allow_read, ["./04-areas", "./.okf-vault-kit.yaml"], "never re-opened to the shell")
         self.assertIn("./.git", self.plan(allow_git=True).allow_read)
         self.assertNotIn("./.claude", self.plan(allow_git=True).allow_read)
-        self.assertEqual(self.plan(allow_git=True).allow_read, ["./.git", "./04-areas", "./.kit/config.yml"],
+        self.assertEqual(self.plan(allow_git=True).allow_read, ["./.git", "./04-areas", "./.okf-vault-kit.yaml"],
                          "a declared-open .git is listed once")
 
     def test_allow_git_lets_git_through(self):
@@ -251,7 +251,7 @@ class AllowOpenPlan(_Open):
         # `./` denies the vault on macOS; only `./*` did on Linux (bubblewrap ignored `./`).
         self.assertEqual(plan.deny_read[:2], ["./", "./*"])
         self.assertEqual(plan.deny[0], "Edit(./.claude/**)")
-        self.assertEqual(plan.allow_read, ["./04-areas", "./07-knowledge", "./08-resources", "./.kit/config.yml"])
+        self.assertEqual(plan.allow_read, ["./04-areas", "./07-knowledge", "./08-resources", "./.okf-vault-kit.yaml"])
         set_config(self.v, CONFIG)
         plan = self.plan()
         self.assertEqual((plan.mode, plan.allow_read, plan.hook), (kitagent.DENY_LIST, [], None))
@@ -268,7 +268,7 @@ class AllowOpenPlan(_Open):
         for entry in reads + plan.deny_read:                # `./` covers everything outside
             for outside in ("index.md", "log.md", "05-people", ".trash", "_drafts", ".kit", "00-home"):
                 self.assertNotIn(outside, entry)
-        self.assertFalse(any("not denied: .kit/config.yml" in n for n in plan.notes))
+        self.assertFalse(any("not denied: .okf-vault-kit.yaml" in n for n in plan.notes))
 
     def test_a_path_rule_that_cannot_reach_an_open_folder_is_left_to_the_root(self):
         set_config(self.v, CONFIG + '  open_folders: ["04-areas"]\n')
@@ -284,9 +284,10 @@ class AllowOpenPlan(_Open):
     def test_the_kits_own_files_inside_a_declared_open_folder_are_denied(self):
         set_config(self.v, CONFIG + '  open_folders: ["04-areas", ".kit"]\n')
         plan = self.plan()
-        for entry in ("Read(./.kit/agent-settings/**)", "Read(./.kit/graph.*)", "Read(./.kit/bridge-audit.jsonl)",
-                      "Read(./.kit/proposals/**)"):
-            self.assertIn(entry, plan.deny)
+        self.assertIn("Read(./.kit/**)", plan.deny)
+        self.assertIn("./.kit", plan.deny_read)
+        self.assertNotIn("./.kit", plan.allow_read, "the kit's machine state is never re-opened to the shell (#135)")
+        self.assertIn(".kit", plan.guard["folders"])
 
     def test_a_name_a_rule_cannot_match_climbs_inside_the_open_folder_only(self):
         write(self.v, "04-areas/sub/n#.md", MARKED)
@@ -422,14 +423,14 @@ class AllowOpenMerge(_Open):
         self.assertEqual(agent(self.v, "--remove", "--apply").returncode, 0)
 
 
-CONFIG_WRITE = ("Edit(./.kit/config.yml)", "Edit(./.kit/agent-settings/**)")
-DENY_WRITE = ["./.kit/config.yml", "./.kit/agent-settings"]
+CONFIG_WRITE = ("Edit(./.okf-vault-kit.yaml)", "Edit(./.kit/agent-settings/**)")
+DENY_WRITE = ["./.okf-vault-kit.yaml", "./.kit/agent-settings"]
 
 
 class WriteProtection(_Vault):
     """The config and the kit's manifest are write-protected against the agent's shell and file
-    tools, in both modes: a canary on Claude Code 2.1.330 appended to `.kit/config.yml` from the
-    shell, and the bridge reads that config live."""
+    tools, in both modes: a canary on Claude Code 2.1.330 appended to the config (then at
+    `.kit/config.yml`) from the shell, and the bridge reads that config live."""
 
     MODES = (CONFIG, OPEN_CONFIG)
 
@@ -457,10 +458,10 @@ class WriteProtection(_Vault):
     def test_the_users_own_deny_write_entries_stay_and_remove_takes_out_only_the_kits(self):
         for config in self.MODES:
             set_config(self.v, config)
-            mine = {"sandbox": {"filesystem": {"denyWrite": ["./mine", "./.kit/config.yml"]}}}
+            mine = {"sandbox": {"filesystem": {"denyWrite": ["./mine", "./.okf-vault-kit.yaml"]}}}
             write(self.v, SETTINGS, json.dumps(mine))
             self.assertEqual(agent(self.v, "--apply").returncode, 0, config)
-            self.assertEqual(self.deny_write(), ["./mine", "./.kit/config.yml", "./.kit/agent-settings"], config)
+            self.assertEqual(self.deny_write(), ["./mine", "./.okf-vault-kit.yaml", "./.kit/agent-settings"], config)
             m = json.loads((self.v / MANIFEST).read_text(encoding="utf-8"))
             self.assertEqual(m["sandbox.filesystem.denyWrite"], ["./.kit/agent-settings"], "the user's entry stays theirs")
             self.assertEqual(agent(self.v, "--remove", "--apply").returncode, 0, config)
@@ -476,8 +477,8 @@ class WriteProtection(_Vault):
     def test_a_removed_protection_is_drift(self):
         for config in self.MODES:
             set_config(self.v, config)
-            for drop in (lambda s: s["sandbox"]["filesystem"]["denyWrite"].remove("./.kit/config.yml"),
-                         lambda s: s["permissions"]["deny"].remove("Edit(./.kit/config.yml)"),
+            for drop in (lambda s: s["sandbox"]["filesystem"]["denyWrite"].remove("./.okf-vault-kit.yaml"),
+                         lambda s: s["permissions"]["deny"].remove("Edit(./.okf-vault-kit.yaml)"),
                          lambda s: s["permissions"]["deny"].remove("Edit(./.kit/agent-settings/**)"),
                          lambda s: s["sandbox"]["filesystem"].pop("denyWrite")):
                 self.assertEqual(agent(self.v, "--apply").returncode, 0, config)

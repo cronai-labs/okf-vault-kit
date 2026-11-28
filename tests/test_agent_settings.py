@@ -65,7 +65,7 @@ class PolicyExport(_Vault):
     def test_lists_folders_as_the_vault_spells_them_and_each_other_confidential_file(self):
         e = self.export()
         self.assertEqual(e["version"], 1)
-        self.assertEqual(e["source"], ".kit/config.yml")
+        self.assertEqual(e["source"], ".okf-vault-kit.yaml")
         # The config says 04-Areas/Board; the folder on disk is 04-areas/board, and a deny list
         # matches literally, so the disk's spelling is what goes out.
         self.assertEqual(e["confidential_folders"], ["04-areas/board"])
@@ -171,13 +171,13 @@ class PolicyExport(_Vault):
         self.assertIn("unknown key", r.stderr)
         r = agent(self.v)
         self.assertEqual((r.returncode, r.stdout), (2, ""))
-        self.assertIn(".kit/config.yml", r.stderr)
+        self.assertIn(".okf-vault-kit.yaml", r.stderr)
 
 
 class Plan(_Vault):
     def test_entries_for_folders_paths_files_and_the_manifest(self):
         plan = kitagent.claude_code_plan(self.v, self.export())
-        for perm, sbx in (("Read(./.kit/agent-settings/**)", "./.kit/agent-settings"),
+        for perm, sbx in (("Read(./.kit/**)", "./.kit"),
                           ("Read(./04-areas/board/**)", "./04-areas/board"),
                           ("Read(./08-resources/exports/*.csv)", "./08-resources/exports/*.csv"),
                           (f"Read(./{RAISED_REL})", f"./{RAISED_REL}"),
@@ -189,35 +189,35 @@ class Plan(_Vault):
         # The agent may not edit its own settings, the config or the manifest: under bypassPermissions
         # Claude Code does not protect `.claude/` by itself, and the settings hold every rule here.
         self.assertEqual([e for e in plan.deny if not e.startswith("Read(")], [kitagent.EDIT_CLAUDE, *kitagent.EDIT_PROTECTED])
-        self.assertNotIn("Read(./.kit/config.yml)", plan.deny)   # the agent's own kit runs need it
+        self.assertNotIn("Read(./.okf-vault-kit.yaml)", plan.deny)   # the agent's own kit runs need it
 
-    def test_files_the_kit_derives_are_always_denied(self):
+    def test_the_kits_machine_state_is_denied_whole(self):
         # The graph files, the bridge's audit log and pending proposals are written before a floor
-        # is declared and can hold a confidential note's title, frontmatter or text.
+        # is declared and can hold a confidential note's title, frontmatter or text. Since the config
+        # left `.kit/` (#135) nothing in it is policy, so the folder is one entry, not one per file.
         set_config(self.v, "providers:\n  search: naive\n")
         write(self.v, ".kit/graph.json", "{}")
         plan = kitagent.claude_code_plan(self.v, self.export())
-        for perm, sbx in (("Read(./.kit/graph.*)", "./.kit/graph.*"),
-                          ("Read(./.kit/bridge-audit.jsonl)", "./.kit/bridge-audit.jsonl"),
-                          ("Read(./.kit/proposals/**)", "./.kit/proposals")):
-            self.assertIn(perm, plan.deny)
-            self.assertIn(sbx, plan.deny_read)
+        self.assertIn("Read(./.kit/**)", plan.deny)
+        self.assertIn("./.kit", plan.deny_read)
+        self.assertEqual([e for e in plan.deny + plan.deny_read if ".kit/" in e and e not in ("Read(./.kit/**)",)
+                          and not e.startswith("Edit(")], [], "no entry for a single file in .kit/")
         set_config(self.v, 'confidentiality:\n  confidential_paths: ["**/*.json"]\n')
         plan = kitagent.claude_code_plan(self.v, self.export())
-        self.assertNotIn("Read(./.kit/graph.json)", plan.deny, "covered by the pattern already")
+        self.assertNotIn("Read(./.kit/graph.json)", plan.deny, "covered by the folder already")
 
     def test_a_path_rule_over_the_config_does_not_deny_it(self):
-        write(self.v, "99-system/extra.yml", "a: 1\n")
-        set_config(self.v, 'confidentiality:\n  confidential_paths: ["**/*.yml"]\n')
+        write(self.v, "99-system/extra.yaml", "a: 1\n")
+        set_config(self.v, 'confidentiality:\n  confidential_paths: ["**/*.yaml"]\n')
         plan = kitagent.claude_code_plan(self.v, self.export())
         for entry in plan.deny_read:                 # neither as a file nor through the pattern
             rel = entry.removeprefix("./")
             denies = kitlib.ConfidentialityPolicy.build(paths=[rel]).covers(kitlib.CONFIG_REL) or \
                 kitlib.ConfidentialityPolicy.build(folders=[rel]).in_folder(kitlib.CONFIG_REL)
             self.assertFalse(denies, entry)
-        self.assertNotIn("Read(./**/*.yml)", plan.deny)
-        self.assertIn("Read(./99-system/extra.yml)", plan.deny)       # what it matches now, one by one
-        self.assertTrue(any(".kit/config.yml" in n and "not carried over" in n for n in plan.notes))
+        self.assertNotIn("Read(./**/*.yaml)", plan.deny)
+        self.assertIn("Read(./99-system/extra.yaml)", plan.deny)       # what it matches now, one by one
+        self.assertTrue(any(".okf-vault-kit.yaml" in n and "not carried over" in n for n in plan.notes))
 
     def test_a_path_rule_without_an_extension_goes_out_in_both_spellings(self):
         # The kit hides `notes/plan.md` for the rule `notes/plan`; a deny rule `Read(./notes/plan)`
@@ -341,8 +341,8 @@ class Merge(_Vault):
         manifest = json.loads((self.v / MANIFEST).read_text(encoding="utf-8"))
         # The user wrote that entry before the kit did: it is theirs, not the kit's.
         self.assertNotIn(f"Read(./{RAISED_REL})", manifest["permissions.deny"])
-        self.assertIn("Read(./.kit/agent-settings/**)", s["permissions"]["deny"])
-        self.assertIn("./.kit/agent-settings", s["sandbox"]["filesystem"]["denyRead"])
+        self.assertIn("Read(./.kit/**)", s["permissions"]["deny"])
+        self.assertIn("./.kit", s["sandbox"]["filesystem"]["denyRead"])
 
     def test_dropping_a_mark_removes_the_kits_entry_but_never_the_users(self):
         self.put(self.FOREIGN)

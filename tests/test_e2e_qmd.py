@@ -120,8 +120,7 @@ class QmdEndToEnd(unittest.TestCase):
                 type(self).answered.extend(hits)
                 return hits
 
-        (self.vault / ".kit").mkdir(exist_ok=True)
-        (self.vault / ".kit" / "config.yml").write_text("collection: kit-e2e\n", encoding="utf-8")
+        (self.vault / kitlib.CONFIG_REL).write_text("collection: kit-e2e\n", encoding="utf-8")
         with mock.patch.dict(os.environ, {**_ISOLATED, "NO_COLOR": "1"}):
             backend = vault_bridge.FsBackend(self.vault, search_provider=Recording())
             for question, want in (("hybrid search reciprocal rank fusion", "07-knowledge/hybrid-search.md"),
@@ -163,8 +162,7 @@ class QmdEndToEnd(unittest.TestCase):
                 return hits
 
         secret = "05-people/alex-example.md"
-        (self.vault / ".kit").mkdir(exist_ok=True)
-        (self.vault / ".kit" / "config.yml").write_text("collection: kit-e2e\n", encoding="utf-8")
+        (self.vault / kitlib.CONFIG_REL).write_text("collection: kit-e2e\n", encoding="utf-8")
         with mock.patch.dict(os.environ, {**_ISOLATED, "NO_COLOR": "1"}):
             guarded = bridge_policy.Guarded(vault_bridge.FsBackend(self.vault, search_provider=Recording()),
                                             bridge_policy.Policy(audit_path=None), self.vault)

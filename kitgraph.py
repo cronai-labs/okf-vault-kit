@@ -561,13 +561,15 @@ def note_set_signature(vault: Path) -> frozenset[tuple[str, int]]:
     graph built before such a change is never taken for current. The bridge's graph cache and
     `kit.py graph query` must agree on what "changed" means, so this is the one definition.
 
-    One more entry stands for `.kit/config.yml` (#120): a folder floor or path rule declared there
+    One more entry stands for the kit config (#120): a folder floor or path rule declared there
     changes what a redacted graph may hold, so declaring one makes a graph built before it stale.
-    Its key cannot collide with a note's, since every note path ends in `.md`.
+    Its key is the config file in use (`kitlib.config_rel`), so moving it from `.kit/config.yml` to
+    `.okf-vault-kit.yaml` makes a graph stale too, on purpose (#135). The key cannot collide with a
+    note's, since every note path ends in `.md`.
     """
     vault = Path(vault)
     notes = ((p.relative_to(vault).as_posix(), p.stat().st_mtime_ns) for p in kitlib.iter_markdown(vault))
-    return frozenset([*notes, (kitlib.CONFIG_REL, kitlib.config_fingerprint(vault))])
+    return frozenset([*notes, (kitlib.config_rel(vault), kitlib.config_fingerprint(vault))])
 
 
 def signature_digest(sig: frozenset[tuple[str, int]]) -> str:

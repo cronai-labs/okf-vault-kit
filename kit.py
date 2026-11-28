@@ -21,6 +21,7 @@
   python kit.py proposals list|show|apply|reject   human-in-the-loop writes from a --propose bridge (docs/security.md)
   python kit.py policy export [--out FILE]  what is confidential in the vault, as JSON
   python kit.py agent-settings claude-code [--apply|--check|--remove]   deny it to Claude Code's own tools, or allow only the open folders (docs/security.md §5)
+  python kit.py config migrate [--apply] [--force]   move the kit config from .kit/config.yml to .okf-vault-kit.yaml
 
 Every command also runs as `uv run kit.py ...` with no manual dependency setup (inline script metadata above).
 """
@@ -38,6 +39,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.parse
 from pathlib import Path
@@ -194,6 +196,21 @@ def cmd_doctor(args) -> int:
         # No paths from inside the vault in this row: the report goes out, and the paths are confidential.
         where, state = kitagent.doctor_row(vault)
         rows.append(("agent settings (claude-code)", where, state))
+        # Which config file is in force (#135): the old place still works, and a leftover old file
+        # beside the new one looks like policy but is not.
+        # A broken file is said first: every reader then hides every note. Without the reason, which
+        # can quote the file, since the report leaves the machine.
+        notice = kitlib.config_notice(vault)
+        if kitlib.confidentiality_config_error(vault):
+            state = (f"WARNING: {kitlib.config_rel(vault)} is broken — every reader hides every note until it is "
+                     "fixed (`kit.py validate` says why)" + (f"; {notice}" if notice else ""))
+        elif notice:
+            state = f"warning: {notice}"
+        elif kitlib._present(vault / kitlib.CONFIG_REL):
+            state = f"ok — {kitlib.CONFIG_REL}"
+        else:
+            state = f"none — no {kitlib.CONFIG_REL}, so no floors are declared"
+        rows.append(("kit config", "-", state))
         rep = kitlib.validate_okf(vault)
         # Say when this is the shipped sample. Without it the row is identical for every tester
         # and cannot answer the one question it exists for: is my own vault healthy?
@@ -225,12 +242,11 @@ _GIT_PROBES = {
     "plugin settings": (".obsidian/plugins/okf-kit-probe/data.json",),
 }
 # The fix picks files by the ignore rules, not by folder, so it never untracks a file the user
-# re-included (one plugin's data.json). `.kit/config.yml` is named: a vault from before the
-# `.kit/*` rule ignores it, so `ls-files -ci` lists it there, and it holds the floors a clone needs.
-# No glob in it either: the report's redactor reads `*/data.json` as an absolute path and cuts it.
-_GIT_FIX = "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists in the vault, except .kit/config.yml"
-# Kept in git whatever rule covers it: the confidentiality floors and open folders (#54).
-_GIT_KEPT = kitproviders.CONFIG_REL.as_posix()
+# re-included (one plugin's data.json). A config still at `.kit/config.yml` is moved out first: it
+# holds the floors a clone needs, and `.kit/` is machine state only since #135, so the plain rule
+# ignores it. No glob in it either: the report's redactor reads `*/data.json` as an absolute path.
+_GIT_FIX = (f"`{kitlib.CONFIG_MIGRATE} --apply` if the config is still at {kitlib.LEGACY_CONFIG_REL}, then "
+            "`git rm --cached` on each file `git ls-files -ci --exclude-standard` lists in the vault")
 
 
 def _git(git: str, vault: Path, *args: str, stdin: str | None = None) -> subprocess.CompletedProcess | None:
@@ -242,11 +258,12 @@ def _git(git: str, vault: Path, *args: str, stdin: str | None = None) -> subproc
 
 
 def _vault_git_row(vault: Path) -> str | None:
-    """Would the vault's git take in `.kit/` state or plugin settings? Counts only (#54).
+    """Would the vault's git take in `.kit/` state or plugin settings, or leave out the kit config?
+    Counts only (#54, #135).
 
     None (no row) without git on PATH or outside a git work tree. Nothing here names a path from
-    inside the vault: the row goes into the doctor report. Informational; doctor's exit code
-    ignores it.
+    inside the vault but the config's own name: the row goes into the doctor report. Informational;
+    doctor's exit code ignores it.
     """
     git = _which("git")     # spawned by its resolved path, as `_qmd` explains for Windows shims
     if not git:
@@ -262,21 +279,36 @@ def _vault_git_row(vault: Path) -> str | None:
     # --no-index: answer from the ignore rules alone, so a tracked file still says whether a rule
     # covers it. -v -n: one record per path, naming the deciding pattern (empty when none matches),
     # so a re-included path (`!...`) is told apart from one no rule covers.
+    # The config is asked about whether it exists or not: a rule that ignores it drops the floors from
+    # every clone, and from the first commit once the file is written. A config still at its old place
+    # is asked about too: the plain `.kit/` rule ignores it, and it is the file in force (#135).
+    legacy = kitlib.config_rel(vault) == kitlib.LEGACY_CONFIG_REL
+    configs = (kitlib.CONFIG_REL, kitlib.LEGACY_CONFIG_REL) if legacy else (kitlib.CONFIG_REL,)
     verdict = _git(git, vault, "check-ignore", "--no-index", "-v", "-n", "--stdin", "-z",
-                   stdin="".join(f"{p}\0" for p in (*probes, *tracked_paths)))
+                   stdin="".join(f"{p}\0" for p in (*probes, *tracked_paths, *configs)))
     if verdict is None or verdict.returncode not in (0, 1):
         return "cannot check: git did not answer"
     fields = verdict.stdout.split("\0")
     # Records are source, line, pattern, path; a path given twice keeps its one answer.
     pattern = {fields[i + 3]: fields[i + 2] for i in range(0, len(fields) - 3, 4)}
-    if any(p not in pattern for p in (*probes, *tracked_paths)):
+    if any(p not in pattern for p in (*probes, *tracked_paths, *configs)):
         return "cannot check: git did not answer"
     hit = {p for p, pat in pattern.items() if pat and not pat.startswith("!")}
     exposed = [name for name, group in _GIT_PROBES.items() if any(p not in hit for p in group)]
     # Tracked and re-included is the user's choice; tracked and ignored, or with no rule, is the leak.
-    # The config is neither: it belongs in git, under any rule.
-    n_tracked = len([p for p in tracked_paths if p != _GIT_KEPT and not pattern[p].startswith("!")])
+    n_tracked = len([p for p in tracked_paths if not pattern[p].startswith("!")])
     parts = []
+    if legacy and kitlib.LEGACY_CONFIG_REL in hit:
+        # Tracked, a clone still has it, until the `git rm --cached` fix below untracks it.
+        held = ("but tracked, and is the config in force — once untracked, as the fix for .kit/ files does, a "
+                "clone would lose" if kitlib.LEGACY_CONFIG_REL in tracked_paths else
+                "and is the config in force — a clone would lose")
+        parts.append(f"WARNING: {kitlib.LEGACY_CONFIG_REL} is ignored by git {held} the confidentiality floors, path "
+                     f"rules and open folders it declares; move it out of .kit/ with `{kitlib.CONFIG_MIGRATE} --apply`")
+    if kitlib.CONFIG_REL in hit:
+        parts.append(f"WARNING: {kitlib.CONFIG_REL} is ignored by git — a clone would lose the confidentiality "
+                     "floors, path rules and open folders it declares; remove the rule that ignores it "
+                     f"(`git check-ignore -v {kitlib.CONFIG_REL}` names it)")
     if n_tracked:
         parts.append(f"WARNING: {n_tracked} file(s) under .kit/ or plugin data.json already tracked — "
                      + ("add the lines `kit.py init` writes to .gitignore, then " if exposed else "")
@@ -328,9 +360,9 @@ def _report(rows: list[tuple[str, str, str]], vault: Path) -> str:
 # What `init` leaves out of the copy: per-machine state the template vault picks up in a checkout.
 # After a plain `graph build` there, `vault/.kit/` holds the sample's graph, audit log and proposals.
 # Paths from the template root, one glob per segment: matched at every depth, they dropped a notes
-# folder named `cache` or a note's `workspace-plan.json`. The template's `.kit/config.yml` is
-# copied on its own, after the copy (`_copy_template_config`).
-TEMPLATE_STATE = (".kit", ".obsidian/workspace*.json", ".obsidian/cache")
+# folder named `cache` or a note's `workspace-plan.json`. The template's kit config is left out too
+# and copied on its own, after the copy (`_copy_template_config`), so `--force` never overwrites one.
+TEMPLATE_STATE = (".kit", kitlib.CONFIG_REL, ".obsidian/workspace*.json", ".obsidian/cache")
 
 
 def _template_state(root: Path):
@@ -346,25 +378,24 @@ def _template_state(root: Path):
 
 
 def _copy_template_config(target: Path) -> None:
-    """Copy the template's `.kit/config.yml`, the one file under `.kit/` that is not machine state.
+    """Copy the template's `.okf-vault-kit.yaml`, if it ships one.
 
-    Never over the vault's own: under `init --force` that would swap its confidential folders for
-    the template's, and open what it hid without a word.
+    Never when the vault has a config of its own, at either place: under `init --force` that would
+    swap its confidential folders for the template's, and open what it hid without a word. A copy
+    beside a `.kit/config.yml` would win over it (#135), with the same effect.
     """
-    src = TEMPLATE_VAULT / kitproviders.CONFIG_REL
-    dst = target / kitproviders.CONFIG_REL
-    if src.is_file() and not (dst.exists() or dst.is_symlink()):
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(src, dst)
+    src = TEMPLATE_VAULT / kitlib.CONFIG_REL
+    if src.is_file() and not any(kitlib._present(target / rel) for rel in (kitlib.CONFIG_REL, kitlib.LEGACY_CONFIG_REL)):
+        shutil.copyfile(src, target / kitlib.CONFIG_REL)
 
 # Written from code, not shipped as `vault/.gitignore`: `copytree` overwrites what it copies, so a
 # template file would replace a user's own .gitignore under `init --force`, and the repository's
 # root .gitignore must stay the rule that ignores the checkout's generated paths (tests/test_release.py).
+# The kit config is not in `.kit/` (#135), so `.kit/` is one rule: `.okf-vault-kit.yaml` at the root
+# reaches every clone with the floors it declares, and doctor warns if a rule ignores it.
 VAULT_GITIGNORE = """\
 # per-machine kit state: graph, bridge audit log, proposals, agent settings
-.kit/*
-# except the kit config: confidential folders, path rules and open folders must reach every clone
-!.kit/config.yml
+.kit/
 # Obsidian window layout: changes with every window, conflicts across machines
 .obsidian/workspace*.json
 # Obsidian cache: rebuilt on each machine
@@ -375,14 +406,22 @@ VAULT_GITIGNORE = """\
 
 
 def _write_vault_gitignore(target: Path) -> None:
-    """Give a new vault the ignore file it needs before its first `git add .`; never touch an existing one."""
+    """Give a new vault the ignore file it needs before its first `git add .`; never touch an existing one.
+
+    A vault whose config is still at `.kit/config.yml` (`init --force` over a vault from before #135)
+    gets the block a kit before #135 wrote, which keeps that file in git: the plain `.kit/` rule would
+    ignore it and drop its floors from every clone. `config migrate` turns that block into `.kit/`.
+    """
     gi = target / ".gitignore"
     if gi.exists() or gi.is_symlink():
         print("kept the existing .gitignore — the lines a vault needs are in docs/vault-guide.md (Sync and safety)")
         return
-    gi.write_text(VAULT_GITIGNORE, encoding="utf-8", newline="\n")
-    print("wrote .gitignore — keeps .kit/ state (all but config.yml), Obsidian's workspace and cache, "
-          "and plugin settings out of git")
+    config, text = kitlib.config_rel(target), VAULT_GITIGNORE
+    if config == kitlib.LEGACY_CONFIG_REL:
+        text = text.replace(f"\n{_NEW_KIT_RULE}\n", f"\n{_OLD_KIT_RULE}\n{_OLD_KEEP_COMMENT}\n{_OLD_KEEP_RULE}\n", 1)
+    gi.write_text(text, encoding="utf-8", newline="\n")
+    print("wrote .gitignore — keeps .kit/ state, Obsidian's workspace and cache, and plugin settings out of git; "
+          f"{config} stays in" + (f" until `{kitlib.CONFIG_MIGRATE} --apply` moves it" if config != kitlib.CONFIG_REL else ""))
 
 
 def cmd_init(args) -> int:
@@ -447,11 +486,12 @@ def _write_kit_config(vault: Path, collection: str) -> None:
     """Record what `init` chose, so later commands need not guess.
 
     The qmd collection name is the one that matters: without it `llm ask` queries the whole qmd
-    index and answers from collections that have nothing to do with this vault.
+    index and answers from collections that have nothing to do with this vault. Into the config the
+    vault uses (#135): under `init --force` on a vault whose config is still at `.kit/config.yml`, a
+    new `.okf-vault-kit.yaml` holding only the collection would win over it and drop its floors.
     """
-    path = vault / kitproviders.CONFIG_REL
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
+    path = kitlib.config_path(vault)
+    if kitlib._present(path):
         if "collection" not in kitproviders.read_config(vault):
             with path.open("a", encoding="utf-8", newline="\n") as fh:
                 fh.write(f"collection: {json.dumps(collection)}\n")
@@ -541,7 +581,7 @@ def cmd_validate(args) -> int:
     hygiene = [links]
     floors = kitlib.check_confidentiality(vault)
     if floors.errors or floors.warnings or floors.checked:
-        print(f"== Confidentiality: floors, path rules and open folders in {kitlib.CONFIG_REL} ==")
+        print(f"== Confidentiality: floors, path rules and open folders in {kitlib.config_rel(vault)} ==")
         print(floors.render())
     hygiene.append(floors)
     # The file itself, whenever the vault has one, `--no-ontology` or not: the graph, `reconcile`
@@ -876,6 +916,163 @@ def cmd_agent_settings(args) -> int:
     print("  takes effect at the agent's next tool call; settings in .claude/settings.local.json, --settings and "
           "managed settings still apply on top (docs/security.md §5)")
     return 0
+
+
+# ---------------------------------------------------------------- config migrate (#135)
+
+# The two rules the vault .gitignore `init` wrote before #135 held for the config (#54), the comment
+# between them, and the one rule that replaces them now that `.kit/` is machine state only.
+_OLD_KIT_RULE, _OLD_KEEP_RULE, _NEW_KIT_RULE = ".kit/*", f"!{kitlib.LEGACY_CONFIG_REL}", ".kit/"
+_OLD_KEEP_COMMENT = "# except the kit config: confidential folders, path rules and open folders must reach every clone"
+_SET_ASIDE = f"{kitlib.LEGACY_CONFIG_REL}.migrated"
+
+
+def _migrated_gitignore(text: str) -> str | None:
+    """The vault .gitignore with init's old `.kit/*` + `!.kit/config.yml` block as a plain `.kit/`,
+    or None when it holds no such block. Only those lines (and init's comment between them) change;
+    every other line, and every line ending, stays as it is."""
+    lines = text.splitlines(keepends=True)
+    bare = [ln.rstrip("\r\n") for ln in lines]
+    if _OLD_KIT_RULE not in bare or _OLD_KEEP_RULE not in bare:
+        return None
+    out = []
+    for i, (ln, b) in enumerate(zip(lines, bare, strict=True)):
+        if b == _OLD_KIT_RULE:
+            out.append(_NEW_KIT_RULE + ln[len(b):])
+        elif b == _OLD_KEEP_RULE or (b == _OLD_KEEP_COMMENT and i + 1 < len(bare) and bare[i + 1] == _OLD_KEEP_RULE):
+            continue
+        else:
+            out.append(ln)
+    return "".join(out)
+
+
+def _write_bytes_atomic(path: Path, data: bytes, mode: int) -> None:
+    """Write `data` beside `path` and rename it into place, refusing (FileExistsError) when something
+    appeared at `path` meanwhile: a config is never written over."""
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        if kitlib._present(path):
+            raise FileExistsError(str(path))
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def cmd_config_migrate(args) -> int:
+    """Move the kit config from `.kit/config.yml` to `.okf-vault-kit.yaml` (#135); a dry run unless --apply.
+
+    The new file is in place before the old one goes, since a missing config means no floors. With
+    both there, the new one is in force: refused unless --force, which sets the old one aside as
+    `.kit/config.yml.migrated` (never deleted). An old file with the same bytes as the new one is what
+    a run stopped between those two steps leaves, and is removed. Init's old .gitignore block becomes
+    a plain `.kit/`. A second run finds nothing to do. Like every writer, `--apply` refuses the kit's
+    own sample vault unless --vault names it; the dry run reads it, as other dry runs do.
+    """
+    vault = _vault(args.vault, write=args.apply)
+    new, old = vault / kitlib.CONFIG_REL, vault / kitlib.LEGACY_CONFIG_REL
+    has_new, has_old = kitlib._present(new), kitlib._present(old)
+    move = set_aside = drop_copy = False
+    if has_old:
+        if old.is_symlink() or not old.is_file():
+            return _refuse(f"{kitlib.LEGACY_CONFIG_REL} is a link or not a regular file; move it to {kitlib.CONFIG_REL} by hand")
+        if not has_new:
+            move = True
+        elif new.is_file() and not new.is_symlink() and new.read_bytes() == old.read_bytes():
+            drop_copy = True
+        elif not args.force:
+            return _refuse(f"both {kitlib.CONFIG_REL} and {kitlib.LEGACY_CONFIG_REL} exist; {kitlib.CONFIG_REL} is in "
+                           f"force and the old file is ignored. Compare them, then remove {kitlib.LEGACY_CONFIG_REL}, or "
+                           f"pass --force to set it aside as {_SET_ASIDE}")
+        elif kitlib._present(vault / _SET_ASIDE):
+            return _refuse(f"{_SET_ASIDE} exists already; move it away first, it is not written over")
+        else:
+            set_aside = True
+    gi = vault / ".gitignore"
+    gi_text = gi_note = None
+    # Any rule that re-includes the old file, in whatever shape; only init's exact block is rewritten.
+    keep = [b.strip() for b in _read_quietly(gi).splitlines()
+            if b.strip().startswith("!") and b.strip().rstrip("/").endswith(kitlib.LEGACY_CONFIG_REL)]
+    if keep:
+        by_hand = (f"replace {' and '.join(f'`{k}`' for k in keep)} and the rule above it that ignores what is in "
+                   f".kit/ with one `{_NEW_KIT_RULE}` by hand")
+        try:
+            if gi.is_symlink():
+                gi_note = f"kept .gitignore: it is a link, which a write would replace with a file; {by_hand}"
+            else:
+                gi_text = _migrated_gitignore(gi.read_bytes().decode("utf-8"))
+                if gi_text is None:
+                    gi_note = f"kept .gitignore: its rules for .kit/ are not the block `init` wrote; {by_hand}"
+        except (OSError, UnicodeDecodeError):
+            gi_note = f"kept .gitignore: it cannot be read as UTF-8; {by_hand}"
+    if not (move or set_aside or drop_copy or gi_text is not None):
+        where = (f"the config is at {kitlib.CONFIG_REL}" if has_new else f"this vault has no {kitlib.CONFIG_REL}")
+        if gi_note:
+            print(f"nothing to move: {where}, and no old {kitlib.LEGACY_CONFIG_REL} is left; {gi_note}")
+        else:
+            print(f"nothing to do: {where}, and no old {kitlib.LEGACY_CONFIG_REL} or .gitignore rule for it is left")
+        return 0
+    verb = (lambda done, todo: done) if args.apply else (lambda done, todo: f"would {todo}")
+    lines = []
+    if move:
+        lines.append(f"{verb('moved', 'move')} {kitlib.LEGACY_CONFIG_REL} to {kitlib.CONFIG_REL}, its bytes unchanged")
+    if drop_copy:
+        lines.append(f"{verb('removed', 'remove')} {kitlib.LEGACY_CONFIG_REL}: it holds the same bytes as "
+                     f"{kitlib.CONFIG_REL} (an earlier migrate stopped before removing it)")
+    if set_aside:
+        lines.append(f"{verb('set aside', 'set aside')} {kitlib.LEGACY_CONFIG_REL} as {_SET_ASIDE}, not deleted: "
+                     f"{kitlib.CONFIG_REL} is in force; delete it once you no longer need it")
+    if gi_text is not None:
+        lines.append(f"{verb('updated', 'update')} .gitignore: `{_OLD_KIT_RULE}` and `{_OLD_KEEP_RULE}` become "
+                     f"`{_NEW_KIT_RULE}`, the rest is unchanged")
+    if gi_note:
+        lines.append(gi_note)
+    if move or drop_copy or set_aside:
+        # A kit up to 0.3 reads only the old file, and with it gone applies no floors: not on a machine
+        # still on that kit, a clone the push reaches, nor in a bridge started before the upgrade.
+        why = f"a kit up to 0.3 reads only {kitlib.LEGACY_CONFIG_REL} and applies no confidentiality floors once it is gone"
+        if args.apply:
+            lines.append(f"now: restart any running bridge, which serves without floors until it reloads — {why}")
+            lines.append(f"before you push this: upgrade the kit on every machine and clone — {why}")
+        else:
+            lines.append(f"before --apply: upgrade the kit on every machine and restart any running bridge — {why}")
+    if not args.apply:
+        print("\n".join(lines))
+        print("dry run: nothing written; add --apply to make these changes")
+        return 0
+    try:
+        if move:
+            _write_bytes_atomic(new, old.read_bytes(), old.stat().st_mode & 0o777)
+            old.unlink()
+        elif drop_copy:
+            old.unlink()
+        elif set_aside:
+            os.replace(old, vault / _SET_ASIDE)
+        if gi_text is not None:
+            kitagent.write_atomic(gi, gi_text)
+    except FileExistsError:
+        return _refuse(f"{kitlib.CONFIG_REL} appeared while this ran; nothing was moved. Run it again")
+    except OSError as exc:
+        return _refuse(f"could not finish ({exc.strerror or exc.__class__.__name__}); nothing is lost — run it again, "
+                       "it picks up where this stopped")
+    print("\n".join(lines))
+    if move or drop_copy or set_aside:
+        print(f"if the vault is in git, commit the move: git rm -q --cached --ignore-unmatch {kitlib.LEGACY_CONFIG_REL} "
+              f"&& git add {kitlib.CONFIG_REL}" + (" .gitignore" if gi.is_file() else "") + " && git commit")
+    return 0
+
+
+def _read_quietly(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 # ---------------------------------------------------------------- graph
@@ -1433,7 +1630,7 @@ def cmd_llm_smoke(args) -> int:
 
 def _confidential(vault: Path, rel: str) -> bool:
     """True when the note is confidential — by its own `sensitivity`, or by a folder floor or path
-    rule in `.kit/config.yml` — the line the MCP bridge enforces."""
+    rule in `.okf-vault-kit.yaml` — the line the MCP bridge enforces."""
     # Only the two schemes a search provider can hand back as a hit. Not the link rule
     # (`kitlib.is_external_link`): `Re: plan.md` is a note name on macOS and Linux, and a
     # scheme-shaped name must not exempt a note from the check (#114).
@@ -1625,7 +1822,7 @@ def main(argv: list[str] | None = None) -> int:
     llm = sub.add_parser("llm", help="talk to the local model endpoint"); lsub = llm.add_subparsers(dest="llm_cmd", required=True)
     p = lsub.add_parser("smoke", help="list models and run a one-line completion"); p.add_argument("--base-url"); p.add_argument("--model"); p.set_defaults(fn=cmd_llm_smoke)
     p = lsub.add_parser("ask", help="search the vault, then ask the model with citations"); p.add_argument("question"); p.add_argument("--vault"); p.add_argument("--base-url"); p.add_argument("--model")
-    p.add_argument("--collection", help="qmd collection to search (default: the one `init` wrote into .kit/config.yml, else 'vault')"); p.add_argument("-n", type=int, default=5)
+    p.add_argument("--collection", help=f"qmd collection to search (default: the one `init` wrote into {kitlib.CONFIG_REL}, else 'vault')"); p.add_argument("-n", type=int, default=5)
     p.add_argument("--search-provider", choices=["auto", "qmd", "naive"], help="override the configured search backend")
     p.add_argument("--graph", action="store_true", help="add graph facts (context packs) for the top hits"); p.add_argument("--dry-run", action="store_true", help="print the assembled prompt, do not call the model"); p.set_defaults(fn=cmd_llm_ask)
     p = sub.add_parser("test", help="run the end-to-end tests"); p.add_argument("-p", "--pattern", default=None); p.set_defaults(fn=cmd_test)
@@ -1663,7 +1860,7 @@ def main(argv: list[str] | None = None) -> int:
                              "and guard (dry run by default)",
                         description="Restrict Claude Code's own tools in the vault's .claude/settings.json. The config "
                                     "picks the mode: without open_folders, a deny list of the confidential folders and "
-                                    "files; with open_folders in the confidentiality block of .kit/config.yml, "
+                                    f"files; with open_folders in the confidentiality block of {kitlib.CONFIG_REL}, "
                                     "allow-open: the vault is denied to the sandbox, the open folders are allowed, "
                                     "what is confidential inside them is denied one by one, and a PreToolUse guard "
                                     "written inline into settings.json refuses the file tools anywhere else, so the "
@@ -1681,6 +1878,25 @@ def main(argv: list[str] | None = None) -> int:
                    help="take out what the kit added (the entries its manifest owns, the sandbox switches as recorded) "
                         "and delete the manifest; a dry run unless --apply is given too")
     p.set_defaults(fn=cmd_agent_settings)
+    p = sub.add_parser("config", help=f"the vault's kit config, {kitlib.CONFIG_REL}")
+    csub = p.add_subparsers(dest="config_cmd", required=True)
+    p = csub.add_parser("migrate", allow_abbrev=False,
+                        help=f"move the config from {kitlib.LEGACY_CONFIG_REL} to {kitlib.CONFIG_REL} and update the "
+                             ".gitignore `init` wrote (dry run by default)",
+                        description=f"Move the vault's kit config from {kitlib.LEGACY_CONFIG_REL}, its old place, "
+                                    f"to {kitlib.CONFIG_REL} at the vault root, keeping its bytes, and turn the "
+                                    f"`{_OLD_KIT_RULE}` and `{_OLD_KEEP_RULE}` rules `init` wrote into .gitignore into "
+                                    f"one `{_NEW_KIT_RULE}`. A dry run unless --apply is given. When both files exist, "
+                                    f"{kitlib.CONFIG_REL} is in force and this refuses unless --force, which sets the "
+                                    f"old file aside as {_SET_ASIDE}; an old file with the same bytes as the new one "
+                                    "(what a run stopped halfway leaves) is removed without it. A second run says "
+                                    "there is nothing to do. Upgrade the kit on every machine and restart any running "
+                                    "bridge first: a kit up to 0.3 applies no floors once the old file is gone.")
+    p.add_argument("--vault")
+    p.add_argument("--apply", action="store_true", help="make the changes (default: show them)")
+    p.add_argument("--force", action="store_true",
+                   help=f"with both files present, set {kitlib.LEGACY_CONFIG_REL} aside as {_SET_ASIDE} (never deleted)")
+    p.set_defaults(fn=cmd_config_migrate)
 
     args = ap.parse_args(argv)
     if args.cmd == "validate" and args.apply and not args.fix_aliases:

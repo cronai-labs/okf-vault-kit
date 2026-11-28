@@ -98,7 +98,7 @@ class FsBackend:
         if not self.vault.is_dir():
             raise BridgeError(f"vault not found: {self.vault}")
         # None: resolve the vault's search slot on every call (explicit > KIT_SEARCH_PROVIDER >
-        # .kit/config.yml > qmd if installed > naive), the same slot `kit.py llm ask` uses.
+        # .okf-vault-kit.yaml > qmd if installed > naive), the same slot `kit.py llm ask` uses.
         self._search_provider = search_provider
 
     # -- helpers
@@ -280,8 +280,8 @@ class FsBackend:
 
         The newest mtime alone misses a move and a delete — neither raises any mtime — and moving
         a note into a `_`-folder is how a user hides it. Keying on the path set as well means the
-        graph tools stop answering about such a note on the very next call. The vault's
-        `.kit/config.yml` is part of it, so a newly declared folder floor takes effect as well.
+        graph tools stop answering about such a note on the very next call. The vault's kit
+        config is part of it, so a newly declared folder floor takes effect as well.
         """
         return kitgraph.note_set_signature(self.vault)   # one definition, shared with `kit.py graph query`
 
@@ -671,11 +671,12 @@ def main(argv=None) -> int:
                     help="bearer token required on --http; prefer KIT_BRIDGE_TOKEN or `--token new` — a token in argv is visible to every user on the machine (ps)")
     pol = ap.add_argument_group("access control")
     pol.add_argument("--read-only", action="store_true", help="register only read tools")
-    pol.add_argument("--deny-write", help="comma-separated folder prefixes model-chosen writes may never touch (default: 05-people,99-system,90-templates,09-archive,.obsidian,.kit,index.md,log.md,context.jsonld); "
+    pol.add_argument("--deny-write", help="comma-separated folder prefixes model-chosen writes may never touch "
+                                          f"(default: {','.join(bridge_policy.DEFAULT_DENY_WRITE)}); "
                                           "file_meeting_minutes still appends its one-line provenance entry to log.md, which is how a vault records that a tool wrote something")
     pol.add_argument("--allow-write", help="comma-separated folder prefixes that are the only writable ones")
     pol.add_argument("--show-confidential", action="store_true", help="expose notes with sensitivity: confidential, and files a confidential folder, path rule or "
-                          "open_folders in .kit/config.yml hides (hidden by default)")
+                          f"open_folders in {kitlib.CONFIG_REL} hides (hidden by default)")
     pol.add_argument("--max-write-bytes", type=int, default=20_000); pol.add_argument("--max-writes-per-minute", type=int, default=20)
     pol.add_argument("--allow-overwrite", action="store_true", help="let the model pass overwrite=true on vault_create_note (denied by default: it blanks an existing note)")
     pol.add_argument("--propose", action="store_true", help="writes become proposals in .kit/proposals/ (kit.py proposals apply)")

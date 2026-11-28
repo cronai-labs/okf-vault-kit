@@ -53,7 +53,7 @@ starts it on stdin/stdout and it has no socket.
 
 | Path | What |
 |---|---|
-| the vault folder | your notes; `.kit/` inside it holds the graph, the audit log, any proposals and `config.yml` (the qmd collection name, provider choices, and the folders and files that are confidential as a whole); the rest of `.kit/` is per-machine, and the `.gitignore` that `kit.py init` writes keeps it out of git on purpose, all but `config.yml`, which a clone needs for the same confidentiality rules |
+| the vault folder | your notes; `.okf-vault-kit.yaml` at its root holds the kit config (the qmd collection name, provider choices, and the folders and files that are confidential as a whole), which git keeps, since a clone needs it for the same confidentiality rules; `.kit/` inside it holds the graph, the audit log, any proposals and the agent-settings manifest, all per-machine, and the `.gitignore` that `kit.py init` writes keeps it out of git on purpose |
 | `~/.lmstudio/mcp.json`, `%APPDATA%\Claude\…`, `~/.cursor/mcp.json` | only when you run `kit.py mcp-config --write`; the previous file is backed up alongside. With `--bridge-http` and a token, the bearer token is stored there in plain text, and the kit sets the file and its backup to `0600` on macOS and Linux; the default stdio setup stores no token |
 | `<vault>/.claude/settings.json`, `<vault>/.kit/agent-settings/claude-code.json` | only when you run `kit.py agent-settings claude-code --apply`: Claude Code's read deny rules and sandbox switches for the vault's confidential folders and files, merged into the settings file, and the list of entries the kit added; with `open_folders` declared, also the sandbox's `allowRead` for the open folders and a PreToolUse hook whose command is a short Python program, written inline, that refuses the agent's file tools outside them. Both files name confidential paths; the agent is denied the second |
 | `~/.cache/qmd`, `~/.config/qmd` | qmd's index and models, if installed |
@@ -74,7 +74,7 @@ bridge's tools, and nothing else:
 - Writes append by default and never overwrite without an explicit flag.
 - Write targets are checked against deny and allow lists; people notes and system folders are denied
   out of the box.
-- Notes marked `sensitivity: confidential`, and every file in a folder or path `.kit/config.yml`
+- Notes marked `sensitivity: confidential`, and every file in a folder or path `.okf-vault-kit.yaml`
   declares confidential (a broken declaration hides everything), are invisible to the bridge's reads,
   searches, listings, task queries and graph context. Their title, description, path and tasks count as confidential
   too: `index.md`, the project and decision hubs, the todo digest, `kit.py todos`, the graph files

@@ -320,7 +320,6 @@ class TheGraphIgnoresAliasesOntoSensitivity(OntologyFileCase):
     def test_every_node_gets_the_answer_kitlib_gives(self):
         """Parity over the whole vault, with each way a note can be confidential or not."""
         config = self.vault / kitgraph.kitlib.CONFIG_REL
-        config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text('confidentiality:\n  confidential_folders: ["05-people"]\n', encoding="utf-8")
         self.note("07-knowledge/marked.md", "---\ntype: concept\ntitle: M\ndescription: d\nsensitivity: confidential\n---\n")
         self.note("07-knowledge/marked-odd.md",
