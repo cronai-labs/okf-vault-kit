@@ -594,7 +594,8 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     allow = sorted({f"./{f}" for d in policy.declared_open_folders for f in _on_disk(root, d)
                     if not _in_open(f, closed)})
     # The agent's own kit runs load the policy, as in deny-list mode. A single file at the root, under
-    # the `./` and `./*` deny: on macOS a narrower allowRead wins; on Linux this was not tested (#135).
+    # the `./` and `./*` deny: a narrower allowRead won for a folder on macOS, but a file at the root
+    # was run on neither macOS nor Linux (#135); if it loses, those runs fail closed.
     allow.append(f"./{kitlib.CONFIG_REL}")
     if allow_git and (root / ".git").is_dir() and "./.git" not in allow:
         allow.append("./.git")

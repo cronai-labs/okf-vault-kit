@@ -44,6 +44,7 @@ confidentiality:
 machine survivable: if the package registry is blocked and qmd never installs, the search slot
 falls back to `naive` — term frequency over the files, no index, no dependencies — and everything
 else carries on. Slower and less clever, but the vault, the model and the tool calls all still work.
+The same fallback catches a qmd that is installed but has not indexed anything yet.
 
 **The config used to live at `.kit/config.yml`.** Up to 0.3 the kit kept this file in `.kit/`, which
 otherwise holds machine state (the graph, the bridge's audit log, proposals, the agent-settings
@@ -57,9 +58,12 @@ did; the kit never falls back to the old file past a new one it cannot read.
 keeps its bytes, the `.kit/*` and `!.kit/config.yml` rules `init` wrote into the vault's `.gitignore`
 become one `.kit/`, and the rest of that file is left as it is. With both files present it refuses
 unless `--force`, which sets the old file aside as `.kit/config.yml.migrated` and never deletes it;
-a second run says there is nothing to do. `--apply` refuses the kit's own sample vault unless
-`--vault` names it. [vault-guide.md](vault-guide.md#sync-and-safety) has the git side.
-The same fallback catches a qmd that is installed but has not indexed anything yet.
+an old file with the same bytes as the new one, which a run stopped between its two steps leaves, is
+removed without `--force`. A second run says there is nothing to do. `--apply` refuses the kit's own
+sample vault unless `--vault` names it. A kit up to 0.3 reads only `.kit/config.yml` and applies no
+floors once it is gone: upgrade the kit on every machine that uses the vault, and restart any
+running bridge, before you migrate and push. [vault-guide.md](vault-guide.md#sync-and-safety) has
+the git side.
 
 The `llm` slot has one provider because it does not need more: LM Studio, llama.cpp's
 `llama-server`, Ollama and vLLM all speak the same API. Point `KIT_LLM_BASE_URL` at whichever you
