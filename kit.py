@@ -475,9 +475,64 @@ def cmd_index(args) -> int:
     return 0
 
 
+def _fix_aliases(vault: Path, apply: bool) -> int:
+    """`validate --fix-aliases`: rename each aliased frontmatter key to its canonical name (#96).
+
+    A dry run unless `apply`. Each file is written whole and atomically, and only when it changes,
+    so a second run finds nothing and touches nothing. A refused note, or one that cannot be
+    written, fails the run (exit 1) and the other notes are still renamed.
+    """
+    data, problems = kitgraph.read_ontology(vault / kitgraph.ONTOLOGY_REL, kitgraph.ONTOLOGY_REL)
+    if data is None and problems:
+        # The readers fall back to the kit's own ontology; its alias table is not the one this
+        # vault declared, so nothing is renamed on it.
+        print(f"refused: {problems[0]}", file=sys.stderr)
+        return 1
+    fixes = kitgraph.fix_property_aliases(vault)
+    todo = [f for f in fixes if not f.refused]
+    refused = [f for f in fixes if f.refused]
+    if not fixes:
+        print("no property aliases to rename")
+        return 0
+    failed: list[tuple[kitgraph.AliasFix, OSError]] = []
+    if apply:
+        # One note that cannot be written (read-only, locked on Windows, a full disk) is reported
+        # and the run goes on: write_atomic leaves that note as it was, and the others are fixed.
+        for f in todo:
+            try:
+                kitagent.write_atomic(vault / f.rel, f.text)
+            except OSError as exc:
+                failed.append((f, exc))
+        todo = [f for f in todo if all(f is not g for g, _exc in failed)]
+    if todo:
+        print(f"{'renamed' if apply else 'would rename'} in {len(todo)} note(s):")
+        for f in todo:
+            print(f"  {f.rel}: " + ", ".join(f"{a} → {c}" for a, c in f.renames))
+    if failed:
+        print(f"could not be written, left as they are: {len(failed)} note(s):")
+        for f, exc in failed:
+            print(f"  {f.rel}: {exc.strerror or exc.__class__.__name__}")
+    if refused:
+        print(f"refused {len(refused)} note(s), left as they are:")
+        for f in refused:
+            print(f"  {f.rel}: {f.refused}")
+    if todo and not apply:
+        print("dry run: nothing written; add --apply to make these renames")
+    elif todo:
+        print("run `kit.py validate` to confirm")
+    return 1 if refused or failed else 0
+
+
 def cmd_validate(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=bool(args.fix_aliases and args.apply))
+    if args.fix_aliases:
+        return _fix_aliases(vault, args.apply)
     okf = kitlib.validate_okf(vault)
+    # A `--vault` that points at an existing but wrong directory is otherwise a green `OK` (#100).
+    # Counted from the walk, not `okf.checked`: undecodable notes are reported as errors already.
+    # Here and not in validate_okf, which the doctor's report shares and which carries no paths.
+    if next(iter(kitlib.iter_markdown(vault)), None) is None:
+        okf.warnings.append(f"no markdown files under {vault}; is --vault right?")
     links = kitlib.check_links(vault)
     print("== OKF conformance ==")
     print(okf.render())
@@ -489,7 +544,14 @@ def cmd_validate(args) -> int:
         print(f"== Confidentiality: floors, path rules and open folders in {kitlib.CONFIG_REL} ==")
         print(floors.render())
     hygiene.append(floors)
-    use_onto = not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)
+    # The file itself, whenever the vault has one, `--no-ontology` or not: the graph, `reconcile`
+    # and the bridge apply it regardless, so a misplaced block or a refused alias is never unseen.
+    onto_file = kitgraph.check_ontology_file(vault)
+    if onto_file.checked:
+        print(f"== Ontology file: {kitgraph.ONTOLOGY_REL} ==")
+        print(onto_file.render())
+        hygiene.append(onto_file)
+    use_onto =not args.no_ontology and (args.ontology or kitgraph.ontology_path(vault) is not None)
     if use_onto:
         g = kitgraph.build_graph(vault)
         onto = kitgraph.ontology_report(g)
@@ -498,16 +560,25 @@ def cmd_validate(args) -> int:
         hygiene.append(onto)
 
     # OKF v0.2 §11 lists what a consumer MUST NOT reject a bundle for, and broken cross-links and
-    # a missing index.md are both on that list. So conformance alone decides the default exit
-    # code: a bundle can be conformant and still be a mess, and only the first is ours to assert.
-    # Our own rules are gated by --strict, which is what `make lint` and CI run.
+    # a missing index.md are both on that list. So conformance decides the default exit code: a
+    # bundle can be conformant and still be a mess, and only the first is ours to assert. Our own
+    # rules are gated by --strict, which is what `make lint` and CI run. One exception: an alias
+    # onto `sensitivity` is a confidentiality misconfiguration, not hygiene, and fails either way
+    # (#121, the owner's decision) — the ontology reserves `sensitivity`, so every reader ignores the
+    # alias and serves the notes it was meant to hide.
     conformance_failed = bool(okf.errors)
-    hygiene_failed = any(r.errors or r.warnings for r in hygiene) or bool(okf.warnings)
+    security_failed = bool(onto_file.refused)
+    hygiene_failed = (any(r.errors or r.warnings for r in hygiene if r is not onto_file) or bool(okf.warnings)
+                      or len(onto_file.errors) > len(onto_file.refused) or bool(onto_file.warnings))
+    if security_failed:
+        print(f"\nerror: the alias of `sensitivity` in {kitgraph.ONTOLOGY_REL} (above) is ignored, since the "
+              "ontology reserves `sensitivity`: every reader judges the note's raw `sensitivity:` line instead. That is a "
+              "confidentiality misconfiguration, not a style rule, so it fails `validate` with or without --strict.")
     if hygiene_failed and not args.strict:
-        print("\nnote: the findings above outside `OKF conformance` are this kit's rules, not the "
-              "spec's — OKF v0.2 §11 forbids rejecting a bundle for them, so they do not set the "
-              "exit code. Run `validate --strict` to fail on them too (this is what CI runs).")
-    return 1 if conformance_failed or (args.strict and hygiene_failed) else 0
+        print(f"\nnote: the {'other ' if security_failed else ''}findings above outside `OKF conformance` are "
+              "this kit's rules, not the spec's — OKF v0.2 §11 forbids rejecting a bundle for them, so they do "
+              "not set the exit code. Run `validate --strict` to fail on them too (this is what CI runs).")
+    return 1 if conformance_failed or security_failed or (args.strict and hygiene_failed) else 0
 
 
 def cmd_log(args) -> int:
@@ -1507,8 +1578,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--collection", help="qmd collection name (default: derived from the vault path, so two vaults do not share one index)"); p.add_argument("--no-qmd", action="store_true"); p.add_argument("--force", action="store_true")
     p.set_defaults(fn=cmd_init)
     p = sub.add_parser("index", help="regenerate index.md"); p.add_argument("--vault"); p.set_defaults(fn=cmd_index)
-    p = sub.add_parser("validate", help="OKF conformance, links, ontology"); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance")
-    p.add_argument("--ontology", action="store_true", help="force the ontology checks (default: on when 99-system/ontology.yml exists)"); p.add_argument("--no-ontology", action="store_true"); p.set_defaults(fn=cmd_validate)
+    # allow_abbrev=False: `--app` must not stand in for `--apply` on a command that writes.
+    vp = p = sub.add_parser("validate", help="OKF conformance, links, ontology", allow_abbrev=False); p.add_argument("--vault"); p.add_argument("--strict", action="store_true", help="fail on this kit's own rules too — links, ontology and warnings — not only on OKF §11 conformance "
+                        "and an ontology alias onto or away from `sensitivity`, which fail either way")
+    p.add_argument("--ontology", action="store_true", help="force the ontology checks (default: on when 99-system/ontology.yml exists)"); p.add_argument("--no-ontology", action="store_true")
+    p.add_argument("--fix-aliases", action="store_true",
+                   help="instead of validating, list each note whose frontmatter uses a property alias from the ontology "
+                        "and the rename to its canonical name (dry run); only the key changes, and a note that sets "
+                        "both names is refused")
+    p.add_argument("--apply", action="store_true", help="with --fix-aliases: make the renames"); p.set_defaults(fn=cmd_validate)
     gp = sub.add_parser("graph", help="build, export and query the vault graph"); gsub = gp.add_subparsers(dest="graph_cmd", required=True)
     p = gsub.add_parser("build", help="write .kit/graph.{json,nt,jsonld,sqlite}"); p.add_argument("--vault"); p.add_argument("--out"); p.set_defaults(fn=cmd_graph_build)
     p = gsub.add_parser("export", help="print or write one format"); p.add_argument("--vault"); p.add_argument("--format", choices=["json", "nt", "jsonld"], default="json"); p.add_argument("--out"); p.set_defaults(fn=cmd_graph_export)
@@ -1605,6 +1683,8 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_agent_settings)
 
     args = ap.parse_args(argv)
+    if args.cmd == "validate" and args.apply and not args.fix_aliases:
+        vp.error("--apply only goes with --fix-aliases; validate itself writes nothing")
     return args.fn(args)
 
 

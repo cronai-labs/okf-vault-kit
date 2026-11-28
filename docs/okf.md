@@ -48,17 +48,23 @@ Actor convention: `human:<id>` for people, `process:<id>` for jobs, `<producer>/
 
 ### What the exit code means
 
-`validate` always prints three sections; only the first decides the default exit code.
+`validate` prints up to five sections; the first decides the default exit code, with one exception in the ontology file section.
 
 | Section | Whose rules | Fails `validate` | Fails `validate --strict` |
 |---|---|---|---|
 | OKF conformance | the spec, §11 | yes | yes |
 | Links, wikilinks, Bases embeds | this kit's | no | yes |
+| Confidentiality (when `.kit/config.yml` declares floors) | this kit's | no | yes |
+| Ontology file (when the vault has `99-system/ontology.yml`) | this kit's | an alias onto or away from `sensitivity` only | yes |
 | Ontology | this kit's | no | yes |
+
+A directory with no markdown files at all gets a warning in the first section that names the path (`no markdown files under <path>; is --vault right?`): it is not a conformance failure, so plain `validate` still exits 0, and `--strict` fails on it.
 
 §11 names what a consumer **MUST NOT** reject a bundle for, and broken cross-links and a missing
 `index.md` are both on that list. A bundle can be fully conformant and still be a mess — the kit
 reports the mess either way, and only asserts non-conformance when the spec says it may.
+
+The exception is a `property_aliases` or `value_aliases` entry onto `sensitivity`, or a `property_aliases` entry that maps `sensitivity` onto another name: the ontology reserves `sensitivity`, so every reader ignores the entry, and serves the notes an alias onto it was meant to hide. That is a confidentiality misconfiguration rather than a style rule, and plain `validate` fails on it too, naming each entry; rename those values to `confidential` in the notes ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)).
 
 Use plain `validate` to answer "is this a valid OKF bundle". Use `--strict` for a repo gate:
 it is what `make lint` and CI run, so nothing in this repository slips past on the distinction.

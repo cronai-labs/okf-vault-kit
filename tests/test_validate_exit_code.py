@@ -2,12 +2,15 @@
 
 OKF v0.2 §11 names what a consumer MUST NOT reject a bundle for — broken cross-links and a
 missing `index.md` among them. The reports always print; only the exit code is in question,
-and it is the half CI reads.
+and it is the half CI reads. One finding outside conformance fails it too: an ontology alias onto
+`sensitivity` (#121), tested in test_ontology_file.py.
 """
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from tests.helpers import ROOT, temp_vault
 
@@ -147,6 +150,29 @@ class FrontmatterAConstructorCannotBuildIsAFindingNotATraceback(unittest.TestCas
         r = self.kit("graph", "build")
         self.assertNotIn("Traceback", r.stderr)
         self.assertEqual(r.returncode, 0, r.stderr)
+
+
+class AVaultWithNoMarkdownIsNamed(unittest.TestCase):
+    """#100: `--vault` pointing at an existing but wrong directory used to print `OK`, exit 0."""
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp(prefix="okf-empty-"))
+        self.addCleanup(shutil.rmtree, self.dir, ignore_errors=True)
+
+    def test_it_warns_and_names_the_path(self):
+        r = validate(self.dir)
+        self.assertIn(f"no markdown files under {self.dir.resolve()}; is --vault right?", r.stdout)
+        self.assertEqual(r.returncode, 0, "a warning, as for the kit's other rules")
+
+    def test_strict_fails_on_it(self):
+        self.assertEqual(validate(self.dir, "--strict").returncode, 1)
+
+    def test_a_vault_of_undecodable_notes_is_not_empty(self):
+        """Those are named as errors of their own; 'no markdown files' would mislead."""
+        (self.dir / "note.md").write_bytes("---\ntype: concept\n---\n".encode("utf-16"))
+        r = validate(self.dir)
+        self.assertNotIn("no markdown files", r.stdout)
+        self.assertIn("not valid UTF-8", r.stdout)
 
 
 if __name__ == "__main__":

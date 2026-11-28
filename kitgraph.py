@@ -53,17 +53,34 @@ class PropSpec:
     required: bool = False
 
 
+def _mapping(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 class Ontology:
+    """The ontology as the readers use it.
+
+    A section or entry of the wrong shape is dropped here, never trusted: `check_ontology_file`
+    is what reports it, and a reader that indexed into it would turn one bad line into a traceback
+    in `graph`, `reconcile` and the bridge.
+    """
+
     def __init__(self, data: dict[str, Any], source: Path | None = None):
-        self.data = data or {}
+        self.data = _mapping(data)
         self.source = source
-        self.base_iri: str = self.data.get("base_iri", "urn:okf-vault-kit:")
-        self.context_file: str = self.data.get("context_file", "context.jsonld")
-        self.classes: dict[str, dict] = self.data.get("classes", {}) or {}
-        self.edges: dict[str, dict] = self.data.get("edges", {}) or {}
-        self.property_aliases: dict[str, str] = self.data.get("property_aliases", {}) or {}
-        self.value_aliases: dict[str, dict] = self.data.get("value_aliases", {}) or {}
-        self.rules: dict[str, bool] = self.data.get("rules", {}) or {}
+        base_iri, context_file = self.data.get("base_iri"), self.data.get("context_file")
+        self.base_iri: str = base_iri if isinstance(base_iri, str) else "urn:okf-vault-kit:"
+        self.context_file: str = context_file if isinstance(context_file, str) else "context.jsonld"
+        self.classes: dict[str, dict] = {k: _mapping(v) for k, v in _mapping(self.data.get("classes")).items()}
+        self.edges: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("edges")).items() if isinstance(v, dict)}
+        # `sensitivity` is reserved (#121): an alias onto it or away from it, or of its values, is
+        # dropped here, so `props["sensitivity"]` is the note's raw line, the one kitlib's shared
+        # predicate judges.
+        self.property_aliases: dict[str, str] = {k: v for k, v in _mapping(self.data.get("property_aliases")).items()
+                                                 if isinstance(v, str) and not _aliases_sensitivity(k, v)}
+        self.value_aliases: dict[str, dict] = {k: v for k, v in _mapping(self.data.get("value_aliases")).items()
+                                               if isinstance(v, dict) and not _is_sensitivity(k)}
+        self.rules: dict[str, bool] = _mapping(self.data.get("rules"))
         self._props_cache: dict[str, dict[str, PropSpec]] = {}
 
     # -- classes
@@ -72,9 +89,9 @@ class Ontology:
 
     def ancestors(self, cls: str) -> list[str]:
         out, seen = [], set()
-        while cls and cls not in seen and cls in self.classes:
+        while isinstance(cls, str) and cls and cls not in seen and cls in self.classes:
             out.append(cls); seen.add(cls)
-            cls = (self.classes[cls] or {}).get("extends")
+            cls = self.classes[cls].get("extends")
         return out
 
     def is_a(self, cls: str, ancestor: str) -> bool:
@@ -87,7 +104,7 @@ class Ontology:
         merged: dict[str, PropSpec] = {}
         chain = self.ancestors(cls) or ["node"]
         for c in reversed(chain):
-            for name, raw in ((self.classes.get(c) or {}).get("props") or {}).items():
+            for name, raw in _mapping(self.classes.get(c, {}).get("props")).items():
                 merged[name] = _prop_spec(name, raw)
         self._props_cache[cls] = merged
         return merged
@@ -112,19 +129,22 @@ class Ontology:
             return table[value]
         return value
 
-    def normalise(self, fm: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
-        """Apply property/value aliases. Returns (canonical frontmatter, notes about what was mapped)."""
+    def normalise(self, fm: dict[str, Any]) -> tuple[dict[str, Any], list[tuple[str, str]]]:
+        """Apply property/value aliases. Returns (canonical frontmatter, (message, suggestion) per mapping)."""
         out: dict[str, Any] = {}
-        notes: list[str] = []
+        notes: list[tuple[str, str]] = []
         for k, v in fm.items():
             ck = self.canonical_key(k)
             if ck != k:
-                notes.append(f"`{k}` mapped to canonical `{ck}`")
                 if ck in fm:  # canonical present too — canonical wins
+                    notes.append((f"`{k}` mapped to canonical `{ck}`, which the note also sets; `{ck}` wins",
+                                  f"merge `{k}` into `{ck}` by hand and remove `{k}`"))
                     continue
+                notes.append((f"`{k}` mapped to canonical `{ck}`: rename `{k}` to `{ck}`",
+                              "`kit.py validate --fix-aliases` lists the renames, `--apply` makes them"))
             cv = self.canonical_value(ck, v)
             if cv != v:
-                notes.append(f"`{ck}: {v}` mapped to `{cv}`")
+                notes.append((f"`{ck}: {v}` mapped to `{cv}`", f"change the value to `{cv}` so every tool sees the canonical one"))
             out[ck] = cv
         return out, notes
 
@@ -135,12 +155,32 @@ class Ontology:
 def _prop_spec(name: str, raw: Any) -> PropSpec:
     if isinstance(raw, str):
         return PropSpec(name=name, type=raw)
-    raw = raw or {}
+    raw = _mapping(raw)
     rng = raw.get("range") or []
     if isinstance(rng, str):
         rng = [rng]
-    return PropSpec(name=name, type=raw.get("type", "text"), values=[str(v) for v in raw.get("values", [])],
-                    range=list(rng), many=bool(raw.get("many")), soft=bool(raw.get("soft")), required=bool(raw.get("required")))
+    values = raw.get("values") or []
+    ptype = raw.get("type", "text")
+    # A value of the wrong shape is ignored here and reported by `check_ontology_file`.
+    return PropSpec(name=name, type=ptype if isinstance(ptype, str) else "text",
+                    values=[str(v) for v in values] if isinstance(values, list) else [],
+                    range=[str(r) for r in rng] if isinstance(rng, list) else [],
+                    many=bool(raw.get("many")), soft=bool(raw.get("soft")), required=bool(raw.get("required")))
+
+
+def _prop_problems(where: str, raw: Any) -> list[str]:
+    if raw is None or isinstance(raw, str):
+        return []
+    if not isinstance(raw, dict):
+        return [f"`{where}` must be a type name or a mapping (type, values, range, ...); it is read as text"]
+    out = []
+    if not isinstance(raw.get("type", "text"), str):
+        out.append(f"`{where}.type` must be a type name; it is read as text")
+    if raw.get("values") is not None and not isinstance(raw["values"], list):
+        out.append(f"`{where}.values` must be a list; it is ignored")
+    if raw.get("range") is not None and not isinstance(raw["range"], (str, list)):
+        out.append(f"`{where}.range` must name a class or list classes; it is ignored")
+    return out
 
 
 def ontology_path(vault: Path) -> Path | None:
@@ -150,16 +190,180 @@ def ontology_path(vault: Path) -> Path | None:
     return DEFAULT_ONTOLOGY if DEFAULT_ONTOLOGY.exists() else None
 
 
+ONTOLOGY_SECTIONS = ("version", "base_iri", "context_file", "classes", "edges", "property_aliases", "value_aliases", "rules")
+EDGE_KEYS = ("inverse", "transitive")
+CLASS_KEYS = ("props", "extends")
+# What `yaml.safe_load` raises besides YAMLError, each seen from a one-line ontology value.
+_CONSTRUCT_ERRORS = kitlib.YAML_CONSTRUCT_ERRORS
+
+
+def read_ontology(path: Path, label: str | None = None) -> tuple[dict[str, Any] | None, list[str]]:
+    """Parse one ontology file: (data, problems), data None when the file cannot be used at all.
+
+    The one reader `load_ontology` and `validate` share, so the file the graph falls back from is
+    the file `validate` names. A missing file is no problem; one we cannot decode or parse, or
+    whose top level is not a mapping, is unusable; any other problem leaves the data usable.
+    `Ontology` drops an entry of the wrong shape (a property spec is read as text) and an alias
+    onto or away from `sensitivity`, which the ontology reserves and `validate` refuses.
+    """
+    path = Path(path)
+    name = label or path.name
+    text = kitlib.read_text(path)
+    if text is None:
+        if not path.exists():
+            return None, []
+        return None, [(f"{name}: cannot be read as UTF-8 text; the kit's own ontology is used until it is "
+                       "re-saved as UTF-8")]
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None)
+        where = f" at line {mark.line + 1}" if mark is not None else ""
+        what = getattr(exc, "problem", None) or type(exc).__name__
+        return None, [f"{name}: not valid YAML{where} ({what}); the kit's own ontology is used until it is fixed"]
+    except _CONSTRUCT_ERRORS as exc:
+        # The scanner accepted the text, then PyYAML's constructor failed outside YAMLError:
+        # `2026-02-30` is a ValueError, a bad `!!bool`/`!!int`/`!!timestamp` value a KeyError,
+        # IndexError or AttributeError. Each one would otherwise take `validate`, `graph`,
+        # `reconcile` and the bridge down with a traceback.
+        return None, [(f"{name}: not valid YAML (a value cannot be read: {type(exc).__name__}: {exc}); "
+                       "the kit's own ontology is used until it is fixed")]
+    if data is None:
+        return {}, []
+    if not isinstance(data, dict):
+        return None, [(f"{name}: the top level must be a mapping of sections ({', '.join(ONTOLOGY_SECTIONS[3:])}), "
+                       f"not a {type(data).__name__}; the kit's own ontology is used until it is fixed")]
+    return data, _structure_problems(data, name)
+
+
+def _structure_problems(data: dict[str, Any], name: str) -> list[str]:
+    out: list[str] = []
+    for key, value in data.items():
+        if key in ONTOLOGY_SECTIONS:
+            continue
+        hint = " — a class belongs under `classes:`" if isinstance(value, dict) and set(CLASS_KEYS) & set(value) else ""
+        out.append(f"{name}: unknown top-level key `{key}`, ignored (known: {', '.join(ONTOLOGY_SECTIONS)}){hint}")
+    for key in ("base_iri", "context_file"):
+        if key in data and not isinstance(data[key], str):
+            out.append(f"{name}: `{key}` must be a string; the default is used")
+    for key in ONTOLOGY_SECTIONS[3:]:
+        if data.get(key) is not None and not isinstance(data[key], dict):
+            out.append(f"{name}: `{key}:` must be a mapping, not a {type(data[key]).__name__}; the section is ignored")
+    for cls, body in _mapping(data.get("classes")).items():
+        if body is None:
+            continue
+        if not isinstance(body, dict):
+            out.append(f"{name}: `classes.{cls}` must be a mapping (props, extends); it is read as empty")
+            continue
+        if body.get("props") is not None and not isinstance(body["props"], dict):
+            out.append(f"{name}: `classes.{cls}.props` must be a mapping of property names; it is ignored")
+        if body.get("extends") is not None and not isinstance(body["extends"], str):
+            out.append(f"{name}: `classes.{cls}.extends` must name one class; it is ignored")
+        for prop, raw in _mapping(body.get("props")).items():
+            out.extend(f"{name}: {p}" for p in _prop_problems(f"classes.{cls}.props.{prop}", raw))
+    for edge, body in _mapping(data.get("edges")).items():
+        shape = set(body) if isinstance(body, dict) else set()
+        if shape & set(CLASS_KEYS):
+            has = ", ".join(f"`{k}`" for k in CLASS_KEYS if k in shape)
+            out.append(f"{name}: `edges.{edge}` looks like a class (it has {has}) — classes belong under `classes:`; "
+                       f"under `edges:` it declares nothing, and notes of type `{edge}` read as an unknown type")
+        elif not shape & set(EDGE_KEYS):
+            out.append(f"{name}: `edges.{edge}` declares neither `inverse` nor `transitive`, so it is ignored — "
+                       "an edge entry needs one of them (a class belongs under `classes:`)")
+    for alias, target in _mapping(data.get("property_aliases")).items():
+        if not isinstance(target, str):
+            out.append(f"{name}: `property_aliases.{alias}` must name one property; it is ignored")
+    for prop, table in _mapping(data.get("value_aliases")).items():
+        if not isinstance(table, dict):
+            out.append(f"{name}: `value_aliases.{prop}` must be a mapping of value → canonical value; it is ignored")
+    return out + _sensitivity_refusals(data, name)
+
+
+def _sensitivity_refusals(data: dict[str, Any], name: str) -> list[str]:
+    """The aliases onto or away from `sensitivity` the file declares (#121): a security finding, not hygiene.
+
+    Exactly the entries `Ontology` drops, by the same two predicates, so "refused" and "ignored"
+    cannot name different entries.
+    """
+    out: list[str] = []
+    for alias, target in _mapping(data.get("property_aliases")).items():
+        if not _aliases_sensitivity(alias, target):
+            continue
+        if _is_sensitivity(target):
+            out.append(f"{name}: `property_aliases.{alias}` maps onto `sensitivity` and is refused: {_SENSITIVITY_WHY} "
+                       f"Rename `{alias}` to `sensitivity` in the notes and drop the alias.")
+        else:
+            out.append(f"{name}: `property_aliases.{alias}` maps `sensitivity` onto `{target}` and is refused: "
+                       f"{_SENSITIVITY_WHY} Keep `sensitivity` in the notes and drop the alias.")
+    for prop in _mapping(data.get("value_aliases")):
+        if _is_sensitivity(prop):
+            out.append(f"{name}: `value_aliases.{prop}` is refused: {_SENSITIVITY_WHY} "
+                       "Rename each value it maps to `confidential` in the notes, write any other value as you mean "
+                       "it, and drop the alias.")
+    return out
+
+
+# #121, the owner's decision: `sensitivity` is a reserved property. The ontology may not alias any
+# property onto it, alias it onto another name, nor alias its values; such an entry is ignored by every reader and refused by
+# `validate`, so the graph judges the same raw line as kitlib's shared predicate.
+SENSITIVITY = "sensitivity"
+_SENSITIVITY_WHY = ("the ontology reserves `sensitivity`; this entry is ignored. Every reader, the graph included, "
+                    "judges confidentiality by the note's raw `sensitivity:` line only.")
+
+
+def _is_sensitivity(name: Any) -> bool:
+    return str(name).strip().lower() == SENSITIVITY
+
+
+def _aliases_sensitivity(alias: Any, target: Any) -> bool:
+    """A `property_aliases` entry onto `sensitivity` or away from it; the one check `Ontology`
+    (which drops it) and `validate` (which refuses it) share.
+
+    Only the identity entry is harmless. `Sensitivity: sensitivity` is not: the readers match the
+    exact key `sensitivity`, so applying it would make the graph alone see `Sensitivity:`. And
+    `sensitivity: classification` would move the raw line to another key in the graph.
+    """
+    return isinstance(target, str) and alias != target and (_is_sensitivity(target) or _is_sensitivity(alias))
+
+
+@dataclass
+class OntologyFileReport(kitlib.Report):
+    """`errors` holds every finding; `refused` repeats the aliases onto `sensitivity` among them.
+
+    Those fail `validate` without `--strict` (#121, the owner's decision): the ontology reserves
+    `sensitivity`, so the readers ignore such an entry, and a vault that relied on it to hide notes
+    serves them. That is a confidentiality misconfiguration, not a matter of style. The file's
+    other findings are this kit's rules, gated by `--strict`.
+    """
+
+    refused: list[str] = field(default_factory=list)
+
+
+def check_ontology_file(vault: Path) -> OntologyFileReport:
+    """`validate`'s report on the vault's own ontology file (none checked when the vault has none)."""
+    path = Path(vault) / ONTOLOGY_REL
+    rep = OntologyFileReport(unit="ontology file")
+    if not path.exists():
+        return rep
+    rep.checked = 1
+    data, problems = read_ontology(path, ONTOLOGY_REL)
+    rep.errors.extend(problems)
+    if data is not None:
+        rep.refused = _sensitivity_refusals(data, ONTOLOGY_REL)
+    return rep
+
+
 def load_ontology(vault: Path) -> Ontology:
     """The vault's ontology, falling back to the kit's own.
 
-    A vault ontology we cannot decode is the same situation as a vault without one: the fallback
-    is a graph built on the shipped classes, not no graph at all. `validate` names the file.
+    A vault ontology we cannot decode or parse, or whose top level is not a mapping, is the same
+    situation as a vault without one: the fallback is a graph built on the shipped classes, not
+    no graph at all and not a traceback. `validate` names the file (`check_ontology_file`).
     """
     for p in (Path(vault) / ONTOLOGY_REL, DEFAULT_ONTOLOGY):
-        text = kitlib.read_text(p)      # None for a file that is missing as well as one we cannot decode
-        if text is not None:
-            return Ontology(yaml.safe_load(text) or {}, p)
+        data, _problems = read_ontology(p)
+        if data is not None:
+            return Ontology(data, p)
     return Ontology({})
 
 
@@ -410,6 +614,103 @@ def _iso(value: Any) -> str:
     return str(value)
 
 
+def graph_notes(vault: Path) -> list[kitlib.Note]:
+    """The notes the graph is built from: every note but the reserved files and the template folder.
+
+    `fix_property_aliases` walks the same list, so it renames exactly what `property_alias` names.
+    """
+    tdir = kitlib.template_folder(vault)[0]
+    return [n for n in kitlib.load_vault(vault)
+            if n.path.name not in kitlib.RESERVED_FILENAMES and not kitlib.in_template_dir(n.rel, tdir)]
+
+
+@dataclass
+class AliasFix:
+    rel: str
+    renames: list[tuple[str, str]]          # (alias, canonical), in frontmatter order
+    refused: str = ""                       # why the note is left alone; "" when it can be fixed
+    text: str = ""                          # the rewritten file, BOM included, when it can be fixed
+
+
+def _key_line(key: str) -> re.Pattern[str]:
+    """A top-level `key:` line: column 0, optionally quoted, optional blanks before the colon."""
+    return re.compile(rf"""^(?P<q>["']?){re.escape(key)}(?P=q)(?P<rest>[ \t]*:(?:[ \t]|\r?$))""")
+
+
+def _rename_keys(text: str, renames: list[tuple[str, str]], fm: dict[str, Any]) -> tuple[str, str]:
+    """(new text, "") with each alias key token renamed, or ("", reason) when that is not safe.
+
+    Only the key token of the top-level line changes: its value, comment, quoting, line ending and
+    position stay as written, and so does every other byte of the file. The result is parsed back
+    and must equal the old frontmatter with the keys renamed, so a shape this cannot see refuses.
+    """
+    bom = "﻿" if text.startswith("﻿") else ""
+    body = text[len(bom):]
+    m = kitlib.FM_RE.match(body)
+    if not m:
+        return "", "no frontmatter block found"
+    lines = m.group(1).split("\n")
+    for alias, canonical in renames:
+        hits = [i for i, line in enumerate(lines) if _key_line(alias).match(line)]
+        if len(hits) != 1:
+            return "", f"the line of `{alias}` was not found exactly once at the top level; rename it by hand"
+        lm = _key_line(alias).match(lines[hits[0]])
+        lines[hits[0]] = f"{lm['q']}{canonical}{lm['q']}" + lines[hits[0]][lm.start("rest"):]
+    raw = "\n".join(lines)
+    expected = {dict(renames).get(k, k): v for k, v in fm.items()}
+    try:
+        after = yaml.safe_load(raw)
+    except yaml.YAMLError:
+        after = None
+    if after != expected:
+        return "", "renaming the key would change more than the key; rename it by hand"
+    return bom + body[:m.start(1)] + raw + body[m.end(1):], ""
+
+
+def fix_property_aliases(vault: Path, onto: Ontology | None = None) -> list[AliasFix]:
+    """What `validate --fix-aliases` would rename, note by note; nothing is written here.
+
+    A note that sets an alias and its canonical name, or two aliases of one name, is refused: which
+    value to keep is the author's call. Only property aliases: a value alias would rewrite a value.
+    """
+    vault = Path(vault)
+    onto = onto or load_ontology(vault)
+    out: list[AliasFix] = []
+    for note in graph_notes(vault):
+        fm = note.frontmatter or {}
+        renames = [(k, onto.canonical_key(k)) for k in fm if isinstance(k, str) and onto.canonical_key(k) != k]
+        if not renames:
+            continue
+        fix = AliasFix(note.rel, renames)
+        out.append(fix)
+        targets = [c for _a, c in renames]
+        clash = next((f"both `{a}` and `{c}` are set" for a, c in renames if c in fm), "")
+        dup = next((c for c in targets if targets.count(c) > 1), None)
+        if dup and not clash:
+            clash = " and ".join(f"`{a}`" for a, c in renames if c == dup) + f" both map to `{dup}`"
+        if clash:
+            fix.refused = f"{clash}; merge them by hand"
+            continue
+        touched = next((f"{a} → {c}" for a, c in renames if SENSITIVITY in (a.strip().lower(), c.strip().lower())), "")
+        if touched:
+            # Every reader judges the raw `sensitivity:` line (#121). An alias onto or away from it
+            # never gets here, since `Ontology` drops it; this guards an `Ontology` built otherwise.
+            fix.refused = f"{touched} touches `sensitivity`, which every reader judges as written; rename it by hand"
+            continue
+        if note.path.is_symlink():
+            # The atomic write replaces the path it is given: a link would become a plain copy,
+            # outside whatever folder floor covers the file it points to.
+            fix.refused = "is a symbolic link; rename the key in the file it points to"
+            continue
+        try:
+            text = note.path.read_bytes().decode("utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            fix.refused = f"cannot be read ({type(exc).__name__})"
+            continue
+        fix.text, fix.refused = _rename_keys(text, renames, fm)
+    return out
+
+
 def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | None = None) -> Graph:
     vault = Path(vault)
     onto = onto or load_ontology(vault)
@@ -420,9 +721,7 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
     self_actor = _self_actor(vault)
     g.nodes[SELF_ID] = Node(id=SELF_ID, kind="virtual", type="person", title="me", description="The vault owner", props={"actor": self_actor})
 
-    tdir = kitlib.template_folder(vault)[0]
-    notes = [n for n in kitlib.load_vault(vault)
-             if n.path.name not in kitlib.RESERVED_FILENAMES and not kitlib.in_template_dir(n.rel, tdir)]
+    notes = graph_notes(vault)
     # pass 1: nodes
     for note in notes:
         fm = note.frontmatter or {}
@@ -432,8 +731,8 @@ def build_graph(vault: Path, onto: Ontology | None = None, now: dt.datetime | No
         nid = note.rel
         g.nodes[nid] = Node(id=nid, kind="note", type=ntype, title=title, description=str(fm.get("description") or "").strip(),
                             path=note.rel, mtime=note.path.stat().st_mtime, props=fm)
-        for msg in mapped:
-            g.findings.append(Finding("warning", "property_alias", nid, msg, "rename the property in the note so every tool sees the canonical name"))
+        for msg, suggestion in mapped:
+            g.findings.append(Finding("warning", "property_alias", nid, msg, suggestion))
         if ntype != "unknown" and not onto.has_class(ntype) and onto.classes:
             g.findings.append(Finding("info", "unknown_type", nid, f"type `{ntype}` is not declared in ontology.yml (tolerated)", "add a class or use an existing one"))
     resolver = Resolver(g.nodes, onto, self_actor)
@@ -734,9 +1033,11 @@ def context_pack(g: Graph, node: str, depth: int = 1) -> str:
 def node_confidential(node: Node, file_confidential: Callable[[str], bool]) -> bool:
     """Is this graph node a confidential note? `file_confidential` answers for its vault-relative path.
 
-    Actors, sources and virtual nodes carry no note frontmatter. The normalised props are checked
-    first because the ontology can map an alias onto `sensitivity`; the file check is what catches a
-    note whose frontmatter did not parse, whose props are therefore empty.
+    Actors, sources and virtual nodes carry no note frontmatter. The file check is the rule every
+    reader shares: the raw `sensitivity:` line, folder floors and path rules. The ontology reserves
+    `sensitivity` and `Ontology` drops any alias onto it (#121), so `props["sensitivity"]` is that
+    raw line and checking it first agrees with the file check; it stays as defence in depth. The
+    file check also catches a note whose frontmatter did not parse, whose props are therefore empty.
     """
     if getattr(node, "kind", "") != "note":
         return False

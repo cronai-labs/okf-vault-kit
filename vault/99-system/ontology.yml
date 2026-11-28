@@ -114,6 +114,8 @@ property_aliases:
   stale-after: stale_after
 # `status` carries no aliases on purpose: it is the OKF lifecycle field, and `kit.py validate` rejects
 # any value outside draft/stable/deprecated before the graph layer could normalise one.
+# `sensitivity` is reserved: an alias onto or away from it, or of its values, is ignored and fails `kit.py validate`;
+# every reader judges the note's own `sensitivity:` line as written.
 value_aliases:
   health: { amber: yellow, ok: green, at-risk: red, at_risk: red }
 

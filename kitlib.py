@@ -319,13 +319,14 @@ class Report:
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     checked: int = 0
+    unit: str = "markdown files"
 
     @property
     def ok(self) -> bool:
         return not self.errors
 
     def render(self) -> str:
-        lines = [f"checked {self.checked} markdown files"]
+        lines = [f"checked {self.checked} {self.unit}"]
         for e in self.errors:
             lines.append(f"ERROR  {e}")
         for w in self.warnings:
@@ -1023,6 +1024,11 @@ class _UniqueKeyLoader(yaml.SafeLoader):
         return super().construct_mapping(node, deep)
 
 
+# What `yaml.safe_load` raises besides YAMLError once the scanner has accepted the text and the
+# constructor fails (yaml/pyyaml#382): `2026-02-30` is a ValueError, a bad `!!bool` value a
+# KeyError, `!!int ""` an IndexError, `!!timestamp 20` an AttributeError.
+YAML_CONSTRUCT_ERRORS = (ValueError, LookupError, AttributeError)
+
 _POLICY_CACHE: dict[str, tuple[Any, ConfidentialityPolicy | PolicyConfigError]] = {}
 
 
@@ -1071,6 +1077,10 @@ def _load_policy(path: Path, stamp: Any) -> ConfidentialityPolicy | PolicyConfig
             loader.dispose()
     except yaml.YAMLError as exc:
         return PolicyConfigError(f"{CONFIG_REL}: not valid YAML ({str(exc).splitlines()[0]})")
+    except YAML_CONSTRUCT_ERRORS as exc:
+        # Outside YAMLError, these escaped as a traceback from every reader that asked the predicate.
+        # Only around the loader: PolicyConfigError is a ValueError too, and is returned below.
+        return PolicyConfigError(f"{CONFIG_REL}: not valid YAML (a value cannot be read: {type(exc).__name__}: {exc})")
     try:
         return parse_confidentiality(data)
     except PolicyConfigError as exc:
