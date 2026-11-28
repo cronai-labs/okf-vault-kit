@@ -132,8 +132,15 @@ class TheResolver(_Vault):
             r = run("doctor", "--vault", str(self.v), "--base-url", "http://127.0.0.1:9")
             return next(ln for ln in r.stdout.splitlines() if ln.startswith("kit config"))
         self.assertIn("ok — .okf-vault-kit.yaml", row())
+        write(self.v, NEW, BROKEN["yaml"])
+        broken = row()
+        self.assertIn("WARNING: .okf-vault-kit.yaml is broken", broken, "never `ok` while every reader hides everything")
+        self.assertNotIn("unclosed", broken, "the reason stays out of a report that leaves the machine")
+        write(self.v, NEW, CONFIG)
         to_old_place(self.v)
         self.assertIn("warning: the config is still at .kit/config.yml", row())
+        write(self.v, OLD, BROKEN["yaml"])
+        self.assertIn("WARNING: .kit/config.yml is broken", row())
         (self.v / OLD).unlink()
         self.assertIn("none — no .okf-vault-kit.yaml", row())
 
@@ -145,6 +152,16 @@ class TheResolver(_Vault):
                 with self.assertRaisesRegex(kitlib.PolicyConfigError, r"^\.okf-vault-kit\.yaml: "):
                     kitlib.confidentiality_policy(self.v)
                 self.assertIsNone(kitlib.confidentiality(self.v, OPEN_REL), "every path, the open ones too")
+
+    def test_a_broken_old_file_alone_fails_closed_too(self):
+        to_old_place(self.v)
+        for name, text in BROKEN.items():
+            with self.subTest(name):
+                write(self.v, OLD, text + "#" * len(name))
+                with contextlib.redirect_stderr(io.StringIO()):
+                    with self.assertRaisesRegex(kitlib.PolicyConfigError, r"^\.kit/config\.yml: "):
+                        kitlib.confidentiality_policy(self.v)
+                    self.assertIsNone(kitlib.confidentiality(self.v, OPEN_REL))
 
     def test_a_new_path_that_is_no_file_is_never_passed_over(self):
         write(self.v, OLD, CONFIG)
@@ -283,8 +300,11 @@ class Migrate(_Vault):
         r = run("config", "migrate", "--apply")
         self.assertEqual(r.returncode, 2, r.stdout)
         self.assertIn("refused: no vault given", r.stderr)
+        r = run("config", "migrate", "--apply", "--force")
+        self.assertEqual(r.returncode, 2, r.stdout)
         r = run("config", "migrate")
-        self.assertEqual(r.returncode, 2, "the dry run of a writer refuses it too")
+        self.assertEqual(r.returncode, 0, "a dry run reads the sample, as other dry runs do")
+        self.assertIn("note: reading the kit's sample vault", r.stderr)
         self.assertFalse((VAULT / NEW).exists())
 
     def test_a_shortened_flag_is_refused(self):

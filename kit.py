@@ -198,10 +198,19 @@ def cmd_doctor(args) -> int:
         rows.append(("agent settings (claude-code)", where, state))
         # Which config file is in force (#135): the old place still works, and a leftover old file
         # beside the new one looks like policy but is not.
+        # A broken file is said first: every reader then hides every note. Without the reason, which
+        # can quote the file, since the report leaves the machine.
         notice = kitlib.config_notice(vault)
-        present = kitlib._present(vault / kitlib.CONFIG_REL)
-        rows.append(("kit config", "-", f"warning: {notice}" if notice else
-                     f"ok — {kitlib.CONFIG_REL}" if present else f"none — no {kitlib.CONFIG_REL}, so no floors are declared"))
+        if kitlib.confidentiality_config_error(vault):
+            state = (f"WARNING: {kitlib.config_rel(vault)} is broken — every reader hides every note until it is "
+                     "fixed (`kit.py validate` says why)" + (f"; {notice}" if notice else ""))
+        elif notice:
+            state = f"warning: {notice}"
+        elif kitlib._present(vault / kitlib.CONFIG_REL):
+            state = f"ok — {kitlib.CONFIG_REL}"
+        else:
+            state = f"none — no {kitlib.CONFIG_REL}, so no floors are declared"
+        rows.append(("kit config", "-", state))
         rep = kitlib.validate_okf(vault)
         # Say when this is the shipped sample. Without it the row is identical for every tester
         # and cannot answer the one question it exists for: is my own vault healthy?
@@ -945,9 +954,10 @@ def cmd_config_migrate(args) -> int:
     both there, the new one is in force: refused unless --force, which sets the old one aside as
     `.kit/config.yml.migrated` (never deleted). An old file with the same bytes as the new one is what
     a run stopped between those two steps leaves, and is removed. Init's old .gitignore block becomes
-    a plain `.kit/`. A second run finds nothing to do.
+    a plain `.kit/`. A second run finds nothing to do. Like every writer, `--apply` refuses the kit's
+    own sample vault unless --vault names it; the dry run reads it, as other dry runs do.
     """
-    vault = _vault(args.vault, write=True)
+    vault = _vault(args.vault, write=args.apply)
     new, old = vault / kitlib.CONFIG_REL, vault / kitlib.LEGACY_CONFIG_REL
     has_new, has_old = kitlib._present(new), kitlib._present(old)
     move = set_aside = drop_copy = False
