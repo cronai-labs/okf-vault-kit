@@ -16,7 +16,7 @@ from unittest import mock
 
 import kitgraph
 import kitproviders as kp
-from tests.helpers import VAULT, temp_vault
+from tests.helpers import VAULT, kitlib, temp_vault
 
 
 class Selection(unittest.TestCase):
@@ -38,9 +38,7 @@ class Selection(unittest.TestCase):
     def test_vault_config_overrides_auto(self):
         v = temp_vault()
         try:
-            (v / ".kit").mkdir(exist_ok=True)
-            (v / ".kit" / "config.yml").write_text("providers:\n  search: naive\n", encoding="utf-8",
-                                                   newline="\n")
+            (v / kitlib.CONFIG_REL).write_text("providers:\n  search: naive\n", encoding="utf-8", newline="\n")
             self.assertEqual(kp.search_provider(v).name, "naive")
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
@@ -48,9 +46,7 @@ class Selection(unittest.TestCase):
     def test_broken_config_does_not_break_the_cli(self):
         v = temp_vault()
         try:
-            (v / ".kit").mkdir(exist_ok=True)
-            (v / ".kit" / "config.yml").write_text("providers: [this is not a mapping\n", encoding="utf-8",
-                                                   newline="\n")
+            (v / kitlib.CONFIG_REL).write_text("providers: [this is not a mapping\n", encoding="utf-8", newline="\n")
             self.assertIsNotNone(kp.search_provider(v).name)
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
@@ -109,8 +105,7 @@ class ConfigThatSomeoneHalfEdited(unittest.TestCase):
 
     def vault_with(self, config: str) -> Path:
         v = temp_vault()
-        (v / ".kit").mkdir(exist_ok=True)
-        (v / ".kit" / "config.yml").write_text(config, encoding="utf-8", newline="\n")
+        (v / kitlib.CONFIG_REL).write_text(config, encoding="utf-8", newline="\n")
         self.addCleanup(shutil.rmtree, v.parent, ignore_errors=True)
         return v
 
@@ -149,8 +144,7 @@ class CollectionScope(unittest.TestCase):
     def test_reads_what_init_wrote_into_the_vault(self):
         v = temp_vault()
         try:
-            (v / ".kit").mkdir(exist_ok=True)
-            (v / ".kit" / "config.yml").write_text('collection: "work-notes"\n', encoding="utf-8", newline="\n")
+            (v / kitlib.CONFIG_REL).write_text('collection: "work-notes"\n', encoding="utf-8", newline="\n")
             self.assertEqual(kp.collection_name(v), "work-notes")
             self.assertEqual(kp.collection_name(v, "explicit"), "explicit")
         finally:

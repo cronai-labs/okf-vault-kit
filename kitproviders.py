@@ -11,7 +11,7 @@ So the pieces that touch the outside world sit in slots:
 
 The search slot is the one you choose, first hit wins:
 
-    explicit argument  ->  KIT_SEARCH_PROVIDER env  ->  `providers.search` in .kit/config.yml  ->  auto
+    explicit argument  ->  KIT_SEARCH_PROVIDER env  ->  `providers.search` in .okf-vault-kit.yaml  ->  auto
 
 `auto` picks the first provider that reports itself available, in the order registered. That is what
 makes a blocked registry survivable: without qmd the search slot falls back to `naive`, which needs
@@ -37,7 +37,6 @@ from typing import Any, Protocol
 
 import kitlib
 
-CONFIG_REL = Path(".kit") / "config.yml"
 DEFAULT_COLLECTION = "vault"
 QMD_TIMEOUT = 120.0
 
@@ -103,10 +102,11 @@ def proxy_vars() -> list[str]:
 # ---------------------------------------------------------------- config
 
 def read_config(vault: Path | None) -> dict[str, Any]:
-    """The vault's `.kit/config.yml` as a mapping — {} when it is missing, empty or not a mapping."""
+    """The vault's kit config (the file `kitlib.config_rel` names, #135) as a mapping — {} when it is
+    missing, empty or not a mapping."""
     if not vault:
         return {}
-    path = Path(vault) / CONFIG_REL
+    path = kitlib.config_path(Path(vault))
     if not path.exists():
         return {}
     try:
@@ -118,7 +118,7 @@ def read_config(vault: Path | None) -> dict[str, Any]:
 
 
 def load_config(vault: Path | None) -> dict[str, Any]:
-    """Provider choices from the vault's `.kit/config.yml`, if it has one.
+    """Provider choices from the vault's kit config, if it has one.
 
     `providers:` with nothing under it, or a scalar, is a config someone half-edited — it must read
     as "no choice made", not crash the command that asked.

@@ -706,8 +706,7 @@ class DoctorReport(unittest.TestCase):
         """The command that diagnoses a broken config must not die on one."""
         v = temp_vault()
         try:
-            (v / ".kit").mkdir(exist_ok=True)
-            (v / ".kit/config.yml").write_text(f"providers:\n  search: /Users/{getpass.getuser()}/secret-project/mysearch\n",
+            (v / kitlib.CONFIG_REL).write_text(f"providers:\n  search: /Users/{getpass.getuser()}/hidden-project/mysearch\n",
                                                encoding="utf-8", newline="\n")
             out = Path(v.parent) / "doctor.txt"
             # without the offline suite's pin: the vault config is under test, and the variable outranks it
@@ -721,7 +720,7 @@ class DoctorReport(unittest.TestCase):
             # report is still written and names the provider the config asked for.
             self.assertIn("mysearch", text)
             self.assertIn("search", text)
-            self.assertNotIn("secret-project", text)
+            self.assertNotIn("hidden-project", text)
             self.assertNotIn(getpass.getuser().lower(), text.lower())
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
@@ -925,7 +924,7 @@ class InitRecordsItsChoices(unittest.TestCase):
 
 
 # What a vault kept in git must leave out (#54). The lines are the contract with the docs.
-VAULT_IGNORES = (".kit/*", "!.kit/config.yml", ".obsidian/workspace*.json", ".obsidian/cache", ".obsidian/plugins/*/data.json")
+VAULT_IGNORES = (".kit/", ".obsidian/workspace*.json", ".obsidian/cache", ".obsidian/plugins/*/data.json")
 
 
 def git_env(**extra) -> dict:
@@ -972,22 +971,22 @@ class InitKeepsMachineStateOutOfGit(unittest.TestCase):
         target = self.tmp / "v"
         self.assertEqual(run("init", "--target", str(target), "--no-qmd").returncode, 0)
         self.assertEqual(git_in(target, "init", "-q").returncode, 0)
-        for path in (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/x.json",
+        for path in (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/x.json", ".kit/config.yml",
                      ".kit/agent-settings/claude-code.json", ".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/cache",
                      ".obsidian/plugins/obsidian-local-rest-api/data.json"):
             with self.subTest(path=path):
                 self.assertEqual(git_in(target, "check-ignore", "-q", "--no-index", path).returncode, 0,
                                  f"{path} would be committed")
-        for path in ("index.md", ".kit/config.yml", ".obsidian/app.json",
+        for path in ("index.md", ".okf-vault-kit.yaml", ".obsidian/app.json",
                      ".obsidian/plugins/obsidian-linter/main.js"):
             with self.subTest(path=path):
                 self.assertEqual(git_in(target, "check-ignore", "-q", "--no-index", path).returncode, 1,
                                  f"{path} belongs in the vault's history")
 
     @unittest.skipUnless(shutil.which("git"), "git not on PATH")
-    def test_git_add_keeps_the_kit_config_and_leaves_the_rest_of_kit_out(self):
-        """The config holds the confidentiality floors and open folders: a clone needs it (#54).
-        git cannot re-include a file below an excluded folder, so the rule must be `.kit/*`."""
+    def test_git_add_keeps_the_kit_config_and_leaves_kit_out(self):
+        """The config holds the confidentiality floors and open folders: a clone needs it (#54). It
+        lives at the vault root since #135, so `.kit/` is one plain rule and nothing in it is kept."""
         target = self.tmp / "v"
         self.assertEqual(run("init", "--target", str(target), "--no-qmd").returncode, 0)
         for rel in (".kit/graph.json", ".kit/bridge-audit.jsonl", ".kit/proposals/hidden-draft.json",
@@ -997,7 +996,8 @@ class InitKeepsMachineStateOutOfGit(unittest.TestCase):
             p.write_text("{}", encoding="utf-8")
         self.assertEqual(git_in(target, "init", "-q").returncode, 0)
         self.assertEqual(git_in(target, "add", ".").returncode, 0)
-        self.assertEqual(git_in(target, "ls-files", ".kit").stdout.split(), [".kit/config.yml"])
+        self.assertEqual(git_in(target, "ls-files", ".kit").stdout.split(), [])
+        self.assertEqual(git_in(target, "ls-files", ".okf-vault-kit.yaml").stdout.split(), [".okf-vault-kit.yaml"])
 
     def test_force_leaves_an_existing_gitignore_byte_identical(self):
         target = self.tmp / "v"
@@ -1021,7 +1021,8 @@ class InitKeepsMachineStateOutOfGit(unittest.TestCase):
         target = self.tmp / "v"
         with mock.patch.object(kit, "TEMPLATE_VAULT", template), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(kit.main(["init", "--target", str(target), "--no-qmd"]), 0)
-        self.assertEqual(sorted(p.name for p in (target / ".kit").iterdir()), ["config.yml"])
+        self.assertFalse((target / ".kit").exists(), "nothing in .kit/ is copied, the config is not there any more")
+        self.assertTrue((target / ".okf-vault-kit.yaml").is_file(), "init writes the config at the root (#135)")
         for rel in (".obsidian/workspace.json", ".obsidian/workspace-mobile.json", ".obsidian/cache"):
             self.assertFalse((target / rel).exists(), f"{rel} is per-machine state of the checkout")
         self.assertTrue((target / ".obsidian" / "app.json").is_file(), "the settings themselves still travel")
@@ -1055,23 +1056,41 @@ class InitKeepsMachineStateOutOfGit(unittest.TestCase):
     def test_the_template_s_kit_config_is_copied_and_its_state_is_not(self):
         """The config holds the floors and open folders; the rest of `.kit/` is per-machine."""
         config = "# the template's floors\nconfidential_folders: [05-people]\ncollection: \"tpl\"\n"
-        template = self.template_with({".kit/config.yml": config, ".kit/graph.json": "{}",
+        template = self.template_with({".okf-vault-kit.yaml": config, ".kit/graph.json": "{}",
                                        ".kit/proposals/hidden-draft.json": "{}"})
         target = self.tmp / "v"
         self.init_from(template, target)
-        self.assertEqual(sorted(p.name for p in (target / ".kit").iterdir()), ["config.yml"])
-        self.assertEqual((target / ".kit" / "config.yml").read_text(encoding="utf-8"), config)
+        self.assertFalse((target / ".kit").exists())
+        self.assertEqual((target / ".okf-vault-kit.yaml").read_text(encoding="utf-8"), config)
 
     def test_force_keeps_the_vault_s_own_kit_config(self):
         """`copytree` overwrites: under `--force` the template's config would replace the
         vault's own floors, and its confidential folders would go open without a word."""
-        template = self.template_with({".kit/config.yml": "collection: \"tpl\"\n"})
+        template = self.template_with({".okf-vault-kit.yaml": "collection: \"tpl\"\n"})
         target = self.tmp / "v"
         mine = b"confidential_folders: [hidden-folder]\r\ncollection: \"mine\"\r\n"
-        (target / ".kit").mkdir(parents=True)
-        (target / ".kit" / "config.yml").write_bytes(mine)
+        target.mkdir(parents=True)
+        (target / ".okf-vault-kit.yaml").write_bytes(mine)
         self.init_from(template, target, "--force")
-        self.assertEqual((target / ".kit" / "config.yml").read_bytes(), mine)
+        self.assertEqual((target / ".okf-vault-kit.yaml").read_bytes(), mine)
+
+    def test_force_on_a_vault_with_the_old_config_writes_no_new_one(self):
+        """A new `.okf-vault-kit.yaml` beside `.kit/config.yml` wins over it (#135): one holding only
+        the template's settings or the collection would drop the vault's floors without a word."""
+        for template_files in ({".okf-vault-kit.yaml": "collection: \"tpl\"\n"}, {}):
+            with self.subTest(template=sorted(template_files)):
+                shutil.rmtree(self.tmp, ignore_errors=True)
+                self.tmp.mkdir()
+                template = self.template_with(template_files)
+                target = self.tmp / "v"
+                mine = b"confidentiality:\n  confidential_folders: [hidden-folder]\n"
+                (target / ".kit").mkdir(parents=True)
+                (target / ".kit" / "config.yml").write_bytes(mine)
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.init_from(template, target, "--force")
+                self.assertFalse((target / ".okf-vault-kit.yaml").exists())
+                self.assertEqual(kitlib.confidentiality_policy(target).declared_folders, ("hidden-folder",))
+                self.assertTrue((target / ".kit" / "config.yml").read_bytes().startswith(mine), "only appended to")
 
 
 @unittest.skipUnless(shutil.which("git"), "git not on PATH")
@@ -1181,29 +1200,37 @@ class DoctorVaultGitRow(unittest.TestCase):
         self.assertIn("ok", row)
         self.assertNotIn("warning", row.lower())
 
-    def test_kit_config_kept_in_git_is_not_counted(self):
-        """The ignore file init writes keeps `.kit/config.yml`, the floors and open folders, in
-        git. Doctor must not then tell the user to untrack it."""
+    def test_kit_config_kept_in_git_is_ok(self):
+        """The ignore file init writes keeps `.okf-vault-kit.yaml`, the floors and open folders, in git."""
         self.init_vault()
         self.assertEqual(git_in(self.vault, "add", ".").returncode, 0)
-        self.assertIn(".kit/config.yml", git_in(self.vault, "ls-files", ".kit").stdout.split())
+        self.assertIn(".okf-vault-kit.yaml", git_in(self.vault, "ls-files").stdout.split())
         row = self.row(self.doctor())
         self.assertIn("ok", row)
         self.assertNotIn("warning", row.lower())
 
-    def test_a_tracked_kit_config_is_never_counted(self):
-        """Whatever rule covers it, a tracked `.kit/config.yml` is where it belongs (#54). A vault
-        with no rule for `.kit`, or one from before the `.kit/*` rule that force-added it, gets the
-        count of the other files only."""
-        for lines in ((), (".kit/",)):
-            with self.subTest(lines=lines):
-                self.init_vault(files=(".kit/graph.json",))
-                gi = self.vault / ".gitignore"
-                kept = [ln for ln in gi.read_text(encoding="utf-8").splitlines() if not ln.startswith((".kit", "!.kit"))]
-                gi.write_text("".join(f"{ln}\n" for ln in (*kept, *lines)), encoding="utf-8", newline="\n")
-                self.assertEqual(git_in(self.vault, "add", "-f", ".kit/config.yml", ".kit/graph.json").returncode, 0)
+    def test_an_ignored_kit_config_is_a_warning(self):
+        """A clone of a vault whose git ignores the config has no floors (#135). Warned about before
+        the file is written too, since the rule is what drops it."""
+        for rule in (".okf-vault-kit.yaml", "*.yaml", ".*"):
+            with self.subTest(rule=rule):
+                self.init_vault(lines=(rule,))
                 row = self.row(self.doctor())
-                self.assertIn("WARNING: 1 file(s)", row)
+                self.assertIn("WARNING: .okf-vault-kit.yaml is ignored by git", row)
+                (self.vault / ".okf-vault-kit.yaml").unlink()
+                self.assertIn("WARNING: .okf-vault-kit.yaml is ignored by git", self.row(self.doctor()))
+        self.init_vault(lines=(".*", "!.okf-vault-kit.yaml"))
+        self.assertNotIn(".okf-vault-kit.yaml", self.row(self.doctor()), "re-included: kept")
+
+    def test_a_tracked_old_config_is_counted_and_the_fix_moves_it_first(self):
+        """The config is no longer named by the row (#135): an old `.kit/config.yml` tracked under a
+        plain `.kit/` rule is counted like any `.kit/` file, and the fix says to move it out first."""
+        self.init_vault(files=(".kit/graph.json",))
+        (self.vault / ".okf-vault-kit.yaml").replace(self.vault / ".kit" / "config.yml")
+        self.assertEqual(git_in(self.vault, "add", "-f", ".kit/config.yml", ".kit/graph.json").returncode, 0)
+        row = self.row(self.doctor())
+        self.assertIn("WARNING: 2 file(s)", row)
+        self.assertIn("kit.py config migrate --apply` if the config is still at .kit/config.yml, then", row)
 
     def test_only_files_the_rules_cover_are_counted_and_the_fix_lists_just_those(self):
         hidden = ".obsidian/plugins/hidden-plugin/data.json"

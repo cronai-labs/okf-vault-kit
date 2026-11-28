@@ -7,7 +7,7 @@ the MCP tools and the backend:
   * write allow/deny lists  vault-relative folder prefixes, checked against the path the backend resolves to
                             (case-insensitively); people notes and system folders are denied by default
   * confidential hiding     notes with `sensitivity: confidential`, every file a confidential folder or path rule in
-                            `.kit/config.yml` covers, and with `open_folders` declared every file outside them (all of
+                            `.okf-vault-kit.yaml` covers, and with `open_folders` declared every file outside them (all of
                             them while that file is broken), are invisible to reads,
                             searches, listings and every graph tool, and agents may not write them or set the
                             `sensitivity` property. This holds for this bridge only: a tool that opens the vault's files itself is not stopped by it
@@ -38,7 +38,10 @@ from typing import Any
 import kitgraph
 import kitlib
 
-DEFAULT_DENY_WRITE = ("05-people", "99-system", "90-templates", "09-archive", ".obsidian", ".kit", "index.md", "log.md", "context.jsonld")
+# The kit config is denied with the rest (#135): it holds the confidentiality floors and open
+# folders, so a model that could write it could widen what this bridge hides.
+DEFAULT_DENY_WRITE = ("05-people", "99-system", "90-templates", "09-archive", ".obsidian", ".kit", kitlib.CONFIG_REL,
+                      "index.md", "log.md", "context.jsonld")
 READ_TOOLS = ("read_note", "list_files", "search", "backlinks", "graph_neighbors", "graph_path", "graph_query", "graph_context", "todos")
 WRITE_TOOLS = ("create_note", "append_note", "daily_append", "set_property", "file_minutes")
 

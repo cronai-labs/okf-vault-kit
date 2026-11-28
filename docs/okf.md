@@ -54,7 +54,7 @@ Actor convention: `human:<id>` for people, `process:<id>` for jobs, `<producer>/
 |---|---|---|---|
 | OKF conformance | the spec, §11 | yes | yes |
 | Links, wikilinks, Bases embeds | this kit's | no | yes |
-| Confidentiality (when `.kit/config.yml` declares floors) | this kit's | no | yes |
+| Confidentiality (when `.okf-vault-kit.yaml` declares floors) | this kit's | no | yes |
 | Ontology file (when the vault has `99-system/ontology.yml`) | this kit's | an alias onto or away from `sensitivity` only | yes |
 | Ontology | this kit's | no | yes |
 

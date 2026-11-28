@@ -17,9 +17,9 @@ uv run kit.py reconcile --apply         # rewrite hub cells, add missing rows, r
 |---|---|---|
 | `hub_drift` | one-liner or register cell disagrees with the note's `health` / `state` / `milestone`+`due` / `date` | overwrite the cell from the note |
 | `hub_missing_row` | an active project or any decision that is not confidential has no row | append a row (`description` becomes the one-liner; register is re-sorted newest first) |
-| `hub_confidential_row` | a row links to a confidential note (marked `sensitivity: confidential`, or in a folder or path `.kit/config.yml` declares confidential); the finding names the hub's line, not the row's cells | remove the row |
+| `hub_confidential_row` | a row links to a confidential note (marked `sensitivity: confidential`, or in a folder or path `.okf-vault-kit.yaml` declares confidential); the finding names the hub's line, not the row's cells | remove the row |
 | `hub_row_unverifiable` | a row links to a note that cannot be read or parsed, so the kit cannot tell whether it is confidential | nothing — the row is kept; fix the note, or delete the row yourself |
-| `confidentiality_config` | `.kit/config.yml` cannot say what is confidential (unreadable, not valid YAML, or a `confidentiality:` block of the wrong shape, [security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)); every note then counts as confidential, so every hub row is reported as `hub_row_unverifiable` | nothing — fix the file and run reconcile again |
+| `confidentiality_config` | the kit config (`.okf-vault-kit.yaml`, or `.kit/config.yml` while it is still there) cannot say what is confidential (unreadable, not valid YAML, or a `confidentiality:` block of the wrong shape, [security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)); every note then counts as confidential, so every hub row is reported as `hub_row_unverifiable` | nothing — fix the file and run reconcile again |
 | `hub_broken_row` | a row links to a note that does not exist | nothing — you decide whether to delete or re-link |
 | `priorities_missing_open_decision` | a decision note is `state: open` but not listed under *Open decisions* in Priorities | nothing — Priorities is prose you write |
 | `state_conflict` | decision B `supersedes` A, but A is not `state: superseded` | set `state: superseded` on A (then the register row follows in the same run) |
@@ -40,7 +40,7 @@ uv run kit.py todos --sync-done         # tick open copies of tasks that are alr
 uv run kit.py todos --show-confidential # include tasks from notes marked sensitivity: confidential
 ```
 
-Tasks in confidential notes (marked `sensitivity: confidential`, or in a confidential folder of `.kit/config.yml`) are left out of the summary, of `--json` and of the digest, with every duplicate and done/open conflict that involves one, and a count line says how many; a task's text and its note's path are as confidential as the note ([security.md](security.md#what-a-confidential-note-keeps-to-itself)). `--show-confidential` includes them in the summary and in `--json`, for output that stays with you; the digest never lists them.
+Tasks in confidential notes (marked `sensitivity: confidential`, or in a confidential folder of `.okf-vault-kit.yaml`) are left out of the summary, of `--json` and of the digest, with every duplicate and done/open conflict that involves one, and a count line says how many; a task's text and its note's path are as confidential as the note ([security.md](security.md#what-a-confidential-note-keeps-to-itself)). `--show-confidential` includes them in the summary and in `--json`, for output that stays with you; the digest never lists them.
 
 What it reconciles:
 

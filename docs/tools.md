@@ -21,10 +21,11 @@ Nothing here is load-bearing by name. The pieces that touch the outside world si
 | `graph` | `builtin` | the vault as nodes and edges |
 
 Selection order, first hit wins: the command-line flag (`--search-provider`), then
-`KIT_SEARCH_PROVIDER` in the environment, then `.kit/config.yml` in the vault, then `auto`.
+`KIT_SEARCH_PROVIDER` in the environment, then the vault's kit config, `.okf-vault-kit.yaml` at the
+vault root, then `auto`.
 
 ```yaml
-# <vault>/.kit/config.yml
+# <vault>/.okf-vault-kit.yaml
 providers:
   search: naive        # or qmd, or auto
 ```
@@ -32,7 +33,7 @@ providers:
 The same file declares which folders and files are confidential as a whole, whatever their notes say (`confidentiality:`, with `confidential_folders` and `confidential_paths`), or turns the default around with `open_folders`: everything outside the folders it lists is then confidential, and inside them the folders, path rules and labels still hide what they hide. That block is read strictly, and a broken one hides every note from every reader until it is fixed: [security.md](security.md#scoped-hiding-confidential-folders-and-path-rules), and for open folders [security.md](security.md#open-folders-everything-else-is-confidential).
 
 ```yaml
-# <vault>/.kit/config.yml
+# <vault>/.okf-vault-kit.yaml
 confidentiality:
   confidential_folders: ["05-people"]
   confidential_paths: ["08-resources/exports/*.csv"]
@@ -43,6 +44,21 @@ confidentiality:
 machine survivable: if the package registry is blocked and qmd never installs, the search slot
 falls back to `naive` — term frequency over the files, no index, no dependencies — and everything
 else carries on. Slower and less clever, but the vault, the model and the tool calls all still work.
+
+**The config used to live at `.kit/config.yml`.** Up to 0.3 the kit kept this file in `.kit/`, which
+otherwise holds machine state (the graph, the bridge's audit log, proposals, the agent-settings
+manifest). It is named after the tool now, so neither the OKF format nor another tool claims the
+name, hidden so Obsidian does not list it, and at the root so `.kit/` can be ignored and denied whole.
+The kit still reads `.kit/config.yml`, with a warning on stderr, while there is no
+`.okf-vault-kit.yaml`; with both present the new file is in force, and `doctor` and `validate` say
+the old one is ignored. A broken `.okf-vault-kit.yaml` hides everything as a broken `.kit/config.yml`
+did; the kit never falls back to the old file past a new one it cannot read.
+`kit.py config migrate --vault ~/Notes/vault` previews the move, and `--apply` makes it: the file
+keeps its bytes, the `.kit/*` and `!.kit/config.yml` rules `init` wrote into the vault's `.gitignore`
+become one `.kit/`, and the rest of that file is left as it is. With both files present it refuses
+unless `--force`, which sets the old file aside as `.kit/config.yml.migrated` and never deletes it;
+a second run says there is nothing to do. It writes, so it refuses the kit's own sample vault unless
+`--vault` names it. [vault-guide.md](vault-guide.md#sync-and-safety) has the git side.
 The same fallback catches a qmd that is installed but has not indexed anything yet.
 
 The `llm` slot has one provider because it does not need more: LM Studio, llama.cpp's
@@ -137,17 +153,18 @@ uv run kit.py minutes recap.txt --title "Sync" [--keep-open]
 uv run kit.py examples remove [--dry-run]                                # delete the sample notes and repair what referred to them
 uv run kit.py policy export [--out FILE]                                 # what is confidential, as JSON
 uv run kit.py agent-settings claude-code [--apply | --check | --remove] [--allow-git]   # deny it to Claude Code's own tools
+uv run kit.py config migrate [--apply] [--force]                         # move .kit/config.yml to .okf-vault-kit.yaml
 uv run mcp/vault_bridge.py --backend fs --vault ~/Notes/vault          # MCP server, headless
 uv run mcp/vault_bridge.py --backend cli --vault-name "vault"          # MCP server via official CLI
 ```
 
-Every vault command acts on `--vault`, else on `KIT_VAULT`, else on the kit's own sample vault (`vault/` in the checkout). The sample is a fallback for reading only: a command that reads it says so in one line on stderr, and a command that writes (`index`, `log`, `minutes`, `examples remove`, `graph build`, `graph query --rebuild`, `reconcile --apply`, `todos --digest` or `--sync-done`, `proposals apply` or `reject`, `validate --fix-aliases --apply`, `agent-settings --apply`) refuses it with exit code 2 and changes nothing. `init` copies that sample into every new vault, so changing it is a deliberate act: name it, `--vault vault` (`agent-settings --apply` and `mcp-config --write` refuse the sample even then). Dry runs (`minutes --dry-run`, `examples remove --dry-run`) count as reads. A read leaves nothing behind in the sample either: `graph query` answers from memory there instead of refreshing `.kit/graph.sqlite`, and `proposals list` or `show` creates no `.kit/proposals/`.
+Every vault command acts on `--vault`, else on `KIT_VAULT`, else on the kit's own sample vault (`vault/` in the checkout). The sample is a fallback for reading only: a command that reads it says so in one line on stderr, and a command that writes (`index`, `log`, `minutes`, `examples remove`, `graph build`, `graph query --rebuild`, `reconcile --apply`, `todos --digest` or `--sync-done`, `proposals apply` or `reject`, `validate --fix-aliases --apply`, `agent-settings --apply`, `config migrate`, its dry run included) refuses it with exit code 2 and changes nothing. `init` copies that sample into every new vault, so changing it is a deliberate act: name it, `--vault vault` (`agent-settings --apply` and `mcp-config --write` refuse the sample even then). Dry runs (`minutes --dry-run`, `examples remove --dry-run`) count as reads. A read leaves nothing behind in the sample either: `graph query` answers from memory there instead of refreshing `.kit/graph.sqlite`, and `proposals list` or `show` creates no `.kit/proposals/`.
 
 `validate` warns once per note that uses a property alias from `99-system/ontology.yml` and names the rename, for example ``rename `attendees` to `people` ``. `validate --fix-aliases` lists each such note and the renames it would make, and writes nothing; `--fix-aliases --apply` makes them. It changes only the key of the top-level frontmatter line: the value, a trailing comment, quoting, the order of keys, line endings and a byte-order mark stay as they are, and the rest of the note is untouched. A note that sets both an alias and its canonical name (`attendees` and `people`), or two aliases of one name (`assignee` and `responsible`), is refused and listed for you to merge by hand; the run then exits 1. So is a note reached through a symbolic link (the write would replace the link with a copy). An alias onto or away from `sensitivity` is never listed: the ontology reserves that name, every reader ignores such an alias and judges the line as written ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)), and plain `validate` names it. While the vault's `ontology.yml` cannot be parsed, `--fix-aliases` renames nothing, since the readers fall back to the kit's own alias table. A note that cannot be written (read-only, or locked by another program on Windows) is listed and left as it was, the others are still renamed, and the run exits 1. Notes in the template folder are left alone, as `validate` does not check them. A second run finds nothing to do and writes nothing. Value aliases (`health: amber`) are reported, not rewritten. `--apply` without `--fix-aliases` is a usage error.
 
-`policy export` and `agent-settings claude-code` turn the vault's policy into a coding agent's own read restrictions: the export lists every confidential folder, path rule and file as the vault spells them, and the generator merges matching `Read(...)` deny rules, `sandbox.filesystem.denyRead` entries and the sandbox switches into the vault's `.claude/settings.json`, and write-protects `.kit/config.yml` and its own manifest against the agent's shell and file tools (dry run by default, `--apply` to write, `--check` for CI, `--remove` to undo, `.git` denied unless `--allow-git`). With `open_folders` declared it writes allow-open settings instead: the vault denied to the sandbox, the open folders allowed, what is confidential inside them denied one by one, and a PreToolUse guard written inline into `settings.json` that refuses the agent's file tools anywhere outside the open folders, for writes as well as reads. `kit.py doctor` reports drift, and a guard that is missing, altered or switched off. What each entry is, what it does not cover, and what was tested: [security.md §5](security.md#generated-from-the-vault-kitpy-agent-settings-claude-code) and [allow-open mode](security.md#allow-open-mode).
+`policy export` and `agent-settings claude-code` turn the vault's policy into a coding agent's own read restrictions: the export lists every confidential folder, path rule and file as the vault spells them, and the generator merges matching `Read(...)` deny rules, `sandbox.filesystem.denyRead` entries and the sandbox switches into the vault's `.claude/settings.json`, and write-protects `.okf-vault-kit.yaml` and its own manifest against the agent's shell and file tools, and denies `.kit/` (machine state) whole to reads (dry run by default, `--apply` to write, `--check` for CI, `--remove` to undo, `.git` denied unless `--allow-git`). With `open_folders` declared it writes allow-open settings instead: the vault denied to the sandbox, the open folders allowed, what is confidential inside them denied one by one, and a PreToolUse guard written inline into `settings.json` that refuses the agent's file tools anywhere outside the open folders, for writes as well as reads. `kit.py doctor` reports drift, and a guard that is missing, altered or switched off. What each entry is, what it does not cover, and what was tested: [security.md §5](security.md#generated-from-the-vault-kitpy-agent-settings-claude-code) and [allow-open mode](security.md#allow-open-mode).
 
-Notes marked `sensitivity: confidential`, the files a confidential folder or path rule in `.kit/config.yml` covers ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)), and, with `open_folders` declared, every file outside the open folders, stay out of what `kit.py` hands a model or writes to disk, as they stay out of the bridge's tools:
+Notes marked `sensitivity: confidential`, the files a confidential folder or path rule in `.okf-vault-kit.yaml` covers ([security.md](security.md#scoped-hiding-confidential-folders-and-path-rules)), and, with `open_folders` declared, every file outside the open folders, stay out of what `kit.py` hands a model or writes to disk, as they stay out of the bridge's tools:
 
 - `llm ask` leaves a confidential search hit out of the prompt whole (no path, no title, no snippet) and only prints how many it left out: the confidential hits that ranked ahead of the last source it sends. It asks the search for more hits than it uses, so the hits it leaves out do not shrink the list of sources the model gets. With `--graph`, the context packs come from the redacted graph, so a visible note's pack does not name a confidential neighbour either. A confidential note's title counts as confidential, on the bridge and in the CLI alike.
 - `graph build`, `export`, `query`, `neighbors`, `path` and `pack` use the same redacted graph as the bridge's graph tools by default: confidential notes, their edges, their findings, and every derived value or finding of another note that refers to one are left out of `.kit/graph.json`, `graph.jsonld`, `graph.nt`, `graph.sqlite` and the printed output. `graph build` prints how many notes it left out; the other graph commands do not. `--show-confidential` includes them, with the same meaning as the bridge's flag; use it only for output that stays with you.

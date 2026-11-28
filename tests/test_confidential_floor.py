@@ -1,4 +1,4 @@
-"""Folder floors and path rules from `.kit/config.yml` (#120).
+"""Folder floors and path rules from `.okf-vault-kit.yaml` (#120).
 
 A folder (or a path rule) sets the floor; a note's own `sensitivity` may raise it, never lower it.
 The floor lives in the one shared predicate, `kitlib.confidentiality`, so the bridge, `index.md`,
@@ -188,7 +188,7 @@ class TheFloorDecides(_FloorVault):
     def test_validate_warns_about_a_path_rule_that_matches_no_file(self):
         set_config(self.vault, CONFIG.replace('"07-knowledge/**/harrier-*.md"', '"07-knowledge/**/harrier-*.md", "nowhere/*.pdf"'))
         r = run("validate", "--vault", str(self.vault))
-        self.assertIn("warn   .kit/config.yml: path rule 'nowhere/*.pdf' matches no file in the vault", r.stdout)
+        self.assertIn("warn   .okf-vault-kit.yaml: path rule 'nowhere/*.pdf' matches no file in the vault", r.stdout)
         self.assertNotIn("path rule '08-resources/exports/*.csv' matches no file", r.stdout, "it matches payroll.csv")
 
     def test_a_path_rule_hides_a_csv_and_only_the_floor_judges_it(self):
@@ -410,7 +410,7 @@ class AnUnconstructableValueFailsClosed(unittest.TestCase):
         for name, text in UNCONSTRUCTABLE.items():
             with self.subTest(name):
                 set_config(self.vault, text + "#" * len(name))   # a new size each time: the cache keys on it
-                with self.assertRaisesRegex(kitlib.PolicyConfigError, r"^\.kit/config\.yml: not valid YAML"):
+                with self.assertRaisesRegex(kitlib.PolicyConfigError, r"^\.okf-vault-kit\.yaml: not valid YAML"):
                     kitlib.confidentiality_policy(self.vault)
                 self.assertIsNone(kitlib.confidentiality(self.vault, "07-knowledge/hybrid-search.md"))
 
@@ -435,7 +435,7 @@ class AnUnconstructableValueFailsClosed(unittest.TestCase):
         set_config(self.vault, UNCONSTRUCTABLE["impossible date"])
         r = run("validate", "--vault", str(self.vault))
         self.assertNotIn("Traceback", r.stderr)
-        self.assertRegex(r.stdout, r"(?m)^ERROR  \.kit/config\.yml: not valid YAML \(a value cannot be read: "
+        self.assertRegex(r.stdout, r"(?m)^ERROR  \.okf-vault-kit\.yaml: not valid YAML \(a value cannot be read: "
                                    r"ValueError: .+\) — until this is fixed every reader treats every note as "
                                    r"confidential$")
 
@@ -470,8 +470,9 @@ class ABrokenConfigHidesEverything(unittest.TestCase):
         self.assertIs(kitlib.confidentiality(self.vault, "07-knowledge/hybrid-search.md"), False)
         set_config(self.vault, "")
         self.assertIs(kitlib.confidentiality(self.vault, "07-knowledge/hybrid-search.md"), False)
-        shutil.rmtree(self.vault / ".kit")
-        (self.vault / ".kit").write_text("not a folder\n", encoding="utf-8")
+        (self.vault / kitlib.CONFIG_REL).unlink()
+        shutil.rmtree(self.vault / ".kit", ignore_errors=True)
+        (self.vault / ".kit").write_text("not a folder\n", encoding="utf-8")   # the old place cannot hold one
         self.assertIs(kitlib.confidentiality(self.vault, "07-knowledge/hybrid-search.md"), False)
 
     def test_the_providers_reader_stays_lenient(self):
@@ -501,12 +502,12 @@ class ABrokenConfigHidesEverything(unittest.TestCase):
         recap.write_text("Alex and Sam met about the search relaunch.\n", encoding="utf-8")
         r = run("minutes", str(recap), "--title", "Broken sync", "--vault", str(self.vault), "--date", "2026-09-21")
         self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-        self.assertIn(".kit/config.yml", r.stderr)
+        self.assertIn(".okf-vault-kit.yaml", r.stderr)
         self.assertFalse((self.vault / "02-meetings/2026-09-21-broken-sync.md").exists())
-        with self.assertRaisesRegex(ob.BridgeError, r"\.kit/config\.yml"):
+        with self.assertRaisesRegex(ob.BridgeError, r"\.okf-vault-kit\.yaml"):
             ob.FsBackend(self.vault).file_minutes("We met.", "Broken sync", "2026-09-21", mode="raise")
         g = bp.Guarded(ob.FsBackend(self.vault), bp.Policy(audit_path=None, hide_confidential=False), self.vault)
-        with self.assertRaisesRegex(ob.BridgeError, r"\.kit/config\.yml"):
+        with self.assertRaisesRegex(ob.BridgeError, r"\.okf-vault-kit\.yaml"):
             g.file_minutes("We met.", "Broken sync", "2026-09-21")
         self.assertFalse((self.vault / "02-meetings/2026-09-21-broken-sync.md").exists())
         # --keep-open writes no label, so it may still file; the predicate hides the note meanwhile.
@@ -519,7 +520,7 @@ class ABrokenConfigHidesEverything(unittest.TestCase):
     def test_validate_reports_it(self):
         set_config(self.vault, BROKEN["escapes"])
         r = run("validate", "--vault", str(self.vault))
-        self.assertRegex(r.stdout, r"(?m)^ERROR  \.kit/config\.yml: confidentiality\.confidential_folders entry '\.\./elsewhere' "
+        self.assertRegex(r.stdout, r"(?m)^ERROR  \.okf-vault-kit\.yaml: confidentiality\.confidential_folders entry '\.\./elsewhere' "
                                    r"must not use `\.\.` — until this is fixed every reader treats every note as confidential$")
 
     def test_the_template_vault_has_no_floor_section(self):
@@ -694,7 +695,7 @@ class _OpenVault(unittest.TestCase):
 class OpenFoldersDecide(_OpenVault):
     def test_outside_every_open_folder_is_confidential(self):
         for rel in (CONDOR_REL, CONDOR_REL.removesuffix(".md"), "05-people/alex-example.md", "index.md", "log.md",
-                    "Inbox.md", ".kit/config.yml", "00-home/no-such-note.md", "", "04-areas-old/x.md", "../x.md"):
+                    "Inbox.md", ".okf-vault-kit.yaml", "00-home/no-such-note.md", "", "04-areas-old/x.md", "../x.md"):
             self.assertIs(kitlib.confidentiality(self.vault, rel), True, repr(rel))
         self.assertIs(kitlib.own_confidentiality(self.vault, CONDOR_REL), False, "the note itself says nothing")
 
@@ -753,7 +754,7 @@ class OpenFoldersDecide(_OpenVault):
     def test_validate_warns_about_an_open_folder_that_does_not_exist(self):
         set_config(self.vault, OPEN_CONFIG.replace('"07-knowledge"', '"07-knowlege"'))
         r = run("validate", "--vault", str(self.vault))
-        self.assertIn("warn   .kit/config.yml: open folder '07-knowlege' does not exist", r.stdout)
+        self.assertIn("warn   .okf-vault-kit.yaml: open folder '07-knowlege' does not exist", r.stdout)
         self.assertNotIn("open folder '04-Areas'", r.stdout, "matching ignores case")
         self.assertNotIn("open folder '08-RESOURCES'", r.stdout)
         self.assertIn("== Confidentiality: floors, path rules and open folders", r.stdout)

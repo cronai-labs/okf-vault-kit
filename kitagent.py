@@ -8,12 +8,13 @@ Two layers, both pure functions of the vault so the CLI, `--check` and `doctor` 
                   here decides confidentiality; it only walks the tree and asks the predicate.
   claude_code_*   Claude Code's `permissions.deny` `Read(...)` rules and `sandbox.filesystem.denyRead`
                   entries for that export, merged into the vault's `.claude/settings.json`. Which entries
-                  the kit added is recorded in a manifest beside the policy, not in settings.json, so an
+                  the kit added is recorded in a manifest in `.kit/`, not in settings.json, so an
                   entry the user wrote is never removed. With `open_folders` declared (#126) the plan is
                   allow-open instead: `./` denied to the sandbox, the open folders in `allowRead`, what is
                   confidential inside them denied one by one, edits to `.claude/` denied, and a
                   PreToolUse guard (GUARD_CODE) inline in settings.json for the Read, Grep and Glob tools,
-                  which the sandbox does not govern. In both modes the config and the manifest are
+                  which the sandbox does not govern. In both modes `.kit/` (machine state) is denied
+                  whole to reads, and the config and the manifest are
                   write-protected (`Edit(...)` deny rules and `sandbox.filesystem.denyWrite`): the
                   bridge reads the config live, so an agent that could edit it could widen the policy.
 
@@ -45,10 +46,18 @@ GENERATOR = "kit.py agent-settings claude-code"
 # The files this generator writes or the agent's own harness reads: never listed as confidential,
 # or a path rule such as `**/*.json` would make each run see the last one's output as new (#120).
 AGENT_OWN = frozenset({SETTINGS_REL, LOCAL_SETTINGS_REL, MANIFEST_REL})
-# Files the kit derives from the notes, denied whatever the policy says: written before a floor was
-# declared (or by a graph built with --show-confidential), they still hold its notes' titles,
-# frontmatter and, in the audit log, text a tool served. `kit.py graph build` rewrites the graph.
-DERIVED = (("path", ".kit/graph.*"), ("file", ".kit/bridge-audit.jsonl"), ("folder", ".kit/proposals"))
+# The kit's machine state, denied whole whatever the policy says (#135): the files the kit derives
+# from the notes, written before a floor was declared (or by a graph built with --show-confidential),
+# still hold its notes' titles, frontmatter and, in the audit log, text a tool served; the proposals
+# hold text an agent wanted written; the manifest says which entries are the kit's. The config left
+# `.kit/` for the vault root, so nothing in it is policy any more.
+KIT_STATE = ".kit"
+# Entries an earlier kit version wrote for single files in `.kit/` and for the config there, which
+# `KIT_STATE` and the new config name replace: the next --apply removes them once and says so.
+SUPERSEDED = frozenset({"Read(./.kit/agent-settings/**)", "Read(./.kit/graph.*)", "Read(./.kit/bridge-audit.jsonl)",
+                        "Read(./.kit/proposals/**)", "./.kit/agent-settings", "./.kit/graph.*",
+                        "./.kit/bridge-audit.jsonl", "./.kit/proposals", f"Edit(./{kitlib.LEGACY_CONFIG_REL})",
+                        f"./{kitlib.LEGACY_CONFIG_REL}"})
 # What --apply sets in `sandbox`, whatever was there: without these the deny lists are best effort.
 SANDBOX_FLAGS = {"enabled": True, "allowUnsandboxedCommands": False, "failIfUnavailable": True}
 # A permission rule is a gitignore pattern with no documented escape: a file name holding one of
@@ -70,7 +79,8 @@ GUARD_ALWAYS_DENIED = (".claude",)
 EDIT_CLAUDE = "Edit(./.claude/**)"
 # Write-protected in both modes, against the shell (sandbox denyWrite) and the file tools (Edit
 # rules): the policy the bridge reads live, and the manifest that says which entries are the kit's.
-# A canary on Claude Code 2.1.330 appended to the config from the agent's shell without them.
+# A canary on Claude Code 2.1.330 appended to the config from the agent's shell without them. While
+# a vault still has its config at the old place, that file is protected as well (`_protect_legacy`).
 WRITE_PROTECTED = (kitlib.CONFIG_REL, MANIFEST_DIR)
 EDIT_PROTECTED = (f"Edit(./{kitlib.CONFIG_REL})", f"Edit(./{MANIFEST_DIR}/**)")
 DENY_WRITE = [f"./{rel}" for rel in WRITE_PROTECTED]
@@ -306,7 +316,7 @@ def policy_export(root: Path) -> dict[str, Any]:
                 unreadable.append(rel)
     return {
         "version": EXPORT_VERSION,
-        "source": kitlib.CONFIG_REL,
+        "source": kitlib.config_rel(root),
         "confidential_folders": folders,
         "confidential_paths": sorted(set(policy.declared_paths)),
         "confidential_files": sorted(set(files)),
@@ -361,17 +371,24 @@ def git_outside(root: Path) -> Path | None:
     return None
 
 
-def _derived(rel: str) -> bool:
-    """Does one of the DERIVED entries deny this path as written? (Literal: no case folding, no `.trash`.)"""
-    for kind, entry in DERIVED:
-        if kind == "folder" and (rel == entry or _under(rel, entry)):
-            return True
-        if kind == "file" and rel == entry:
-            return True
-        if kind == "path" and posixpath.dirname(rel) == posixpath.dirname(entry) and \
-                posixpath.basename(rel).startswith(posixpath.basename(entry).rstrip("*")):
-            return True
-    return False
+def _kit_state(rel: str) -> bool:
+    """Is this path in the kit's machine state, which KIT_STATE denies whole? (Literal: no case folding, no `.trash`.)"""
+    return rel == KIT_STATE or _under(rel, KIT_STATE)
+
+
+def _legacy_config(root: Path, plan: Plan) -> None:
+    """A vault whose config is still at `.kit/config.yml` (#135): protect that file against writes as
+    well, since it is the policy in force, and say that `.kit/` is now denied whole, so the agent's
+    own kit runs cannot read it there and hide everything (fail closed) until it is moved."""
+    if not kitlib._present(root / kitlib.LEGACY_CONFIG_REL):
+        return
+    plan.deny.append(f"Edit(./{kitlib.LEGACY_CONFIG_REL})")
+    plan.deny_write.append(f"./{kitlib.LEGACY_CONFIG_REL}")
+    if kitlib.config_rel(root) == kitlib.LEGACY_CONFIG_REL:
+        plan.notes.append(f"the config is still at {kitlib.LEGACY_CONFIG_REL}, inside {KIT_STATE}/, which is denied "
+                          "whole: the agent's own kit runs cannot read the policy there and hide everything from it. "
+                          f"Move it with `{kitlib.CONFIG_MIGRATE} --apply`, then run this again")
+        plan.flags.append(f"config still at {kitlib.LEGACY_CONFIG_REL}: run `{kitlib.CONFIG_MIGRATE}`")
 
 
 @dataclass
@@ -463,7 +480,7 @@ def _confidential_entries(export: dict[str, Any], plan: Plan, keep, ancestor_ok,
     for rel in export["confidential_files"]:
         is_dir = rel.endswith("/")
         rel = rel.rstrip("/")
-        if not keep(rel) or rel in AGENT_OWN or _under(rel, MANIFEST_DIR) or _derived(rel):
+        if not keep(rel) or rel in AGENT_OWN or _kit_state(rel):
             continue           # outside this mode's reach, or the kit's own files: denied above, or never
         if rel == kitlib.CONFIG_REL:
             plan.notes.append(f"not denied: {kitlib.CONFIG_REL} (a path rule covers it, but the agent's own kit runs "
@@ -502,9 +519,6 @@ def _confidential_entries(export: dict[str, Any], plan: Plan, keep, ancestor_ok,
     chosen = sorted(set(folders))
     # A folder inside another chosen folder, and a file inside any, adds nothing.
     chosen = [f for f in chosen if not any(_under(f, g) for g in chosen)]
-    if any(_under(kitlib.CONFIG_REL, g) for g in chosen):
-        plan.notes.append(f"{kitlib.CONFIG_REL} is denied with the folder that holds it; the agent's own kit runs "
-                          "then cannot read the policy and hide everything from it")
     out = [("folder", f) for f in chosen]
     out += [("path", p) for p in patterns]
     out += [("file", f) for f in sorted(set(files)) if not any(_under(f, g) for g in chosen)]
@@ -531,7 +545,8 @@ def claude_code_plan(root: Path, export: dict[str, Any], allow_git: bool = False
     if policy.open_folders:
         return _allow_open_plan(root, export, policy, allow_git)
     plan = Plan(allow_git=allow_git, deny=[EDIT_CLAUDE, *EDIT_PROTECTED], deny_write=list(DENY_WRITE))
-    wanted: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED]
+    _legacy_config(root, plan)
+    wanted: list[tuple[str, str]] = [("folder", KIT_STATE)]
     _git_notes(root, plan, wanted)
     wanted += _confidential_entries(export, plan, keep=lambda rel: True, ancestor_ok=bool,
                                     pattern_keep=lambda pat: True)
@@ -554,7 +569,7 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     plan.notes.append("allow-open: the vault is denied to the agent and only the open folders "
                       f"({len(policy.declared_open_folders)}) are allowed; its file tools can read and write "
                       "only inside them, and a PreToolUse guard refuses every other path")
-    special: list[tuple[str, str]] = [("folder", MANIFEST_DIR), *DERIVED, ("folder", ".claude")]
+    special: list[tuple[str, str]] = [("folder", KIT_STATE), ("folder", ".claude")]
     git_wanted: list[tuple[str, str]] = []
     _git_notes(root, plan, git_wanted, how="is denied with the rest of the vault")
     special += git_wanted
@@ -564,19 +579,23 @@ def _allow_open_plan(root: Path, export: dict[str, Any], policy: kitlib.Confiden
     # also for a folder made at the root after the session started. The agent may not edit its own
     # settings, which hold the guard: with that rule it could not switch the guard off by any tool.
     plan.deny, plan.deny_read = [EDIT_CLAUDE, *EDIT_PROTECTED], list(ROOT_DENY_READ)
+    _legacy_config(root, plan)
     wanted: list[tuple[str, str]] = []
     # The kit's own files are outside the open folders unless one is declared over them: then on the lists.
-    wanted += [(k, r) for k, r in special if _in_open(r.rstrip("*").rstrip("."), opens)]
+    wanted += [(k, r) for k, r in special if _in_open(r, opens)]
     found = _confidential_entries(export, plan, keep=lambda rel: _in_open(rel, opens),
                                   ancestor_ok=lambda anc: bool(anc) and _below_open(anc, opens),
                                   pattern_keep=lambda pat: _may_reach(pat, opens))
     wanted += found
     _add_entries(plan, wanted)
-    # `.claude` is never re-opened to the shell, nor `.git` without --allow-git, even when declared open.
-    closed = (".claude",) + (() if allow_git else (".git",))
+    # `.claude` and the kit's state are never re-opened to the shell, nor `.git` without --allow-git,
+    # even when declared open.
+    closed = (".claude", KIT_STATE) + (() if allow_git else (".git",))
     allow = sorted({f"./{f}" for d in policy.declared_open_folders for f in _on_disk(root, d)
                     if not _in_open(f, closed)})
-    allow.append(f"./{kitlib.CONFIG_REL}")         # the agent's own kit runs load the policy, as in deny-list mode
+    # The agent's own kit runs load the policy, as in deny-list mode. A single file at the root, under
+    # the `./` and `./*` deny: on macOS a narrower allowRead wins; on Linux this was not tested (#135).
+    allow.append(f"./{kitlib.CONFIG_REL}")
     if allow_git and (root / ".git").is_dir() and "./.git" not in allow:
         allow.append("./.git")
     plan.allow_read = allow
@@ -936,6 +955,10 @@ def claude_code_state(root: Path, allow_git: bool | None = None) -> State:
         plan.notes.append(f"this kit version write-protects {kitlib.CONFIG_REL} and {MANIFEST_DIR}/ against the agent's "
                           "shell and file tools (sandbox denyWrite and Edit deny rules), so the agent cannot widen the "
                           "policy the bridge reads; the new entries are added once")
+    if isinstance(manifest, dict) and SUPERSEDED.intersection(merge.removed):
+        plan.notes.append(f"this kit version reads its config from {kitlib.CONFIG_REL} at the vault root and denies "
+                          f"{KIT_STATE}/ whole, which holds machine state only (#135): the entries for "
+                          f"{kitlib.LEGACY_CONFIG_REL} and for single files in {KIT_STATE}/ are replaced once")
     local = local_override_flags(root, plan, merge.settings, existing)
     after = local_override_flags(root, plan, merge.settings, merge.settings)
     return State(plan, merge, raw, local, after)
@@ -1263,7 +1286,7 @@ def doctor_row(root: Path) -> tuple[str, str]:
         try:
             state = claude_code_state(root)
         except kitlib.PolicyConfigError:
-            return SETTINGS_REL, f"cannot check: {kitlib.CONFIG_REL} is broken (`kit.py validate` says why)"
+            return SETTINGS_REL, f"cannot check: {kitlib.config_rel(root)} is broken (`kit.py validate` says why)"
         except AgentSettingsError as exc:
             return SETTINGS_REL, f"cannot check: {exc.doctor} — run `{GENERATOR}` with the same --vault"
         m = state.merge

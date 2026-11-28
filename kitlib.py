@@ -769,13 +769,71 @@ def note_confidential(note: Note) -> bool:
 
 # ---------------------------------------------------------------- confidentiality floors (#120)
 
-CONFIG_REL = ".kit/config.yml"          # the vault's kit config; kitproviders reads the same file, leniently
+# The vault's kit config (#135): the confidentiality floors, provider choices and qmd collection.
+# Named after the tool, so neither the OKF format nor another tool claims the name, hidden so
+# Obsidian does not list it, and at the root, outside `.kit/`, which holds machine state only.
+# kitproviders reads the same file, leniently; every reader asks `config_rel` which file is in use.
+CONFIG_REL = ".okf-vault-kit.yaml"
+LEGACY_CONFIG_REL = ".kit/config.yml"   # where it lived before #135; read, with a warning, until moved
+CONFIG_MIGRATE = "kit.py config migrate"
 CONFIDENTIALITY_KEYS = ("confidential_folders", "confidential_paths", "open_folders")
 TRASH_PREFIX = ".trash/"                # judged as well with this removed, in match form
 
+_LEGACY_WARNED: set[str] = set()
+
+
+def _present(path: Path) -> bool:
+    """Is anything at `path` (a file, a folder, a dangling link)? An entry that cannot be looked at
+    counts as present: the reader then fails on it, rather than passing over it to the next file."""
+    try:
+        os.lstat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def config_rel(root: Path) -> str:
+    """Which config file this vault uses, vault-relative: the one function every reader asks (#135).
+
+    `.okf-vault-kit.yaml` whenever anything is at that path, broken or not, so a broken new file is
+    never passed over for the old one; else `.kit/config.yml` while it is there (warned about once
+    per vault and process, on stderr); else `.okf-vault-kit.yaml`, which is then missing: no config.
+    """
+    root = Path(root)
+    if _present(root / CONFIG_REL):
+        return CONFIG_REL
+    if _present(root / LEGACY_CONFIG_REL):
+        key = str(root.resolve())
+        if key not in _LEGACY_WARNED:
+            _LEGACY_WARNED.add(key)
+            print(f"warning: this vault's kit config is still at {LEGACY_CONFIG_REL}, its old place; "
+                  f"move it to {CONFIG_REL} with `{CONFIG_MIGRATE}` (dry run first, then --apply)", file=sys.stderr)
+        return LEGACY_CONFIG_REL
+    return CONFIG_REL
+
+
+def config_path(root: Path) -> Path:
+    """The config file this vault uses (it may not exist); see `config_rel`."""
+    return Path(root) / config_rel(root)
+
+
+def config_notice(root: Path) -> str | None:
+    """What doctor and validate say about where the config is, or None when it is where it belongs
+    (or there is none). Never names a path from inside the vault beyond the two config names."""
+    root = Path(root)
+    new, old = _present(root / CONFIG_REL), _present(root / LEGACY_CONFIG_REL)
+    if new and old:
+        return (f"{LEGACY_CONFIG_REL} is ignored, since {CONFIG_REL} exists and wins; remove the old file, or set it "
+                f"aside with `{CONFIG_MIGRATE} --force --apply`")
+    if old:
+        return f"the config is still at {LEGACY_CONFIG_REL}, its old place; move it with `{CONFIG_MIGRATE}`"
+    return None
+
 
 class PolicyConfigError(ValueError):
-    """The vault's `.kit/config.yml` cannot say what is confidential: unreadable, unparsable, or a
+    """The vault's kit config cannot say what is confidential: unreadable, unparsable, or a
     `confidentiality:` block of the wrong shape. Readers then treat every path as confidential."""
 
 
@@ -821,7 +879,7 @@ def path_rule_spellings(pattern: str) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class ConfidentialityPolicy:
-    """What `.kit/config.yml` declares confidential regardless of any note's own frontmatter.
+    """What the vault's kit config declares confidential regardless of any note's own frontmatter.
 
     `folders` are vault-relative folders: the folder and everything below it. `paths` are
     vault-relative globs for single files of any type. `open_folders`, once declared, turn the
@@ -903,69 +961,69 @@ _GLOB_CHARS = set("*?[]")
 _PATH_RULE_REFUSED = set("[]\\!#")
 
 
-def _policy_entries(block: dict, key: str) -> list[str]:
+def _policy_entries(block: dict, key: str, rel: str) -> list[str]:
     value = block.get(key)
     if key == "open_folders" and key in block and not value:
         # `open_folders:` with nothing after it, or `[]`: half-edited, and reading it as "not
         # declared" would open the whole vault again.
-        raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders is empty; list at least one folder, "
+        raise PolicyConfigError(f"{rel}: confidentiality.open_folders is empty; list at least one folder, "
                                 "or remove the key to leave every folder open")
     if value is None:
         return []
     if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
-        raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} must be a list of strings (quote each entry)")
+        raise PolicyConfigError(f"{rel}: confidentiality.{key} must be a list of strings (quote each entry)")
     out = []
     for raw in value:
         if key == "confidential_paths":
             bad = sorted(_PATH_RULE_REFUSED.intersection(raw))
             if bad:
-                raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.confidential_paths entry {raw!r} holds "
+                raise PolicyConfigError(f"{rel}: confidentiality.confidential_paths entry {raw!r} holds "
                                         f"{' '.join(bad)}; path rules support only * ? and ** (a folder goes under "
                                         "confidential_folders)")
             if raw.strip().endswith("/"):
-                raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.confidential_paths entry {raw!r} ends in `/`; "
+                raise PolicyConfigError(f"{rel}: confidentiality.confidential_paths entry {raw!r} ends in `/`; "
                                         "a path rule names files — put a folder under confidential_folders")
         entry = raw.strip().replace("\\", "/")
         parts = [x for x in entry.split("/") if x not in ("", ".")]
         if not parts and key == "open_folders":
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders entry {raw!r} names the vault root; "
+            raise PolicyConfigError(f"{rel}: confidentiality.open_folders entry {raw!r} names the vault root; "
                                     "list folders below it (to leave everything open, remove the key)")
         if not parts:
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} has an empty entry {raw!r}")
+            raise PolicyConfigError(f"{rel}: confidentiality.{key} has an empty entry {raw!r}")
         if entry.startswith(("/", "~")) or re.match(r"^[A-Za-z]:", entry):
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} entry {raw!r} must be relative to the vault")
+            raise PolicyConfigError(f"{rel}: confidentiality.{key} entry {raw!r} must be relative to the vault")
         if ".." in parts:
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.{key} entry {raw!r} must not use `..`")
+            raise PolicyConfigError(f"{rel}: confidentiality.{key} entry {raw!r} must not use `..`")
         if key == "confidential_folders" and _GLOB_CHARS.intersection(entry):
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.confidential_folders entry {raw!r} is a pattern; "
+            raise PolicyConfigError(f"{rel}: confidentiality.confidential_folders entry {raw!r} is a pattern; "
                                     "folders are literal, put patterns under confidential_paths")
         if key == "open_folders" and _GLOB_CHARS.intersection(entry):
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders entry {raw!r} is a pattern; "
+            raise PolicyConfigError(f"{rel}: confidentiality.open_folders entry {raw!r} is a pattern; "
                                     "open folders are literal")
         out.append("/".join(parts))
     return out
 
 
-def _open_entries(block: dict, confidential_folders: list[str]) -> list[str]:
+def _open_entries(block: dict, confidential_folders: list[str], rel: str) -> list[str]:
     """`open_folders`, refused where it would contradict itself or a confidential folder (#126)."""
-    out = _policy_entries(block, "open_folders")
+    out = _policy_entries(block, "open_folders", rel)
     seen: dict[str, str] = {}
     floors = [_match_form(x) for x in confidential_folders]
     for entry in out:
         form = _match_form(entry)
         if form in seen:
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders lists {entry!r} twice "
+            raise PolicyConfigError(f"{rel}: confidentiality.open_folders lists {entry!r} twice "
                                     f"(as {seen[form]!r} too; matching ignores case)")
         seen[form] = entry
         hit = next((c for c, f in zip(confidential_folders, floors, strict=True)
                     if form == f or form.startswith(f + "/")), None)
         if hit is not None:
-            raise PolicyConfigError(f"{CONFIG_REL}: confidentiality.open_folders entry {entry!r} lies at or under the "
+            raise PolicyConfigError(f"{rel}: confidentiality.open_folders entry {entry!r} lies at or under the "
                                     f"confidential folder {hit!r}; confidential wins, so it would open nothing")
     return out
 
 
-def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
+def parse_confidentiality(data: Any, rel: str = CONFIG_REL) -> ConfidentialityPolicy:
     """The `confidentiality:` block of a parsed config, strictly. Missing block: no floors.
 
     Strict where kitproviders is lenient: a block someone half-edited or misspelt must not read as
@@ -974,7 +1032,7 @@ def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
     if data is None:
         return ConfidentialityPolicy()
     if not isinstance(data, dict):
-        raise PolicyConfigError(f"{CONFIG_REL}: the file must be a mapping of keys")
+        raise PolicyConfigError(f"{rel}: the file must be a mapping of keys")
     # `Confidentiality:`, `confidentialty:`, or a bare `confidential_folders:` or `open_folders:` at the
     # top level would otherwise read as "no block", which is "nothing is confidential".
     def _key(k: Any) -> str:          # `Open-Folders`, `open folders`, `openfolders` all read as open_folders
@@ -982,22 +1040,22 @@ def parse_confidentiality(data: Any) -> ConfidentialityPolicy:
     near = sorted(str(k) for k in data if k != "confidentiality" and (
         _key(k).startswith(("confidential", "open_folder", "openfolder")) or _key(k) in CONFIDENTIALITY_KEYS))
     if near:
-        raise PolicyConfigError(f"{CONFIG_REL}: top-level key(s) {', '.join(near)} look like the confidentiality "
+        raise PolicyConfigError(f"{rel}: top-level key(s) {', '.join(near)} look like the confidentiality "
                                 "block but are not `confidentiality:` (lower case, with "
                                 f"{' and/or '.join(CONFIDENTIALITY_KEYS)} under it)")
     if "confidentiality" not in data:
         return ConfidentialityPolicy()
     block = data["confidentiality"]
     if not isinstance(block, dict):
-        raise PolicyConfigError(f"{CONFIG_REL}: `confidentiality:` must be a mapping with "
+        raise PolicyConfigError(f"{rel}: `confidentiality:` must be a mapping with "
                                 f"{' and/or '.join(CONFIDENTIALITY_KEYS)}")
     unknown = sorted(str(k) for k in block if k not in CONFIDENTIALITY_KEYS)
     if unknown:
-        raise PolicyConfigError(f"{CONFIG_REL}: unknown key(s) under confidentiality: {', '.join(unknown)} "
+        raise PolicyConfigError(f"{rel}: unknown key(s) under confidentiality: {', '.join(unknown)} "
                                 f"(known: {', '.join(CONFIDENTIALITY_KEYS)})")
-    folders = _policy_entries(block, "confidential_folders")
-    return ConfidentialityPolicy.build(folders, _policy_entries(block, "confidential_paths"),
-                                       _open_entries(block, folders))
+    folders = _policy_entries(block, "confidential_folders", rel)
+    return ConfidentialityPolicy.build(folders, _policy_entries(block, "confidential_paths", rel),
+                                       _open_entries(block, folders, rel))
 
 
 class _UniqueKeyLoader(yaml.SafeLoader):
@@ -1035,40 +1093,44 @@ _POLICY_CACHE: dict[str, tuple[Any, ConfidentialityPolicy | PolicyConfigError]] 
 def confidentiality_policy(root: Path) -> ConfidentialityPolicy:
     """The vault's declared floors and path rules; raises PolicyConfigError when they cannot be known.
 
-    A missing `.kit/config.yml` (or a `.kit` that is a file) means no floors. Anything else that
-    stops the file being read and parsed is an error, never an empty policy: "could not tell" is
-    not "nothing is confidential". Cached on the resolved root and the file's mtime_ns and size,
-    because every predicate call asks.
+    Read from the file `config_rel` names (#135). No config at all (or a `.kit` that is a file, for
+    the old place) means no floors. Anything else that stops the file being read and parsed is an
+    error, never an empty policy: "could not tell" is not "nothing is confidential", and a broken
+    `.okf-vault-kit.yaml` is never passed over for a good `.kit/config.yml`. Cached on the resolved
+    root, the file in use and its mtime_ns, size and mode, because every predicate call asks.
     """
     root = Path(root).resolve()
-    path = root / CONFIG_REL
+    rel = config_rel(root)
+    path = root / rel
     try:
         st = path.stat()
-        stamp: Any = (st.st_mtime_ns, st.st_size, st.st_mode)
-    except (FileNotFoundError, NotADirectoryError):
+        stamp: Any = (rel, st.st_mtime_ns, st.st_size, st.st_mode)
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        if path.is_symlink():
+            raise PolicyConfigError(f"{rel}: is a link to nothing") from exc
         stamp = None
     except OSError as exc:
-        raise PolicyConfigError(f"{CONFIG_REL}: cannot be read ({exc.__class__.__name__})") from exc
+        raise PolicyConfigError(f"{rel}: cannot be read ({exc.__class__.__name__})") from exc
     cached = _POLICY_CACHE.get(str(root))
     if cached and cached[0] == stamp:
         result = cached[1]
     else:
-        result = _load_policy(path, stamp)
+        result = _load_policy(path, rel, stamp)
         _POLICY_CACHE[str(root)] = (stamp, result)
     if isinstance(result, PolicyConfigError):
         raise result
     return result
 
 
-def _load_policy(path: Path, stamp: Any) -> ConfidentialityPolicy | PolicyConfigError:
+def _load_policy(path: Path, rel: str, stamp: Any) -> ConfidentialityPolicy | PolicyConfigError:
     if stamp is None:
         return ConfidentialityPolicy()
-    if not stat.S_ISREG(stamp[2]):
-        return PolicyConfigError(f"{CONFIG_REL}: is not a regular file")
+    if not stat.S_ISREG(stamp[3]):
+        return PolicyConfigError(f"{rel}: is not a regular file")
     try:
         text = path.read_text(encoding="utf-8-sig")
     except (OSError, UnicodeDecodeError) as exc:
-        return PolicyConfigError(f"{CONFIG_REL}: cannot be read as UTF-8 ({exc.__class__.__name__})")
+        return PolicyConfigError(f"{rel}: cannot be read as UTF-8 ({exc.__class__.__name__})")
     try:
         loader = _UniqueKeyLoader(text)      # what yaml.safe_load does, with the duplicate check
         try:
@@ -1076,35 +1138,37 @@ def _load_policy(path: Path, stamp: Any) -> ConfidentialityPolicy | PolicyConfig
         finally:
             loader.dispose()
     except yaml.YAMLError as exc:
-        return PolicyConfigError(f"{CONFIG_REL}: not valid YAML ({str(exc).splitlines()[0]})")
+        return PolicyConfigError(f"{rel}: not valid YAML ({str(exc).splitlines()[0]})")
     except YAML_CONSTRUCT_ERRORS as exc:
         # Outside YAMLError, these escaped as a traceback from every reader that asked the predicate.
         # Only around the loader: PolicyConfigError is a ValueError too, and is returned below.
-        return PolicyConfigError(f"{CONFIG_REL}: not valid YAML (a value cannot be read: {type(exc).__name__}: {exc})")
+        return PolicyConfigError(f"{rel}: not valid YAML (a value cannot be read: {type(exc).__name__}: {exc})")
     try:
-        return parse_confidentiality(data)
+        return parse_confidentiality(data, rel)
     except PolicyConfigError as exc:
         return exc
 
 
 def config_fingerprint(root: Path) -> int:
-    """A number that changes whenever `.kit/config.yml` appears, goes, or changes; never raises.
+    """A number that changes whenever the config file in use appears, goes, changes or moves; never raises.
 
     For the graph's note-set signature: declaring a floor changes what a redacted graph holds, so
     a graph built before it must read as stale. From the bytes, not the parsed policy, so a broken
-    file has a fingerprint too, and fixing it changes the number.
+    file has a fingerprint too, and fixing it changes the number. Which file is in use is hashed
+    with the bytes, so `kit.py config migrate`, which keeps the bytes, makes a graph stale too (#135).
     """
+    rel = config_rel(root)
     try:
-        data = (Path(root) / CONFIG_REL).read_bytes()
+        data = (Path(root) / rel).read_bytes()
     except (FileNotFoundError, NotADirectoryError):
         return -1
     except OSError:
         return -2         # there but unreadable: fixed, so a database on disk compares equal across runs
-    return int.from_bytes(hashlib.sha256(data).digest()[:8], "big")
+    return int.from_bytes(hashlib.sha256(rel.encode() + b"\0" + data).digest()[:8], "big")
 
 
 def confidentiality_config_error(root: Path) -> str | None:
-    """Why `.kit/config.yml` cannot say what is confidential, or None when it can (or is not there)."""
+    """Why the vault's kit config cannot say what is confidential, or None when it can (or is not there)."""
     try:
         confidentiality_policy(root)
     except PolicyConfigError as exc:
@@ -1193,7 +1257,7 @@ def own_confidentiality(root: Path, rel: str) -> bool | None:
 def confidentiality(root: Path, rel: str) -> bool | None:
     """Is this vault-relative reference confidential? True, False, or None for "could not tell".
 
-    The floor first: a `.kit/config.yml` that cannot be read or parsed is None for every path, and
+    The floor first: a kit config that cannot be read or parsed is None for every path, and
     a folder or path rule it declares is True whatever the note says (a note may raise its level,
     never lower it). Then the note's own frontmatter (`own_confidentiality`).
 
@@ -1242,10 +1306,14 @@ def check_confidentiality(root: Path) -> Report:
     warning is there so the label in the note does not mislead the person reading it. Only the
     declared folders and path rules raise that warning: a note outside the open folders (#126) is
     confidential by default, and warning about every labelled one would bury the rest. An open
-    folder that does not exist is a warning too.
+    folder that does not exist is a warning too, and so is an old `.kit/config.yml` that the new
+    file overrides (#135): its floors are not the ones in force.
     """
     root = Path(root)
     rep = Report()
+    if _present(root / CONFIG_REL) and _present(root / LEGACY_CONFIG_REL):
+        rep.warnings.append(config_notice(root) or "")
+    cfg = config_rel(root)
     try:
         policy = confidentiality_policy(root)
     except PolicyConfigError as exc:
@@ -1255,7 +1323,7 @@ def check_confidentiality(root: Path) -> Report:
         return rep
     for folder in policy.declared_open_folders:
         if not _folder_exists(root, folder):
-            rep.warnings.append(f"{CONFIG_REL}: open folder {folder!r} does not exist in the vault — check its "
+            rep.warnings.append(f"{cfg}: open folder {folder!r} does not exist in the vault — check its "
                                 "spelling (it opens nothing until it does)")
     if policy.declared_paths:
         # A rule that matches nothing is most often a misspelling, and it hides nothing. Every
@@ -1272,7 +1340,7 @@ def check_confidentiality(root: Path) -> Report:
             if not unmatched:
                 break
         for p in unmatched:
-            rep.warnings.append(f"{CONFIG_REL}: path rule {p!r} matches no file in the vault — check its spelling "
+            rep.warnings.append(f"{cfg}: path rule {p!r} matches no file in the vault — check its spelling "
                                 "(it hides nothing until a file matches)")
     for note in load_vault(root):
         rep.checked += 1
@@ -1282,7 +1350,7 @@ def check_confidentiality(root: Path) -> Report:
         if own is None or str(own).strip() == "":
             continue
         if str(own).strip().lower() != CONFIDENTIAL:
-            rep.warnings.append(f"{note.rel}: `sensitivity: {own}` inside a folder or path `{CONFIG_REL}` declares "
+            rep.warnings.append(f"{note.rel}: `sensitivity: {own}` inside a folder or path `{cfg}` declares "
                                 "confidential; the note stays confidential (a note may raise its level, never lower it)")
     return rep
 
