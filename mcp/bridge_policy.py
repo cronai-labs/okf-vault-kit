@@ -454,11 +454,13 @@ class ProposalStore:
     """Pending writes as JSON files; humans apply or reject them with kit.py proposals."""
 
     def __init__(self, root: Path):
+        # The folder is made by the first proposal, not here: `kit.py proposals list` is a read,
+        # and a read must not leave .kit/ behind in a vault, least of all in the kit's template (#114).
         self.root = Path(root)
-        self.root.mkdir(parents=True, exist_ok=True)
 
     def add(self, tool: str, args: dict[str, Any]) -> str:
         pid = f"{dt.datetime.now():%Y%m%dT%H%M%S}-{tool}-{secrets.token_hex(2)}"
+        self.root.mkdir(parents=True, exist_ok=True)
         (self.root / f"{pid}.json").write_text(json.dumps({"id": pid, "tool": tool, "args": args, "status": "pending",
                                                             "created": dt.datetime.now().astimezone().isoformat(timespec="seconds")}, indent=1, ensure_ascii=False), encoding="utf-8", newline="\n")
         return pid

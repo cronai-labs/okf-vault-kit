@@ -213,7 +213,7 @@ jobs:
           fi
           exit "$fail"
       - name: python SAST
-        run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py kitagent.py mcp -ll
+        run: uvx bandit -q -r kit.py kitlib.py kitgraph.py kitrecon.py kitproviders.py kitagent.py kitredact.py mcp -ll
 
   megalinter:
     # The single lint gate. `make lint` still byte-compiles and validates the

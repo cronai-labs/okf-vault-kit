@@ -58,12 +58,33 @@ DEFAULT_MODEL = os.environ.get("KIT_LLM_MODEL", "")
 IS_WINDOWS = platform.system() == "Windows"
 
 
-def _vault(arg: str | None) -> Path:
-    p = Path(arg or os.environ.get("KIT_VAULT") or TEMPLATE_VAULT).expanduser().resolve()
+def _vault(arg: str | None, write: bool = False) -> Path:
+    """The vault a command acts on: --vault, else KIT_VAULT, else the kit's own sample (#114).
+
+    The sample is a fallback for reading only. A command that writes refuses it unless it was
+    named, because the template is what every later `init` copies and a release archive has no
+    git to undo a change with; `--vault vault` (what `make lint` passes) is a deliberate choice.
+    A reader says on stderr that it read the sample, so an answer about the sample is never
+    taken for one about the user's own notes, and stdout stays the command's output.
+    """
+    named = arg or os.environ.get("KIT_VAULT")
+    p = Path(named or TEMPLATE_VAULT).expanduser().resolve()
+    if not _vault_given(arg):
+        if write:
+            print(f"refused: no vault given, and this command writes — it will not change the kit's own sample vault "
+                  f"({p}). Pass --vault ~/Notes/vault or set KIT_VAULT; to change the sample itself, pass --vault {p}",
+                  file=sys.stderr)
+            sys.exit(2)
+        print(f"note: reading the kit's sample vault ({p}) — pass --vault or set KIT_VAULT to read yours", file=sys.stderr)
     if not p.exists():
         sys.exit(f"vault not found: {p}")
     _warn_undecodable(p)
     return p
+
+
+def _vault_given(arg: str | None) -> bool:
+    """True when the user named the vault (--vault or KIT_VAULT), False on the sample fallback."""
+    return bool(arg or os.environ.get("KIT_VAULT"))
 
 
 def _warn_undecodable(vault: Path) -> None:
@@ -304,8 +325,14 @@ def _write_kit_config(vault: Path, collection: str) -> None:
 # ---------------------------------------------------------------- index / validate / log
 
 def cmd_index(args) -> int:
-    out = kitlib.write_index(_vault(args.vault))
+    vault = _vault(args.vault, write=True)
+    out = kitlib.write_index(vault)
     print(f"wrote {out}")
+    # The index counts such a note as "not listed" and names nothing, since it is a file others
+    # read. This terminal is the user's own, so say which notes those are and why (#114).
+    for note in kitlib.load_vault(vault):
+        if note.fm_error:
+            print(f"warning: {note.rel} is not listed: {note.fm_error} (`kit.py validate` reports it)", file=sys.stderr)
     return 0
 
 
@@ -345,7 +372,7 @@ def cmd_validate(args) -> int:
 
 
 def cmd_log(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=True)
     if kitlib.append_log(vault, args.message, args.kind) is None:
         print("log.md is not valid UTF-8 — nothing was written; re-save it as UTF-8 and log again")
         return 1
@@ -569,7 +596,7 @@ def _agent_settings_remove(vault: Path, args) -> int:
 
 
 def cmd_agent_settings(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.apply)
     if args.apply and vault == TEMPLATE_VAULT.resolve():
         sys.exit("that vault is the kit's own sample, not yours — --apply would write into this checkout. "
                  "Pass your own: --vault ~/Notes/vault")
@@ -662,7 +689,7 @@ def _hidden_line(full: int, shown: kitgraph.Graph) -> str:
 
 
 def cmd_graph_build(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=True)            # it writes .kit/graph.* into the vault
     onto = kitgraph.load_ontology(vault)
     full = kitgraph.build_graph(vault, onto)
     g = full if args.show_confidential else kitgraph.redact_vault(full, vault)
@@ -697,7 +724,13 @@ def cmd_graph_export(args) -> int:
 
 
 def cmd_graph_query(args) -> int:
-    vault = _vault(args.vault)
+    # --rebuild asks for a write. The rebuild a missing, stale or unredacted .kit/graph.sqlite
+    # triggers on its own is a cache refresh into the vault's .kit/: in a vault the user named it
+    # happens, but the kit's sample is only read when no vault was given, so there the query is
+    # answered from memory instead. `init` copies that sample whole, and a release archive has no
+    # .gitignore to keep a graph cache out of every new vault (#114).
+    vault = _vault(args.vault, write=args.rebuild)
+    may_write = args.rebuild or _vault_given(args.vault)
     db = vault / kitgraph.KIT_DIR / "graph.sqlite"
     want = kitgraph.CONFIDENTIAL_SHOWN if args.show_confidential else kitgraph.CONFIDENTIAL_HIDDEN
     import sqlite3
@@ -710,13 +743,13 @@ def cmd_graph_query(args) -> int:
     # confidential nodes off the disk. --show-confidential never writes them as a side effect of a
     # query unless --rebuild asks for it; `graph build --show-confidential` is the deliberate way.
     # A stale file is rewritten in the mode it already has, so that never adds them either.
-    if args.rebuild or (not args.show_confidential and have != want) or (have == want and stale):
+    if may_write and (args.rebuild or (not args.show_confidential and have != want) or (have == want and stale)):
         if db.exists() and have != want and not args.rebuild:
             print(f"{db} was built with confidential notes in it; rebuilding it without them", file=sys.stderr)
         onto = kitgraph.load_ontology(vault)
         kitgraph.write_artifacts(vault, _graph(vault, args.show_confidential, onto), onto)
-        have = want
-    if have == want:
+        have, stale = want, False
+    if have == want and not stale:
         con = sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)  # as_uri(): drive letters and spaces are not URI-safe
     else:
         con = kitgraph.to_sqlite(_graph(vault, args.show_confidential), ":memory:")
@@ -769,7 +802,7 @@ def cmd_graph_pack(args) -> int:
 # ---------------------------------------------------------------- reconcile / todos / minutes
 
 def cmd_reconcile(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.apply)
     changes = kitrecon.reconcile(vault, apply=args.apply)
     if args.json:
         print(json.dumps([c.__dict__ for c in changes], indent=1, ensure_ascii=False))
@@ -784,7 +817,7 @@ def cmd_reconcile(args) -> int:
 
 
 def cmd_todos(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.sync_done or args.digest is not None)
     full = kitrecon.todo_report(vault, sync_done=args.sync_done)
     # What is listed leaves out tasks in confidential notes, as the bridge's vault_todos does: the
     # listing is what gets pasted into a model or a ticket (#52). What acts works on every task:
@@ -845,13 +878,25 @@ def _decode_recap(data: bytes, source: str) -> str:
         sys.exit(f"{source} is not UTF-8 or UTF-16 text (byte 0x{data[exc.start]:02x} at offset {exc.start}); re-save it as UTF-8")
 
 
+def _iso_date(value: str) -> dt.date:
+    """An argparse type: a calendar date as YYYY-MM-DD, or a usage error naming the value.
+
+    `date.fromisoformat` raised straight out of `minutes` for `--date 2026-02-30` (#114). As a
+    `type=`, the refusal comes before the vault is resolved or the recap is read.
+    """
+    try:
+        return dt.date.fromisoformat(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"not a date that exists, as YYYY-MM-DD: {value!r} ({exc})") from exc
+
+
 def cmd_minutes(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=not args.dry_run)
     if args.file == "-":
         text = _decode_recap(sys.stdin.buffer.read(), "the recap on stdin")
     else:
         text = _decode_recap(Path(args.file).read_bytes(), args.file)
-    date = dt.date.fromisoformat(args.date) if args.date else dt.date.today()
+    date = args.date or dt.date.today()
     people = [p.strip() for p in args.people.split(",")] if args.people else None
     extra = None
     if args.llm:
@@ -931,8 +976,8 @@ def _lines_referencing(path: Path, targets: set[Path], vault: Path) -> list[int]
             continue
         bare = kitlib.CODE_SPAN_RE.sub("", line)
         for m in list(kitlib.MD_LINK_RE.finditer(bare)) + list(kitlib.MD_IMAGE_RE.finditer(bare)):
-            target = m.group(1)
-            if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
+            target = kitlib.local_link(m.group(1))
+            if target is None:
                 continue
             target = urllib.parse.unquote(target.split("#", 1)[0])
             if not target:
@@ -945,42 +990,54 @@ def _lines_referencing(path: Path, targets: set[Path], vault: Path) -> list[int]
     return out
 
 
-def _dead_names(samples: list[kitlib.Note]) -> set[str]:
-    """Every spelling by which a frontmatter property can name a note that is about to go."""
-    names: set[str] = set()
-    for n in samples:
-        fm = n.frontmatter or {}
-        names.add(n.path.stem.lower())
-        for key in ("title", "name"):
-            if isinstance(fm.get(key), str):
-                names.add(fm[key].lower())
-        aliases = fm.get("aliases")
-        if isinstance(aliases, list):
-            names.update(str(a).lower() for a in aliases if str(a).strip())
-    return {re.sub(r"\s*\(example\)\s*$", "", name).strip() for name in names if name.strip()}
+def _names_sample(value: Any, resolver: kitgraph.Resolver, ranges: list[str], from_rel: str, samples: set[str]) -> bool:
+    """Does this reference entry point at a sample note, by a name that can only mean that note?
+
+    A link, a wikilink, the file name or the full title. Not an alias or a first name alone: the
+    sample people are `Alex` and `Sam` by alias, and so may be real colleagues, so `people: [Alex]`
+    is a name the user wrote and stays (#114). Left behind, it is an unresolved reference that
+    `validate` reports; pruned, it was a colleague gone from the note without a word.
+    """
+    if not isinstance(value, str):
+        return False
+    tid, method, _ = resolver.resolve(value, ranges, from_rel)
+    if tid not in samples:
+        return False
+    if method in ("link", "wikilink"):
+        return True
+    node = resolver.nodes[tid]
+    raw = value.strip().lower().removesuffix(".md")
+    return kitgraph._norm(value) == kitgraph._norm(node.title) or raw == Path(node.path).stem.lower()
 
 
-def _frontmatter_repairs(note: kitlib.Note, dead: set[str]) -> dict[str, Any]:
-    """List-valued properties with their dead entries dropped.
+def _frontmatter_repairs(note: kitlib.Note, onto: kitgraph.Ontology, resolver: kitgraph.Resolver,
+                         samples: set[str]) -> dict[str, Any]:
+    """The note's reference lists with the entries that name a sample dropped.
 
     The ontology resolves `people: [Alex Example]` by title, so deleting the note leaves the
-    property pointing at nothing and `validate --strict` red — which is the whole failure this
-    command exists to prevent. Only lists are pruned: a scalar reference cannot be removed
-    without deciding whether the key is required, and none of the shipped sample set has one.
+    property pointing at nothing and `validate --strict` red, which is the whole failure this
+    command exists to prevent. Only the properties the ontology declares `type: ref` for the
+    note's class are touched (through `property_aliases`, so an aliased key counts too): tags and
+    every other list are the user's text, not references (#114). Only lists are pruned: a scalar
+    reference cannot be removed without deciding whether the key is required, and none of the
+    shipped sample set has one.
     """
+    fm = note.frontmatter or {}
+    cls = str(fm.get("type") or "")
+    refs = onto.ref_props(cls if onto.has_class(cls) else "node")
     out: dict[str, Any] = {}
-    for key, value in (note.frontmatter or {}).items():
-        if not isinstance(value, list):
+    for key, value in fm.items():
+        spec = refs.get(onto.canonical_key(key))
+        if spec is None or not isinstance(value, list):
             continue
-        kept = [v for v in value
-                if not (isinstance(v, str) and re.sub(r"\s*\(example\)\s*$", "", v).strip().lower() in dead)]
+        kept = [v for v in value if not _names_sample(v, resolver, spec.range, note.rel, samples)]
         if len(kept) != len(value):
             out[key] = kept
     return out
 
 
 def cmd_examples(args) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=not args.dry_run)
     if args.action != "remove":
         return 2
     samples = _sample_notes(vault)
@@ -989,7 +1046,9 @@ def cmd_examples(args) -> int:
         return 0
     targets = {n.path.resolve() for n in samples}
 
-    dead = _dead_names(samples)
+    onto = kitgraph.load_ontology(vault)
+    resolver = kitgraph.Resolver(kitgraph.build_graph(vault, onto).nodes, onto)
+    sample_ids = {n.rel for n in samples}
     repairs: dict[Path, list[int]] = {}
     fm_repairs: dict[Path, dict[str, Any]] = {}
     for note in kitlib.load_vault(vault):
@@ -998,7 +1057,7 @@ def cmd_examples(args) -> int:
         hits = _lines_referencing(note.path, targets, vault)
         if hits:
             repairs[note.path] = hits
-        props = _frontmatter_repairs(note, dead)
+        props = _frontmatter_repairs(note, onto, resolver, sample_ids)
         if props:
             fm_repairs[note.path] = props
 
@@ -1060,7 +1119,7 @@ def cmd_proposals(args) -> int:
 
 
 def _proposals(args, bridge_policy, vault_bridge) -> int:
-    vault = _vault(args.vault)
+    vault = _vault(args.vault, write=args.action in ("apply", "reject"))
     store = bridge_policy.ProposalStore(vault / kitgraph.KIT_DIR / "proposals")
     if args.action == "list":
         items = store.pending()
@@ -1165,6 +1224,9 @@ def cmd_llm_smoke(args) -> int:
 def _confidential(vault: Path, rel: str) -> bool:
     """True when the note is confidential — by its own `sensitivity`, or by a folder floor or path
     rule in `.kit/config.yml` — the line the MCP bridge enforces."""
+    # Only the two schemes a search provider can hand back as a hit. Not the link rule
+    # (`kitlib.is_external_link`): `Re: plan.md` is a note name on macOS and Linux, and a
+    # scheme-shaped name must not exempt a note from the check (#114).
     if not rel or rel.startswith(("http://", "https://")):
         return False
     # The shared predicate fails closed like the bridge: an unreadable note, a YAML error or a
@@ -1323,7 +1385,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--owner", help="only tasks with this owner — filters the summary and --json alike"); p.add_argument("--digest", nargs="?", const="", help="write the digest page (default 00-home/todo-digest.md)"); p.add_argument("--sync-done", action="store_true", help="tick open copies of tasks already ticked in another note")
     p.add_argument("--show-confidential", action="store_true",
                    help="list tasks in notes with sensitivity: confidential (left out by default, as on the bridge)"); p.set_defaults(fn=cmd_todos)
-    p = sub.add_parser("minutes", help="file a recap as a meeting note"); p.add_argument("file", help="text file or - for stdin"); p.add_argument("--title", required=True); p.add_argument("--vault"); p.add_argument("--date"); p.add_argument("--project"); p.add_argument("--people", help="comma-separated names")
+    p = sub.add_parser("minutes", help="file a recap as a meeting note"); p.add_argument("file", help="text file or - for stdin"); p.add_argument("--title", required=True); p.add_argument("--vault"); p.add_argument("--date", type=_iso_date, help="YYYY-MM-DD (default: today)"); p.add_argument("--project"); p.add_argument("--people", help="comma-separated names")
     p.add_argument("--kind", default="project"); p.add_argument("--llm", action="store_true", help="also ask the local model to structure the recap"); p.add_argument("--base-url"); p.add_argument("--model"); p.add_argument("--daily", action="store_true", help="link the note from today's daily note")
     p.add_argument("--dry-run", action="store_true"); p.add_argument("--force", action="store_true")
     p.add_argument("--keep-open", action="store_true",

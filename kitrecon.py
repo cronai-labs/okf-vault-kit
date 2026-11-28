@@ -934,11 +934,12 @@ def _fill_section(body: str, heading: str, items: list[str], hint_target: str = 
 def _retarget_links(line: str, note_rel: str) -> str:
     """Rewrite a line taken from a template (its links are relative to `TEMPLATE_DIR`) for `note_rel`."""
     def repl(m: re.Match) -> str:
-        target = m.group(1)
-        if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://", "/")):
+        target = kitlib.local_link(m.group(1))
+        if target is None or target.startswith("/"):
             return m.group(0)
-        return "](" + _link(note_rel, posixpath.normpath(TEMPLATE_DIR + "/" + target)) + ")"
-    return re.sub(r"\]\(([^)\s]+)\)", repl, line)
+        new = _link(note_rel, posixpath.normpath(TEMPLATE_DIR + "/" + target))
+        return "](" + (f"<{new}>" if m.group(1).startswith("<") else new) + ")"
+    return re.sub(r"\]\((<[^<>\n]*>|[^)\s]+)\)", repl, line)
 
 
 def _fill_recap(body: str, text: str) -> str:

@@ -634,5 +634,18 @@ class MinutesPassesTheConfidentialChoice(unittest.TestCase):
         self.assertEqual((fm["people"], fm.get("attendees"), fm["sensitivity"]), ([], None, "internal"))
 
 
+class AColonInANoteNameIsNotAUri(unittest.TestCase):
+    """`llm ask` screens each search hit with `kit._confidential`. A hit path that only looks like
+    a URI scheme (`Re: plan.md`, legal on macOS and Linux) is a note, and must still be judged."""
+
+    @unittest.skipIf(sys.platform.startswith("win"), "Windows cannot hold a colon in a file name")
+    def test_a_confidential_note_named_like_a_scheme_stays_confidential(self):
+        v = temp_vault()
+        self.addCleanup(shutil.rmtree, v.parent, ignore_errors=True)
+        (v / "Re: plan.md").write_text("---\ntype: note\ndescription: x\nsensitivity: confidential\n---\n",
+                                       encoding="utf-8")
+        self.assertTrue(kit._confidential(v, "Re: plan.md"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -79,6 +79,26 @@ class RemovalLeavesAWorkingVault(unittest.TestCase):
         people = (kitlib.parse_note(team, self.vault).frontmatter or {}).get("people", [])
         self.assertNotIn("Alex Example", people)
 
+    def test_only_reference_entries_that_name_a_sample_are_pruned(self):
+        """It pruned every list property by name: a note tagged `sam` lost the tag, and `people:
+        [Alex, Jordan]` lost a real colleague, because `Alex` is an alias of the sample (#114).
+
+        Now only the ontology's reference properties are pruned, and only an entry that names a
+        sample by link, file name or full title. An alias alone is a name the user may share.
+        """
+        rel = "02-meetings/2026-10-01-real-sync.md"
+        (self.vault / rel).write_text(
+            "---\ntype: meeting\ntitle: Real sync\ndescription: probe\ndate: 2026-10-01\n"
+            "people: [Alex, Jordan, \"[[sam-example]]\", Alex Example]\n"
+            "tags: [sam, alex, meeting]\nkeywords: [Alex Example, Sam Example]\n---\n\nbody\n",
+            encoding="utf-8", newline="\n")
+        r = run("examples", "remove", "--vault", str(self.vault))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        fm = kitlib.parse_note(self.vault / rel, self.vault).frontmatter or {}
+        self.assertEqual(fm.get("people"), ["Alex", "Jordan"])
+        self.assertEqual(fm.get("tags"), ["sam", "alex", "meeting"], "tags are not references")
+        self.assertEqual(fm.get("keywords"), ["Alex Example", "Sam Example"], "not a reference property in the ontology")
+
     def test_a_filename_taught_in_a_code_span_survives(self):
         """99-system/conventions.md names a sample file to teach kebab-case. It is not a link."""
         run("examples", "remove", "--vault", str(self.vault))

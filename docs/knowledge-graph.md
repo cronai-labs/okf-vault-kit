@@ -122,6 +122,8 @@ None of them are prerequisites; all of them consume the Level 2 files unchanged.
 
 ## What the implementation does today
 
+The commands act on `KIT_VAULT` or `--vault`; without either, `graph build` refuses to write into the kit's own sample vault, `graph query` answers from memory rather than rebuild `.kit/graph.sqlite` there, and the read commands say they read it ([tools.md](tools.md#kitpy-and-the-mcp-bridge)).
+
 ```bash
 uv run kit.py validate                       # + ontology section: ranges, enums, required, unresolved/ambiguous refs, aliases
 uv run kit.py graph build                    # .kit/graph.json, graph.nt, graph.jsonld, graph.sqlite (+ findings)

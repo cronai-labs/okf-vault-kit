@@ -1,6 +1,6 @@
 # Reconciliation — hubs vs. notes, todos, minutes filing, conflict policy
 
-Everything here is deterministic, runs offline, and is **dry-run by default**. Writes happen only with `--apply`, `--sync-done`, or when you explicitly file a note — and every write leaves a line in `log.md`.
+Everything here is deterministic, runs offline, and is **dry-run by default**. Writes happen only with `--apply`, `--sync-done`, or when you explicitly file a note — and every write leaves a line in `log.md`. The commands below act on `KIT_VAULT` or `--vault`; without either, a write refuses to touch the kit's own sample vault ([tools.md](tools.md#kitpy-and-the-mcp-bridge)).
 
 ## The conflict policy (one paragraph)
 

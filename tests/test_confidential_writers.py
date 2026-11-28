@@ -497,10 +497,6 @@ class Minutes(_TempVault):
         self.assertIn(f"[Bluebird review]({m.path})", (self.v / "log.md").read_text(encoding="utf-8"))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SupersededByAConfidentialNote(_TempVault):
     """`reconcile` (and `--json`, which agents read) names no confidential note in a state conflict."""
     HIDDEN = "06-decisions/2026-09-15-embedding-model-for-de-en.md"
@@ -532,3 +528,7 @@ class ValidateAnUnreadableLinkTarget(_TempVault):
         rep = kitlib.check_links(self.v)
         self.assertTrue(any("cannot be checked" in w and "locked/hidden.md" in w for w in rep.warnings), rep.warnings)
         self.assertFalse(any("locked/hidden.md" in e for e in rep.errors), rep.errors)
+
+
+if __name__ == "__main__":
+    unittest.main()

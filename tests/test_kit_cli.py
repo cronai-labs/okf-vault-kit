@@ -398,6 +398,24 @@ class KitCliGraphAndRecon(unittest.TestCase):
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
 
+    def test_minutes_refuses_a_date_that_does_not_exist_as_an_argument_error(self):
+        """`--date 2026-02-30` ended in a ValueError traceback from date.fromisoformat (#114)."""
+        v = temp_vault()
+        try:
+            recap = v.parent / "recap.txt"; recap.write_text("Decision: ship\n", encoding="utf-8")
+            for bad in ("2026-02-30", "tomorrow"):
+                with self.subTest(bad):
+                    r = run("minutes", str(recap), "--title", "Ship sync", "--date", bad, "--vault", str(v),
+                            stdin=subprocess.DEVNULL)
+                    self.assertNotIn("Traceback", r.stderr)
+                    self.assertEqual(r.returncode, 2, r.stderr)
+                    self.assertIn("--date", r.stderr)
+                    self.assertIn(bad, r.stderr)
+                    self.assertIn("YYYY-MM-DD", r.stderr)
+            self.assertFalse(list((v / "02-meetings").glob("*ship-sync.md")), "nothing is filed on a bad date")
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
     def test_llm_ask_graph_dry_run(self):
         r = run("llm", "ask", "who owns the search relaunch", "--vault", str(VAULT), "--graph", "--dry-run")
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -511,6 +529,24 @@ class DoctorReport(unittest.TestCase):
             self.assertEqual(kit._scrub(hint), hint, "an install hint is not a path")
         self.assertEqual(kit._scrub("a sentence; with punctuation, and no path"),
                          "a sentence; with punctuation, and no path")
+
+    def test_a_relative_glob_survives_and_an_absolute_path_is_still_reduced(self):
+        """`/` after a glob character is inside a relative pattern, not the start of an absolute
+        path: `.obsidian/plugins/*/data.json` came out as `.obsidian/plugins/*data.json` (#114)."""
+        import kit
+        for kept in ("'.obsidian/plugins/*/data.json'", "Read(.obsidian/plugins/*/data.json)",
+                     "09-archive/**/*.md", "notes/?/x.md"):
+            self.assertEqual(kit._scrub(kept), kept, "a relative glob is not a path to redact")
+        # every place a real absolute path stands in the report is still reduced to its basename
+        for raw in ("/Users/someone/Kunde-Example/m.gguf", "at /Users/someone/Kunde-Example/m.gguf",
+                    "'/Users/someone/Kunde-Example/m.gguf'", '"/Users/someone/Kunde-Example/m.gguf"',
+                    "(/Users/someone/Kunde-Example/m.gguf)", "[/Users/someone/Kunde-Example/m.gguf]",
+                    "--vault=/Users/someone/Kunde-Example/m.gguf", "vault:/Users/someone/Kunde-Example/m.gguf",
+                    "/Users/someone/Kunde-Example/.obsidian/plugins/*/m.gguf",
+                    r"C:\Users\someone\Kunde-Example\m.gguf", "~/Kunde-Example/m.gguf"):
+            out = kit._scrub(raw)
+            self.assertNotIn("Kunde-Example", out, raw)
+            self.assertIn("m.gguf", out, raw)
 
     def test_the_sdk_row_is_not_fooled_by_the_repo_s_own_mcp_directory(self):
         """This repository has a directory named `mcp/`, so from the repo root a bare
@@ -725,6 +761,114 @@ class TheSampleVaultIsNotYours(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
             shutil.rmtree(v.parent, ignore_errors=True)
+
+
+class NoVaultGivenIsNotTheTemplate(unittest.TestCase):
+    """Without --vault or KIT_VAULT every command fell back to the kit's own sample vault (#114).
+
+    A writer then changed the template: `examples remove` deleted the sample set with no prompt,
+    and every later `init` copied the damage. These run a *copy* of the kit, so a writer that
+    still acts cannot touch this checkout's vault/ while the test watches it fail.
+    """
+
+    def setUp(self):
+        self.kit = Path(tempfile.mkdtemp(prefix="okf-kitcopy-"))
+        self.addCleanup(shutil.rmtree, self.kit, ignore_errors=True)
+        for p in ROOT.glob("*.py"):
+            shutil.copy2(p, self.kit / p.name)
+        shutil.copy2(ROOT / "VERSION", self.kit / "VERSION")
+        for d in ("mcp", "config", "vault"):
+            shutil.copytree(ROOT / d, self.kit / d, ignore=shutil.ignore_patterns("__pycache__", ".kit"))
+        self.env = dict(os.environ)
+        self.env.pop("KIT_VAULT", None)
+        self.recap = self.kit / "recap.txt"
+        self.recap.write_text("We agreed to ship.\n", encoding="utf-8")
+
+    def kit_run(self, *args, env=None):
+        return subprocess.run([sys.executable, str(self.kit / "kit.py"), *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", check=False, cwd=self.kit, env=env or self.env)
+
+    def snapshot(self) -> dict[str, bytes]:
+        v = self.kit / "vault"
+        return {p.relative_to(v).as_posix(): p.read_bytes() for p in v.rglob("*") if p.is_file()}
+
+    def test_every_writer_refuses_the_fallback_and_writes_nothing(self):
+        writers = [
+            ("log", "hello"),
+            ("index",),
+            ("examples", "remove"),
+            ("minutes", str(self.recap), "--title", "Sync"),
+            ("reconcile", "--apply"),
+            ("todos", "--digest"),
+            ("todos", "--sync-done"),
+            ("proposals", "apply", "p-1"),
+            ("proposals", "reject", "p-1"),
+            ("graph", "build"),
+            ("graph", "query", "SELECT 1", "--rebuild"),
+        ]
+        before = self.snapshot()
+        for argv in writers:
+            with self.subTest(argv=" ".join(argv)):
+                r = self.kit_run(*argv)
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("refused:", r.stderr)
+                self.assertIn("--vault", r.stderr)
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertEqual(self.snapshot(), before, f"{' '.join(argv)} wrote into the template vault")
+
+    def test_naming_the_template_explicitly_is_allowed(self):
+        """`make lint` validates vault/ by name, and a maintainer regenerates its index the same way."""
+        r = self.kit_run("index", "--vault", str(self.kit / "vault"))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        r = self.kit_run("log", "hello", env=dict(self.env, KIT_VAULT=str(self.kit / "vault")))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def test_a_reader_says_which_vault_it_read_on_stderr(self):
+        for argv in (("validate",), ("examples", "remove", "--dry-run"), ("reconcile",), ("todos", "--json")):
+            with self.subTest(argv=" ".join(argv)):
+                r = self.kit_run(*argv)
+                self.assertNotIn("refused:", r.stderr)
+                lines = [l for l in r.stderr.splitlines() if "sample vault" in l]
+                self.assertEqual(len(lines), 1, r.stderr)
+                self.assertIn("--vault", lines[0])
+                self.assertNotIn("sample vault", r.stdout, "stdout stays the command's own output")
+
+    def test_a_named_vault_gets_no_notice(self):
+        r = self.kit_run("validate", "--vault", str(self.kit / "vault"))
+        self.assertNotIn("sample vault", r.stderr)
+
+    def test_a_reader_writes_nothing_into_the_fallback(self):
+        """A read must not leave `.kit/` in the template either: `init` copies the template whole,
+        and a release archive has no .gitignore to keep a graph cache or a proposals folder out."""
+        readers = [
+            ("proposals", "list"),
+            ("proposals", "show", "p-1"),
+            ("graph", "query", "SELECT count(*) AS n FROM nodes"),
+        ]
+        for argv in readers:
+            with self.subTest(argv=" ".join(argv)):
+                shutil.rmtree(self.kit / "vault" / ".kit", ignore_errors=True)   # each reader on its own
+                r = self.kit_run(*argv)
+                self.assertNotIn("no vault given", r.stderr, "a reader is not refused")
+                self.assertNotIn("Traceback", r.stderr)
+                self.assertFalse((self.kit / "vault" / ".kit").exists(),
+                                 f"{' '.join(argv)} created .kit/ in the template vault")
+        r = self.kit_run("graph", "query", "SELECT count(*) AS n FROM nodes")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertGreater(int(r.stdout.splitlines()[1]), 0, "the query is still answered, from memory")
+
+    def test_a_stale_cache_in_the_fallback_is_answered_from_memory_not_rewritten(self):
+        v = self.kit / "vault"
+        r = self.kit_run("graph", "build", "--vault", str(v))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        built = self.snapshot()
+        extra = v / "zz-added-after-the-build.md"
+        extra.write_text("---\ntype: note\ntitle: Added after the build\n---\n\nBody.\n", encoding="utf-8")
+        r = self.kit_run("graph", "query", "SELECT count(*) AS n FROM nodes WHERE title = 'Added after the build'")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(r.stdout.splitlines()[1], "1", "the answer reflects the notes on disk, not the stale file")
+        after = self.snapshot(); after.pop(extra.relative_to(v).as_posix())
+        self.assertEqual(after, built, "a read rewrote the template's graph cache")
 
 
 class McpConfigAcrossTheWslBoundary(unittest.TestCase):

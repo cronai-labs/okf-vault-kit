@@ -68,12 +68,45 @@ CODE_SPAN_RE = re.compile(r"`[^`\n]*`")
 # Comments are not rendered, so nothing inside one is a link or a citation: HTML, and Obsidian's own.
 HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 OBSIDIAN_COMMENT_RE = re.compile(r"%%.*?%%", re.DOTALL)
-MD_LINK_RE = re.compile(r"(?<!\!)\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
-MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)\s]+)\)")
+# A destination is either bare (no spaces, no parenthesis) or CommonMark's `<...>` form, which may
+# hold spaces. Group 1 is the destination as written; `link_target` takes the brackets off.
+MD_LINK_RE = re.compile(r"(?<!\!)\[[^\]]*\]\((<[^<>\n]*>|[^)\s]+)(?:\s+\"[^\"]*\")?\)")
+MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\((<[^<>\n]*>|[^)\s]+)\)")
+# RFC 3986 §3.1: scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ), compared case-insensitively.
+# Two characters at least, on purpose: no registered scheme is one letter, and `C:/notes/x.md` is a
+# Windows drive path, a local link that must still be checked.
+URI_SCHEME_RE = re.compile(r"[a-z][a-z0-9+.-]+:", re.IGNORECASE)
 WIKILINK_RE = re.compile(r"(?<!\!)\[\[([^\]\|#]+)(?:#[^\]\|]*)?(?:\|[^\]]*)?\]\]")
 BASE_EMBED_RE = re.compile(r"!\[\[([^\]#|]+\.base)(?:#([^\]|]+))?(?:\|[^\]]*)?\]\]")
 FOOTNOTE_DEF_RE = re.compile(r"^\[\^[^\]]+\]:", re.MULTILINE)
 DAY_NOTE_NAME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})\.md$")   # a day note is named for its date, nothing else
+
+
+def link_target(destination: str) -> str:
+    """A Markdown link destination without CommonMark's angle brackets: `<a b.md>` is `a b.md`."""
+    d = destination.strip()
+    return d[1:-1].strip() if len(d) >= 2 and d[0] == "<" and d[-1] == ">" else d
+
+
+def is_external_link(target: str) -> bool:
+    """True when a link target names a URI scheme (any, in any case), so it points outside the vault.
+
+    The one definition every link reader shares (#114): a list of known schemes reported `tel:`,
+    `zotero://`, `sftp://` and `HTTPS://` as broken local links, and it had a copy in four modules.
+    """
+    return bool(URI_SCHEME_RE.match(link_target(target)))
+
+
+def local_link(destination: str) -> str | None:
+    """The vault path a Markdown link destination names, still percent-encoded and with its anchor.
+
+    None for what is not a file in the vault: a URI with any scheme, and a bare `#anchor` within
+    the same note.
+    """
+    target = link_target(destination)
+    if not target or target.startswith("#") or is_external_link(target):
+        return None
+    return target
 
 
 # ---------------------------------------------------------------- stdio
@@ -106,6 +139,21 @@ class Note:
     frontmatter: dict[str, Any] | None  # None = no frontmatter block
     body: str
     fm_error: str | None = None
+
+
+# What PyYAML's safe constructors raise, instead of a YAMLError, for a value that parses as YAML
+# but cannot be built: ValueError (a date that does not exist, `!!int 0x`, `!!float x`), KeyError
+# (`!!bool x`), IndexError (`!!int ''`), AttributeError (`!!timestamp x`). Probed across every
+# safe tag; nothing else came out.
+YAML_CONSTRUCTOR_ERRORS = (ValueError, KeyError, IndexError, AttributeError)
+
+
+def _constructor_error(exc: Exception) -> str:
+    """The finding for a frontmatter value PyYAML could not build; the raw message alone says little."""
+    hint = ("a date or time that does not exist? YAML reads an unquoted YYYY-MM-DD as a date; fix it, or quote it"
+            if isinstance(exc, ValueError) else
+            "a value its explicit YAML tag (`!!bool`, `!!int`, `!!timestamp` …) cannot hold? fix the value, or drop the tag")
+    return f"frontmatter cannot be read: {exc.__class__.__name__}: {exc} — {hint}"
 
 
 def split_frontmatter(text: str) -> tuple[str | None, str]:
@@ -144,6 +192,14 @@ def parse_note(path: Path, root: Path) -> Note:
         data = yaml.safe_load(raw)
     except yaml.YAMLError as exc:  # pragma: no cover - exercised via tests with bad yaml
         return Note(path, rel, None, body, fm_error=f"YAML error: {exc}")
+    except YAML_CONSTRUCTOR_ERRORS as exc:
+        # Valid syntax, a value PyYAML cannot build, and its constructors raise plain Python errors
+        # rather than a YAMLError: ValueError for an unquoted `2026-02-30` (read as a date), and
+        # KeyError, IndexError or AttributeError for an explicit tag on the wrong value (`!!bool x`,
+        # `!!int ''`, `!!timestamp x`). Each took every command over the vault down (#114). The note
+        # is kept with no frontmatter, as for a YAML error: `validate` names it, and every reader
+        # treats it as confidential, because we cannot tell that it is not.
+        return Note(path, rel, None, body, fm_error=_constructor_error(exc))
     if data is None:
         data = {}
     if not isinstance(data, dict):
@@ -442,8 +498,8 @@ def check_links(root: Path) -> Report:
         # link in a template must still resolve
         is_template = in_template_dir(rel, tdir)
         for m in list(MD_LINK_RE.finditer(text)) + list(MD_IMAGE_RE.finditer(text)):
-            target = m.group(1)
-            if target.startswith(("http://", "https://", "mailto:", "#", "obsidian://")):
+            target = local_link(m.group(1))
+            if target is None:
                 continue
             if is_template and PLACEHOLDER_RE.search(target):
                 continue

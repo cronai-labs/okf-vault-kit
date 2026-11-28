@@ -171,6 +171,49 @@ class FsBackend(unittest.TestCase):
                          [(f"{rel}: not valid UTF-8 — every tool skips it, so the note is invisible to "
                            "search, the graph and todos; re-save it as UTF-8")])
 
+    # Valid YAML syntax, but a value PyYAML's constructor cannot build: a date that does not exist
+    # raises ValueError, and an explicit tag on the wrong value KeyError, IndexError or AttributeError.
+    UNBUILDABLE = {"bad-date": "created: 2026-02-30", "bad-bool": "flag: !!bool x",
+                   "bad-int": "count: !!int ''", "bad-timestamp": "created: !!timestamp x"}
+
+    def test_a_value_the_yaml_constructor_cannot_build_does_not_break_the_read_tools(self):
+        """`created: 2026-02-30` (and `!!bool x` and the like) took down search, todos and every
+        graph tool for the vault (#114)."""
+        for stem, line in self.UNBUILDABLE.items():
+            rel = f"07-knowledge/{stem}.md"
+            with self.subTest(line):
+                (self.vault / rel).write_text(f"---\ntype: concept\ntitle: Bad value\ndescription: x\n{line}\n---\nhybrid search\n",
+                                              encoding="utf-8")
+                self.assertTrue(self.b.search("hybrid search", 5))
+                self.assertIn(rel, self.b.list_files("07-knowledge"))
+                self.assertIsInstance(self.b.todos()["open"], int)
+                self.assertTrue(self.b.graph_query("SELECT id FROM nodes")["rows"])
+                self.assertTrue(self.b.graph_neighbors("03-projects/search-relaunch.md", 1))
+                self.assertIn("search-relaunch", self.b.graph_context("03-projects/search-relaunch.md"))
+                (self.vault / rel).unlink()
+
+    def test_the_policy_layer_hides_a_note_whose_frontmatter_cannot_be_built(self):
+        """The raw backend above still lists the note; what an agent sees goes through the policy,
+        which cannot read the note's `sensitivity:` once its frontmatter fails, so treats it as
+        confidential, and the other notes stay reachable (#114)."""
+        import bridge_policy as bp
+        for stem, line in self.UNBUILDABLE.items():
+            rel = f"07-knowledge/{stem}.md"
+            with self.subTest(line):
+                (self.vault / rel).write_text(f"---\ntype: concept\ntitle: Bad value\ndescription: x\n{line}\n"
+                                              "---\nhybrid search BADVALUE-BODY\n", encoding="utf-8")
+                g = bp.Guarded(self.b, bp.Policy(audit_path=None), self.vault)
+                self.assertNotIn(rel, g.list_files("07-knowledge"))
+                self.assertIn("07-knowledge/hybrid-search.md", g.list_files("07-knowledge"))
+                hits = g.search("hybrid search", 10)
+                self.assertTrue(hits)
+                self.assertNotIn(rel, [h["file"] for h in hits])
+                with self.assertRaises(bp.PolicyError):
+                    g.read_note(rel)
+                self.assertNotIn(rel, {r[0] for r in g.graph_query("SELECT id FROM nodes")["rows"]})
+                self.assertIsInstance(g.todos()["open"], int)
+                (self.vault / rel).unlink()
+
     def test_a_note_we_cannot_decode_is_a_bridge_error_on_every_tool_that_touches_it(self):
         """The tools that name one file, rather than scanning: with --show-confidential nothing
         stops them earlier, and a UnicodeDecodeError traceback is not an answer a model can act on."""

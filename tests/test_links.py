@@ -3,7 +3,7 @@ import shutil
 import unittest
 
 import kitgraph
-from tests.helpers import VAULT, kitlib, temp_vault
+from tests.helpers import ROOT, VAULT, kitlib, temp_vault
 
 
 class Links(unittest.TestCase):
@@ -59,6 +59,68 @@ class Links(unittest.TestCase):
                              "comments are skipped, and the text after them is still checked")
         finally:
             shutil.rmtree(v.parent, ignore_errors=True)
+
+
+class UriSchemes(unittest.TestCase):
+    """A link with a URI scheme points outside the vault, whatever the scheme and its case (#114, #98).
+
+    The checker kept an allowlist of five schemes, so `tel:`, `zotero://`, `sftp://`, `HTTPS://`
+    and the CommonMark angle-bracket form `[t](<https://…>)` were reported as broken local links.
+    """
+
+    def check(self, body: str) -> list[str]:
+        v = temp_vault()
+        try:
+            (v / "02-meetings/s.md").write_text("---\ntype: meeting\ndescription: x\n---\n" + body, encoding="utf-8")
+            (v / "07-knowledge/a note.md").write_text("---\ntype: concept\ndescription: x\n---\n", encoding="utf-8")
+            return [e for e in kitlib.check_links(v).errors if e.startswith("02-meetings/s.md")]
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
+    def test_any_scheme_in_any_case_is_external(self):
+        body = ("[call](tel:+49301234567) [paper](zotero://select/items/ABC) [box](sftp://host/x) "
+                "[web](HTTPS://example.com/page) [mail](MailTo:a@example.com) [x](x-devonthink-item://1A2B) "
+                "[urn](urn:isbn:0451450523) [file](file:///etc/hosts)\n")
+        self.assertEqual(self.check(body), [])
+
+    def test_the_angle_bracket_form_is_external_too(self):
+        self.assertEqual(self.check("Source: [https://example.com/page](<https://example.com/page>).\n"), [])
+
+    def test_an_angle_bracketed_local_target_is_still_checked(self):
+        self.assertEqual(self.check("[ok](<../07-knowledge/a note.md>) [also](<../07-knowledge/hybrid-search.md>)\n"), [])
+        self.assertEqual(self.check("[gone](<../07-knowledge/no such note.md>)\n"),
+                         ["02-meetings/s.md: broken link -> ../07-knowledge/no such note.md"])
+
+    def test_a_drive_letter_is_a_path_not_a_scheme(self):
+        """RFC 3986 allows a one-letter scheme, but none is registered, and `C:` is a Windows drive."""
+        self.assertFalse(kitlib.is_external_link("C:/Users/me/notes/x.md"))
+        self.assertEqual(self.check("[win](C:/Users/me/notes/x.md)\n"), ["02-meetings/s.md: broken link -> C:/Users/me/notes/x.md"])
+
+    def test_what_is_not_a_scheme(self):
+        for target in ("../03-projects/x.md", "x.md#Heading", "1http://x", "+x:y", "#anchor", ""):
+            self.assertFalse(kitlib.is_external_link(target), target)
+
+    def test_the_graph_reads_property_links_the_same_way(self):
+        """A reference property: any scheme is external, and `<...>` is a link to the note inside."""
+        v = temp_vault()
+        try:
+            (v / "07-knowledge/p.md").write_text(
+                "---\ntype: spec\ntitle: P\ndescription: x\n"
+                "owner: \"[mail](MailTo:a@example.com)\"\nproject: \"[Search](<../03-projects/search-relaunch.md>)\"\n---\n",
+                encoding="utf-8")
+            g = kitgraph.build_graph(v)
+            nid = next(n for n, node in g.nodes.items() if node.path == "07-knowledge/p.md")
+            self.assertIn((nid, "project"), {(s, p) for s, p, _d, _o in g.edges if s == nid})
+            self.assertEqual([f.render() for f in g.findings if f.node == nid and f.code == "unresolved_ref"], [])
+        finally:
+            shutil.rmtree(v.parent, ignore_errors=True)
+
+    def test_one_definition(self):
+        """The allowlist had copies in four modules; a fifth copy is how the next scheme goes missing."""
+        for name in ("kit.py", "kitlib.py", "kitgraph.py", "kitrecon.py", "mcp/vault_bridge.py", "mcp/bridge_policy.py"):
+            text = (ROOT / name).read_text(encoding="utf-8")
+            self.assertNotIn('"mailto:"', text, name)
+            self.assertNotIn('"obsidian://"', text, name)
 
 
 class TemplateFolder(unittest.TestCase):
